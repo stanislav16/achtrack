@@ -16,7 +16,7 @@ if ! python3 -c "import venv, ensurepip" 2>/dev/null; then
 fi
 
 # Qt 6 needs libxcb-cursor for its X11 backend (used so popups can sit on top of games).
-if ! ldconfig -p 2>/dev/null | grep -q libxcb-cursor; then
+if ! ldconfig -p 2>/dev/null | grep libxcb-cursor >/dev/null; then
     echo "Missing libxcb-cursor0 (needed by Qt). On Pop!_OS / Ubuntu run:"
     echo "    sudo apt install libxcb-cursor0"
     exit 1

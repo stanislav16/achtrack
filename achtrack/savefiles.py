@@ -7,13 +7,18 @@ between two saves. Supported:
   * JSON (Unity JsonUtility, Easy Save 3 unencrypted, most indie games)
   * XML (.NET/Unity XmlSerializer, many older games)
   * INI / key=value text
-  * Unity PlayerPrefs, which Wine keeps in the prefix's user.reg
+  * .NET BinaryFormatter (common in Unity games), BSON, MessagePack, plist, SQLite
+  * RPG Maker MV/MZ saves, base64-wrapped saves, zlib/gzip behind a custom header
+  * Unity PlayerPrefs, which Wine keeps in the prefix's user.reg (and ~/.config/unity3d natively)
 Encrypted or proprietary binary saves are reported as unreadable.
 """
 from __future__ import annotations
 
+import base64
 import gzip
 import json
+import plistlib
+import sqlite3
 import os
 import re
 import struct
@@ -21,6 +26,8 @@ import time
 import xml.etree.ElementTree as ET
 import zlib
 from pathlib import Path
+
+from . import formats
 
 MAX_SAVE_BYTES = 64 * 1024 * 1024
 MAX_FIELDS = 200_000
@@ -316,15 +323,86 @@ def _decode_text(data: bytes) -> str | None:
 
 
 def _decompressed(data: bytes):
-    for offset in (0, 4, 8, 12, 16):
+    """zlib/gzip streams at the start or behind a small custom header."""
+    offsets = list(range(0, 20, 4))
+    for i in range(min(len(data) - 2, 64)):
+        if (data[i] == 0x78 and data[i + 1] in (0x01, 0x5E, 0x9C, 0xDA)) or data[i:i + 2] == b"\x1f\x8b":
+            offsets.append(i)
+    seen = set()
+    for offset in offsets:
+        if offset in seen:
+            continue
+        seen.add(offset)
         chunk = data[offset:]
         for fn in (zlib.decompress, gzip.decompress):
             try:
                 out = fn(chunk)
-            except (zlib.error, OSError, EOFError):
+            except (zlib.error, OSError, EOFError, ValueError):
                 continue
             if out:
                 yield out
+                return
+
+
+PARSE_ERRORS = (Unreadable, ValueError, struct.error, IndexError, KeyError, RecursionError, UnicodeError,
+                plistlib.InvalidFileException, OverflowError)
+B64_RE = re.compile(r"[A-Za-z0-9+/=_-]{24,}")
+
+
+def _parse_blob(blob: bytes, depth: int = 0):
+    """(format, flat) for one in-memory save, or None."""
+    attempts = [
+        ("Unreal Engine", lambda: parse_gvas(blob) if blob[:4] == b"GVAS" else None),
+        (".NET BinaryFormatter", lambda: formats.parse_nrbf(blob) if formats.is_nrbf(blob) else None),
+        ("plist", lambda: formats.parse_plist(blob)),
+        ("BSON", lambda: formats.parse_bson(blob)),
+    ]
+    for name, fn in attempts:
+        try:
+            value = fn()
+        except PARSE_ERRORS:
+            continue
+        if value:
+            return name, flatten(value)
+
+    text = _decode_text(blob)
+    if text is None:
+        try:
+            return "MessagePack", flatten(formats.parse_msgpack(blob))
+        except PARSE_ERRORS:
+            return None
+    stripped = text.strip()
+    if stripped[:1] in "{[":
+        try:
+            return "JSON", flatten(json.loads(stripped))
+        except ValueError:
+            pass
+    if stripped.startswith("<"):
+        try:
+            root = ET.fromstring(stripped)
+            if root.tag == "unity_prefs":
+                return "Unity PlayerPrefs", flatten(formats.unity_linux_prefs(root))
+            return "XML", flatten({root.tag.split("}")[-1]: _xml_to_obj(root)})
+        except ET.ParseError:
+            pass
+    if depth == 0 and B64_RE.fullmatch(re.sub(r"\s", "", stripped)):
+        compact = re.sub(r"\s", "", stripped)
+        try:
+            text_json = formats.lzstring_base64(compact)
+            return "RPG Maker", flatten(json.loads(text_json))
+        except PARSE_ERRORS:
+            pass
+        try:
+            decoded = base64.b64decode(compact + "=" * (-len(compact) % 4), altchars=b"-_" if "-" in compact or "_" in compact else None)
+        except (ValueError, TypeError):
+            decoded = b""
+        for inner in [decoded, *_decompressed(decoded)] if decoded else []:
+            found = _parse_blob(inner, depth + 1)
+            if found:
+                return f"{found[0]} (base64)", found[1]
+    if sum(1 for line in text.splitlines()[:200] if "=" in line) >= 3:
+        return "INI", flatten(_parse_ini(text))
+    return None
 
 
 def load_save(path: str) -> tuple:
@@ -337,28 +415,15 @@ def load_save(path: str) -> tuple:
     data = Path(path).read_bytes()
     if not data:
         raise Unreadable("empty file")
-
+    if data.startswith(b"SQLite format 3\0"):
+        try:
+            return "SQLite", flatten(formats.parse_sqlite(path))
+        except sqlite3.Error as e:
+            raise ValueError(f"database busy: {e}")   # retried on the next poll
     for attempt, blob in enumerate([data, *_decompressed(data)]):
-        label = "" if attempt == 0 else " (compressed)"
-        if blob[:4] == b"GVAS":
-            return "Unreal Engine" + label, flatten(parse_gvas(blob))
-        text = _decode_text(blob)
-        if text is None:
-            continue
-        stripped = text.lstrip()
-        if stripped[:1] in "{[":
-            try:
-                return "JSON" + label, flatten(json.loads(stripped))
-            except ValueError:
-                pass
-        if stripped.startswith("<"):
-            try:
-                root = ET.fromstring(stripped)
-                return "XML" + label, flatten({root.tag.split("}")[-1]: _xml_to_obj(root)})
-            except ET.ParseError:
-                pass
-        if sum(1 for line in text.splitlines()[:200] if "=" in line) >= 3:
-            return "INI" + label, flatten(_parse_ini(text))
+        found = _parse_blob(blob)
+        if found:
+            return found[0] + ("" if attempt == 0 else " (compressed)"), found[1]
     raise Unreadable("encrypted or unknown binary format")
 
 
@@ -511,6 +576,9 @@ def candidate_files(prefix: str | None, game_dir: str | None) -> list:
     root = game_root(game_dir) if game_dir else None
     if root and os.path.isdir(root):
         out += list(_walk_files(Path(root), only_save_paths=True))
+    unity = Path.home() / ".config" / "unity3d"     # native Linux Unity games
+    if unity.is_dir():
+        out += list(_walk_files(unity, only_save_paths=False, max_depth=4))
     return out
 
 
@@ -533,7 +601,8 @@ def looks_like_save(path: str) -> bool:
         return False
     low = path.lower()
     name = os.path.basename(low)
-    return (low.endswith((".sav", ".save", ".es3", ".sl2", "user.reg")) or "save" in name
+    return (low.endswith((".sav", ".save", ".es3", ".sl2", ".rpgsave", ".rmmzsave", ".dat", "user.reg"))
+            or "save" in name or name == "prefs"
             or bool(SAVE_DIR_RE.search(os.path.dirname(path))) or "savegames" in low)
 
 

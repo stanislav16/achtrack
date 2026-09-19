@@ -68,7 +68,30 @@ def cmd_list() -> int:
     width = max(len(r["name"] or str(r["appid"])) for r in rows)
     for r in rows:
         ach = f"{r['unlocked']}/{r['total']}" if r["total"] else str(r["unlocked"])
-        print(f"{(r['name'] or 'App ' + str(r['appid'])):<{width}}  {r['appid']:>8}  {fmt_hours(r['playtime']):>10}  {ach:>8} achievements")
+        print(f"{(r['name'] or 'App ' + str(r['appid'])):<{width}}  {r['appid']:>8}  {fmt_hours(r['total_playtime']):>10}  {ach:>8} achievements")
+    return 0
+
+
+def cmd_sync_steam() -> int:
+    from .config import Config
+    from .db import Database
+    from .engine import Engine, Listener
+
+    class Printer(Listener):
+        def on_error(self, message: str) -> None:
+            print(f"error: {message}")
+
+    cfg = Config.load()
+    if not cfg.steam_api_key:
+        print("Add your Steam Web API key in Settings first.")
+        return 1
+    db = Database()
+    before = db.q("SELECT COUNT(*) FROM unlocks WHERE source = 'Steam'")[0][0]
+    engine = Engine(cfg, db, Printer())
+    engine.steam_sync(db)
+    after = db.q("SELECT COUNT(*) FROM unlocks WHERE source = 'Steam'")[0][0]
+    games = db.q("SELECT COUNT(*) FROM games WHERE steam_owned = 1")[0][0]
+    print(f"Steam account {engine._steam_id or '?'}: {games} played games, {after} achievements ({after - before} new).")
     return 0
 
 
@@ -80,6 +103,7 @@ def main(argv=None) -> int:
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("scan", help="show detected prefixes, achievement files and running games")
     sub.add_parser("list", help="print the library with playtime and achievement counts")
+    sub.add_parser("sync-steam", help="copy your Steam games, playtime and achievements into the library now")
     test = sub.add_parser("test-popup", help="show a sample achievement popup")
     test.add_argument("--rare", action="store_true", help="show the rare (gold) variant")
     sub.add_parser("quit", help="stop the running instance")
@@ -90,6 +114,8 @@ def main(argv=None) -> int:
         return cmd_scan()
     if args.command == "list":
         return cmd_list()
+    if args.command == "sync-steam":
+        return cmd_sync_steam()
 
     from .app import run_gui, send_to_running, show_test_popup, make_app
     if args.command == "test-popup":

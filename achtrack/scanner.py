@@ -120,6 +120,21 @@ def steam_roots() -> list:
     ]
 
 
+def detect_steam_id() -> str | None:
+    """SteamID64 of the account logged into the local Steam client (most recent login wins)."""
+    fallback = None
+    for root in steam_roots():
+        try:
+            vdf = (root / "config" / "loginusers.vdf").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for steam_id, body in re.findall(r'"(7656119\d{10})"\s*\{([^}]*)\}', vdf):
+            if re.search(r'"MostRecent"\s*"1"', body, re.IGNORECASE):
+                return steam_id
+            fallback = fallback or steam_id
+    return fallback
+
+
 def steam_libraries() -> list:
     libs = []
     for root in steam_roots():

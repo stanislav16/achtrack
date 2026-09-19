@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import os
 import re
@@ -21,7 +22,9 @@ HEADER_URL = CDN + "/steam/apps/{appid}/header.jpg"
 
 
 class SteamError(Exception):
-    pass
+    def __init__(self, message: str, status: int = 0):
+        super().__init__(message)
+        self.status = status
 
 
 def _get(url: str, timeout: float = 20) -> bytes:
@@ -30,9 +33,10 @@ def _get(url: str, timeout: float = 20) -> bytes:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read()
     except urllib.error.HTTPError as e:
-        if e.code in (401, 403):
-            raise SteamError("Steam rejected the Web API key - check it in Settings") from e
-        raise SteamError(f"HTTP {e.code} for {url.split('?')[0]}") from e
+        if e.code in (401, 403) and "api.steampowered.com" in url:
+            raise SteamError("Steam refused the request - check the Web API key in Settings, and that your "
+                             "Steam profile's Game details are Public", e.code) from e
+        raise SteamError(f"HTTP {e.code} for {url.split('?')[0]}", e.code) from e
     except (urllib.error.URLError, OSError) as e:
         raise SteamError(f"network error: {e}") from e
 
@@ -88,6 +92,95 @@ def fetch_app_info(appid: int) -> tuple:
         return "", HEADER_URL.format(appid=appid)
     info = entry.get("data") or {}
     return info.get("name") or "", info.get("header_image") or HEADER_URL.format(appid=appid)
+
+
+STEAMID64_BASE = 76561197960265728
+
+
+def parse_steam_id(text: str, key: str = "") -> str | None:
+    """SteamID64 from an id, a profile URL, or a custom (vanity) profile URL/name."""
+    text = text.strip()
+    if not text:
+        return None
+    m = re.search(r"(7656119\d{10})", text)
+    if m:
+        return m.group(1)
+    m = re.search(r"steamcommunity\.com/id/([^/?#]+)", text)
+    vanity = m.group(1) if m else (text if re.fullmatch(r"[\w-]{2,32}", text) else None)
+    if not vanity or not key:
+        return None
+    query = urllib.parse.urlencode({"key": key, "vanityurl": vanity})
+    resp = _json(f"https://api.steampowered.com/ISteamUser/ResolveVanityURL/v1/?{query}").get("response") or {}
+    return resp.get("steamid") if resp.get("success") == 1 else None
+
+
+def fetch_owned_games(key: str, steam_id: str) -> list:
+    query = urllib.parse.urlencode({"key": key, "steamid": steam_id, "include_appinfo": 1,
+                                    "include_played_free_games": 1, "format": "json"})
+    resp = _json(f"https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?{query}").get("response") or {}
+    if "games" not in resp:
+        if resp.get("game_count") == 0:
+            return []
+        raise SteamError("Steam didn't return your games - set your Steam profile's Game details to Public "
+                         "(Steam → Profile → Edit Profile → Privacy Settings)")
+    return resp["games"]
+
+
+def fetch_player_achievements(key: str, steam_id: str, appid: int, language: str = "english") -> list:
+    """[(api_name, unlock_time)] for achievements the player has on Steam."""
+    query = urllib.parse.urlencode({"key": key, "steamid": steam_id, "appid": appid, "l": language})
+    try:
+        data = _json(f"https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v1/?{query}")
+    except SteamError as e:
+        if e.status == 400:  # "Requested app has no stats"
+            return []
+        raise
+    stats = data.get("playerstats") or {}
+    return [(a["apiname"], int(a.get("unlocktime") or 0))
+            for a in stats.get("achievements") or [] if a.get("achieved") and a.get("apiname")]
+
+
+def fetch_community_achievements(appid: int, language: str = "english") -> list:
+    """(icon file, title, description) from the public global-achievements page.
+
+    That page usually shows descriptions the Web API hides for hidden achievements.
+    """
+    page = _get(f"https://steamcommunity.com/stats/{appid}/achievements/?l={urllib.parse.quote(language)}")
+    text = page.decode("utf-8", errors="replace")
+    out = []
+    for chunk in text.split('class="achieveRow')[1:]:
+        img = re.search(r'<img[^>]+src="([^"]+)"', chunk)
+        title = re.search(r"<h3>(.*?)</h3>", chunk, re.S)
+        desc = re.search(r"<h5>(.*?)</h5>", chunk, re.S)
+        if not title:
+            continue
+        out.append((
+            os.path.basename(urllib.parse.urlparse(img.group(1)).path) if img else "",
+            html.unescape(re.sub(r"<[^>]+>", "", title.group(1))).strip(),
+            html.unescape(re.sub(r"<[^>]+>", "", desc.group(1))).strip() if desc else "",
+        ))
+    return out
+
+
+def fill_hidden_descriptions(appid: int, achievements: list, language: str = "english") -> int:
+    """Fills blank descriptions of hidden achievements in place. Returns how many were filled."""
+    missing = [a for a in achievements if a.get("hidden") and not a.get("description")]
+    if not missing:
+        return 0
+    try:
+        rows = fetch_community_achievements(appid, language)
+    except SteamError:
+        return 0
+    by_icon = {icon: desc for icon, _title, desc in rows if icon and desc}
+    by_title = {title.lower(): desc for _icon, title, desc in rows if desc}
+    filled = 0
+    for a in missing:
+        icon = os.path.basename(urllib.parse.urlparse(resolve_icon(appid, a.get("icon") or "")).path)
+        desc = by_icon.get(icon) or by_title.get((a.get("display_name") or "").lower())
+        if desc:
+            a["description"] = desc
+            filled += 1
+    return filled
 
 
 def _localized(value, language: str) -> str:

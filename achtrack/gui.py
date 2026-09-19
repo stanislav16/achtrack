@@ -3,21 +3,26 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from datetime import datetime
 
-from PySide6.QtCore import QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QDesktopServices, QIcon, QImage, QPixmap
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
-                               QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-                               QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QProgressBar,
-                               QPushButton, QSplitter, QStackedWidget, QVBoxLayout, QWidget)
+from PySide6.QtCore import QDateTime, QSize, Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QIcon, QImage, QPixmap
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDateTimeEdit, QDialog, QDialogButtonBox,
+                               QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit,
+                               QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
+                               QProgressBar, QPushButton, QSplitter, QStackedWidget, QVBoxLayout, QWidget)
 
 from . import __version__, desktop
 from .config import APP_ICON, APP_NAME, POPUP_CORNERS, Config
-from .db import Database
-from .notifier import trophy_pixmap
-from .scanner import detect_appid_in_tree
+from .db import MANUAL, STEAM, Database
+from .engine import build_unlock_event, needs_review
+from .notifier import ToastData, trophy_pixmap
+from .scanner import detect_appid_in_tree, detect_steam_id
 from .steam_api import cached_icon
+
+REVIEW_MIN_SECONDS = 120   # don't ask after a game was only opened for a moment
+POPUP_BURST = 5            # manual unlocks beyond this get one summary popup instead
 
 RARE_PCT = 10.0
 LANGUAGES = ["english", "german", "french", "italian", "spanish", "latam", "portuguese", "brazilian", "russian",
@@ -79,6 +84,11 @@ QScrollBar::add-page, QScrollBar::sub-page { background: none; }
 #Empty { color: #7f8b98; font-size: 15px; }
 #Hint { color: #7f8b98; font-size: 12px; }
 #Running { color: #a4d007; font-size: 11px; font-weight: 700; letter-spacing: 1px; }
+#Tag { color: #0e1116; background: #7f8b98; border-radius: 3px; padding: 1px 5px; font-size: 10px; font-weight: 700; }
+#Tag[kind="hidden"] { background: #b58cf0; }
+#Tag[kind="rare"] { background: #f0c75e; }
+#ReviewRow { background: #1f2630; border-radius: 4px; }
+#ReviewRow[checked="true"] { background: #2a3b52; }
 QCheckBox { spacing: 8px; }
 QCheckBox::indicator { width: 16px; height: 16px; border-radius: 3px; background: #0f1319; border: 1px solid #3a4452; }
 QCheckBox::indicator:checked { background: #1a9fff; border-color: #1a9fff; }
@@ -131,6 +141,14 @@ def load_pixmap(path: str | None, size: int, gray: bool = False) -> QPixmap:
     return pm.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
 
 
+def likelihood(a: dict, hours: float) -> float:
+    """Rough chance the player has this: common ones come early, rare ones need hours in the game."""
+    pct = a.get("global_pct")
+    if pct is None:
+        return -1.0
+    return pct if pct >= 30 else pct * min(1.0, 0.3 + hours / 20)
+
+
 def parse_appid(text: str) -> int | None:
     m = re.search(r"/app/(\d+)", text)
     digits = m.group(1) if m else next(iter(re.findall(r"\d+", text)), None)
@@ -152,7 +170,7 @@ class GameRow(QWidget):
         parts = []
         if running:
             parts.append("<span style='color:#a4d007;font-weight:700'>PLAYING</span>")
-        parts.append(fmt_short_playtime(row["playtime"]))
+        parts.append(fmt_short_playtime(row["total_playtime"]))
         if row["total"]:
             parts.append(f"{min(row['unlocked'], row['total'])}/{row['total']} 🏆")
         elif row["unlocked"]:
@@ -216,7 +234,9 @@ class AchievementRow(QFrame):
         right = QVBoxLayout()
         right.setSpacing(4)
         if unlocked:
-            date = QLabel(fmt_unlock(a["unlocked_at"]))
+            source = a.get("source")
+            tag = "  ·  Steam" if source == STEAM else "  ·  Added by you" if source == MANUAL else ""
+            date = QLabel(fmt_unlock(a["unlocked_at"]) + tag)
             date.setObjectName("AchDate")
             date.setAlignment(Qt.AlignmentFlag.AlignRight)
             right.addWidget(date)
@@ -314,6 +334,15 @@ class DetailView(QWidget):
         self.reveal.toggled.connect(lambda _: self.refresh(force=True))
         bar.addWidget(self.reveal)
         bar.addStretch(1)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search achievements")
+        self.search.setMaximumWidth(260)
+        self.search.textChanged.connect(lambda _: self.refresh(force=True))
+        bar.addWidget(self.search)
+        review = QPushButton("Review achievements…")
+        review.setToolTip("Tick achievements you've earned that weren't recorded")
+        review.clicked.connect(lambda: self.appid and self.win.open_review(self.appid))
+        bar.addWidget(review)
         refresh = QPushButton("Refresh from Steam")
         refresh.clicked.connect(lambda: self.appid and self.win.request_refresh(self.appid))
         bar.addWidget(refresh)
@@ -332,6 +361,8 @@ class DetailView(QWidget):
         self.list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.list.setSpacing(3)
+        self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._row_menu)
         root.addWidget(self.list, 1)
 
     def show_game(self, appid: int | None) -> None:
@@ -339,7 +370,27 @@ class DetailView(QWidget):
             self.appid = appid
             self._sig = None
             self.list.scrollToTop()
+            if appid is not None:
+                self.win.worker.request("icons", appid)
         self.refresh()
+
+    def _row_menu(self, pos) -> None:
+        item = self.list.itemAt(pos)
+        a = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if not a or self.appid is None:
+            return
+        appid, name = self.appid, a["name"]
+        menu = QMenu(self)
+        if not a.get("unlocked_at"):
+            menu.addAction("Mark as unlocked", lambda: self.win.manual_unlock(appid, [name], int(time.time())))
+            menu.addAction("Mark as unlocked on…", lambda: self.win.manual_unlock_on(appid, name))
+        elif a.get("source") == MANUAL:
+            menu.addAction("Change unlock date…", lambda: self.win.change_unlock_date(appid, name, a["unlocked_at"]))
+            menu.addAction("Undo - mark as locked", lambda: self.win.remove_manual_unlock(appid, name))
+        else:
+            info = menu.addAction(f"Unlocked via {a.get('source') or 'emulator'}")
+            info.setEnabled(False)
+        menu.exec(self.list.mapToGlobal(pos))
 
     def refresh(self, force: bool = False) -> None:
         if self.appid is None:
@@ -355,8 +406,13 @@ class DetailView(QWidget):
 
         self.title.setText(game["name"] or f"App {self.appid}")
         self.running.setVisible(self.appid in self.win.running)
-        self.stat_time.value.setText(fmt_playtime(game["playtime"]))
-        self.stat_last.value.setText("Now" if self.appid in self.win.running else fmt_day(game["last_played"]))
+        total_time = game["playtime"] + game["steam_playtime"]
+        self.stat_time.value.setText(fmt_playtime(total_time))
+        self.stat_time.setToolTip(f"Steam: {fmt_playtime(game['steam_playtime'])}\n"
+                                  f"Tracked by {APP_NAME}: {fmt_playtime(game['playtime'])}"
+                                  if game["steam_playtime"] else "")
+        last = max(game["last_played"] or 0, game["steam_last_played"] or 0)
+        self.stat_last.value.setText("Now" if self.appid in self.win.running else fmt_day(last))
         self.stat_ach.value.setText(f"{unlocked} / {total}" if total else "-")
         self.progress.setRange(0, max(total, 1))
         self.progress.setValue(unlocked)
@@ -379,11 +435,18 @@ class DetailView(QWidget):
                 self.notice.setText("No achievement data from Steam yet for this game. "
                                     "It may have no achievements, or Steam couldn't be reached - try Refresh.")
             self.notice.show()
+        elif (unlocked < total and game["playtime"] >= 1800 and db.sources_for(self.appid)
+              and not db.emulator_unlock_count(self.appid)):
+            self.notice.setText("This game's crack hasn't recorded any achievements yet, so they won't unlock by "
+                                "themselves. Use <b>Review achievements…</b> or right-click an achievement to add "
+                                "what you've earned.")
+            self.notice.show()
         else:
             self.notice.hide()
 
         icons = tuple(bool(cached_icon(self.appid, r.get("icon") or "")) for r in rows)
-        sig = (repr(rows), icons, self.filter.currentIndex(), self.reveal.isChecked(), bool(banner_path))
+        query = self.search.text().strip().lower()
+        sig = (repr(rows), icons, self.filter.currentIndex(), self.reveal.isChecked(), bool(banner_path), query)
         if sig == self._sig and not force:
             return
         self._sig = sig
@@ -400,22 +463,225 @@ class DetailView(QWidget):
         reveal = self.reveal.isChecked()
         hidden_left = 0
         for r in shown:
-            if r.get("hidden") and not r.get("unlocked_at") and not reveal:
+            secret = r.get("hidden") and not r.get("unlocked_at") and not reveal
+            if query and query not in (f"{r.get('display_name') or r['name']} "
+                                       f"{'' if secret else r.get('description') or ''}").lower():
+                continue
+            if secret and not query:
                 hidden_left += 1
                 continue
-            self._add_row(AchievementRow(self.appid, r, reveal))
+            self._add_row(AchievementRow(self.appid, r, reveal or bool(query)), r)
         if hidden_left:
             self._add_row(HiddenSummaryRow(hidden_left))
         self.list.setUpdatesEnabled(True)
         QTimer.singleShot(0, lambda: self.list.verticalScrollBar().setValue(scroll))
 
-    def _add_row(self, widget: QWidget) -> None:
+    def _add_row(self, widget: QWidget, data: dict | None = None) -> None:
         item = QListWidgetItem()
         item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+        item.setData(Qt.ItemDataRole.UserRole, data)
         widget.adjustSize()
         item.setSizeHint(QSize(0, max(widget.sizeHint().height(), 82)))
         self.list.addItem(item)
         self.list.setItemWidget(item, widget)
+
+
+# achievement review ------------------------------------------------------
+
+def _repolish(widget: QWidget) -> None:
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)
+
+
+def _tag(text: str, kind: str) -> QLabel:
+    tag = QLabel(text)
+    tag.setObjectName("Tag")
+    tag.setProperty("kind", kind)
+    return tag
+
+
+class ReviewRow(QFrame):
+    """One locked achievement with a checkbox; clicking anywhere on the row toggles it."""
+
+    def __init__(self, appid: int, a: dict):
+        super().__init__()
+        self.name = a["name"]
+        self.search_text = f"{a.get('display_name') or ''} {a.get('description') or ''}".lower()
+        self.setObjectName("ReviewRow")
+        self.setProperty("checked", False)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 8, 14, 8)
+        lay.setSpacing(12)
+        self.check = QCheckBox()
+        self.check.toggled.connect(self._toggled)
+        lay.addWidget(self.check)
+        icon = QLabel()
+        icon.setFixedSize(48, 48)
+        gray = cached_icon(appid, a.get("icon_gray") or "")
+        icon.setPixmap(load_pixmap(gray or cached_icon(appid, a.get("icon") or ""), 48, gray=not gray))
+        lay.addWidget(icon)
+
+        texts = QVBoxLayout()
+        texts.setSpacing(3)
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+        name = QLabel(a.get("display_name") or a["name"])
+        name.setObjectName("AchName")
+        title_row.addWidget(name)
+        pct = a.get("global_pct")
+        if a.get("hidden"):
+            title_row.addWidget(_tag("HIDDEN", "hidden"))
+        if pct is not None and pct < RARE_PCT:
+            title_row.addWidget(_tag("RARE", "rare"))
+        title_row.addStretch(1)
+        texts.addLayout(title_row)
+        desc = QLabel(a.get("description") or ("Hidden achievement - Steam doesn't publish its description"
+                                               if a.get("hidden") else ""))
+        desc.setObjectName("AchDesc")
+        desc.setWordWrap(True)
+        texts.addWidget(desc)
+        lay.addLayout(texts, 1)
+
+        if pct is not None:
+            label = QLabel(f"{pct:.1f}%")
+            label.setObjectName("AchPct")
+            label.setProperty("rare", pct < RARE_PCT)
+            label.setToolTip("Share of Steam players who have this achievement")
+            lay.addWidget(label)
+
+    def _toggled(self, checked: bool) -> None:
+        self.setProperty("checked", checked)
+        _repolish(self)
+
+    def mousePressEvent(self, event) -> None:
+        self.check.toggle()
+
+
+class ReviewDialog(QDialog):
+    """'Did you earn any of these?' - for games whose crack doesn't record achievements."""
+
+    def __init__(self, win: "MainWindow", appid: int, session_seconds: int = 0):
+        super().__init__(win)
+        self.win = win
+        self.appid = appid
+        db = win.db
+        game = db.game(appid)
+        name = game["name"] or f"App {appid}"
+        total_seconds = game["playtime"] + game["steam_playtime"]
+        self.setWindowTitle(f"Review achievements - {name}")
+        self.resize(760, 760)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 18, 20, 14)
+        lay.setSpacing(10)
+
+        title = QLabel("Did you earn any of these?")
+        title.setStyleSheet("color: white; font-size: 22px; font-weight: 700;")
+        lay.addWidget(title)
+        parts = [name]
+        if session_seconds:
+            parts.append(f"played {fmt_playtime(session_seconds)} this session")
+        parts.append(f"{fmt_playtime(total_seconds)} total")
+        sub = QLabel("  ·  ".join(parts))
+        sub.setObjectName("Muted")
+        lay.addWidget(sub)
+        hint = QLabel("This game's crack isn't recording achievements, so tick the ones you've done. "
+                      "The list is sorted by how likely you are to have each one, based on how many Steam players "
+                      "have it and how long you've played. Hidden achievements are included.")
+        hint.setObjectName("Hint")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search achievements")
+        self.search.textChanged.connect(self._filter)
+        lay.addWidget(self.search)
+
+        self.list = QListWidget()
+        self.list.setObjectName("AchList")
+        self.list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.list.setSpacing(2)
+        lay.addWidget(self.list, 1)
+        hours = total_seconds / 3600
+        locked = [a for a in db.achievements(appid) if not a.get("unlocked_at")]
+        locked.sort(key=lambda a: -likelihood(a, hours))
+        self.rows = []
+        for a in locked:
+            row = ReviewRow(appid, a)
+            row.check.toggled.connect(self._update_count)
+            item = QListWidgetItem()
+            item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            row.adjustSize()
+            item.setSizeHint(QSize(0, max(row.sizeHint().height(), 66)))
+            self.list.addItem(item)
+            self.list.setItemWidget(item, row)
+            self.rows.append((item, row))
+
+        bottom = QHBoxLayout()
+        self.dont_ask = QCheckBox("Don't ask after sessions of this game")
+        self.dont_ask.setChecked(game["review"] == 0)
+        bottom.addWidget(self.dont_ask)
+        bottom.addStretch(1)
+        later = QPushButton("Not now")
+        later.clicked.connect(self._close)
+        bottom.addWidget(later)
+        self.unlock = QPushButton()
+        self.unlock.setObjectName("Primary")
+        self.unlock.clicked.connect(self._unlock)
+        bottom.addWidget(self.unlock)
+        lay.addLayout(bottom)
+        self._update_count()
+
+    def _filter(self, text: str) -> None:
+        query = text.strip().lower()
+        for item, row in self.rows:
+            item.setHidden(bool(query) and query not in row.search_text)
+
+    def _checked(self) -> list:
+        return [row.name for _item, row in self.rows if row.check.isChecked()]
+
+    def _update_count(self, *_args) -> None:
+        count = len(self._checked())
+        self.unlock.setText(f"Unlock {count} achievement{'s' if count != 1 else ''}" if count else "Unlock")
+        self.unlock.setEnabled(bool(count))
+
+    def _save_preference(self) -> None:
+        game = self.win.db.game(self.appid)
+        if self.dont_ask.isChecked():
+            self.win.db.update_game(self.appid, review=0)
+        elif game["review"] == 0:
+            self.win.db.update_game(self.appid, review=None)
+
+    def _close(self) -> None:
+        self._save_preference()
+        self.reject()
+
+    def _unlock(self) -> None:
+        self._save_preference()
+        self.win.manual_unlock(self.appid, self._checked(), int(time.time()))
+        self.accept()
+
+
+class UnlockDateDialog(QDialog):
+    def __init__(self, parent, title: str, ts: int | None = None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel("When did you unlock it?"))
+        self.when = QDateTimeEdit(QDateTime.fromSecsSinceEpoch(ts) if ts else QDateTime.currentDateTime())
+        self.when.setCalendarPopup(True)
+        self.when.setDisplayFormat("d MMM yyyy  h:mm AP")
+        self.when.setMaximumDateTime(QDateTime.currentDateTime())
+        lay.addWidget(self.when)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(buttons)
+
+    def timestamp(self) -> int:
+        return int(self.when.dateTime().toSecsSinceEpoch())
 
 
 # dialogs -----------------------------------------------------------------
@@ -522,6 +788,18 @@ class SettingsDialog(QDialog):
         key_row.addWidget(self.key, 1)
         key_row.addWidget(get_key)
         form.addRow("Steam Web API key", key_row)
+
+        self.steam_id = QLineEdit(cfg.steam_id)
+        detected = detect_steam_id()
+        self.steam_id.setPlaceholderText(f"Detected from Steam: {detected}" if detected
+                                         else "Steam profile URL or SteamID64")
+        form.addRow("Steam account", self.steam_id)
+        self.steam_sync = QCheckBox("Copy my Steam games, playtime and achievements into my library")
+        self.steam_sync.setChecked(cfg.steam_sync)
+        form.addRow("", self.steam_sync)
+        self.review = QCheckBox("After playing a game whose crack doesn't record achievements, ask what I earned")
+        self.review.setChecked(cfg.session_review)
+        form.addRow("", self.review)
 
         self.language = QComboBox()
         self.language.setEditable(True)
@@ -633,10 +911,14 @@ class SettingsDialog(QDialog):
     def _save(self) -> None:
         cfg = self.win.cfg
         old_key, old_lang, old_dirs = cfg.steam_api_key, cfg.language, list(cfg.scan_dirs)
+        old_steam = (cfg.steam_id, cfg.steam_sync)
         self._apply(cfg)
         cfg.steam_api_key = self.key.text().strip()
         cfg.language = self.language.currentText().strip() or "english"
         cfg.force_x11 = self.x11.isChecked()
+        cfg.steam_id = self.steam_id.text().strip()
+        cfg.steam_sync = self.steam_sync.isChecked()
+        cfg.session_review = self.review.isChecked()
         cfg.scan_dirs = [line.strip() for line in self.dirs.toPlainText().splitlines() if line.strip()]
         cfg.save()
         try:
@@ -647,6 +929,8 @@ class SettingsDialog(QDialog):
             self.win.worker.request("refresh_all")
         if cfg.scan_dirs != old_dirs:
             self.win.worker.request("rescan")
+        if cfg.steam_sync and (cfg.steam_api_key != old_key or (cfg.steam_id, cfg.steam_sync) != old_steam):
+            self.win.worker.request("steam_sync")
         self.win.schedule_reload()
         self.accept()
 
@@ -666,6 +950,7 @@ class MainWindow(QMainWindow):
         self._dirty = True
         self._told_background = False
         self.on_hidden_without_tray = None
+        self._reviews: dict = {}
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(QIcon(str(APP_ICON)))
         self.resize(1200, 780)
@@ -747,6 +1032,7 @@ class MainWindow(QMainWindow):
         lib.addAction("Add a game…", self.add_game)
         lib.addAction("Rescan for achievement files", lambda: self.worker.request("rescan"))
         lib.addAction("Refresh all achievement data", lambda: self.worker.request("refresh_all"))
+        lib.addAction("Sync Steam library now", self._sync_steam)
         lib.addSeparator()
         self.show_hidden = QAction("Show removed games", self, checkable=True)
         self.show_hidden.toggled.connect(lambda _: self.reload(force=True))
@@ -784,7 +1070,7 @@ class MainWindow(QMainWindow):
         query = self.search.text().strip().lower()
         if query:
             rows = [r for r in rows if query in (r["name"] or "").lower() or query in str(r["appid"])]
-        sig = tuple((r["appid"], r["name"], r["playtime"] // 60, r["unlocked"], r["total"], r["hidden"],
+        sig = tuple((r["appid"], r["name"], r["total_playtime"] // 60, r["unlocked"], r["total"], r["hidden"],
                      r["appid"] in self.running) for r in rows)
         if force or sig != self._list_sig:
             self._list_sig = sig
@@ -822,9 +1108,66 @@ class MainWindow(QMainWindow):
         self.running.add(appid)
         self.schedule_reload()
 
-    def game_stopped(self, appid: int, _seconds: int) -> None:
+    def game_stopped(self, appid: int, seconds: int) -> None:
         self.running.discard(appid)
         self.schedule_reload()
+        if self.cfg.session_review and seconds >= REVIEW_MIN_SECONDS and needs_review(self.db, appid):
+            QTimer.singleShot(1500, lambda: self.open_review(appid, seconds))
+
+    # manual unlocks ---------------------------------------------------------
+
+    def open_review(self, appid: int, session_seconds: int = 0) -> None:
+        existing = self._reviews.get(appid)
+        if existing is not None:
+            existing.raise_()
+            existing.activateWindow()
+            return
+        if not self.db.achievement_names(appid):
+            QMessageBox.information(self, APP_NAME, "There's no achievement list for this game yet. Add your Steam "
+                                                    "Web API key in Settings, or try Refresh from Steam.")
+            return
+        dialog = ReviewDialog(self, appid, session_seconds)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.finished.connect(lambda _code: self._reviews.pop(appid, None))
+        self._reviews[appid] = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def manual_unlock(self, appid: int, names: list, ts: int, popup: bool = True) -> None:
+        added = [n for n in names if self.db.add_unlock(appid, n, ts, MANUAL)]
+        if popup and added:
+            for name in added[:POPUP_BURST]:
+                self.notifier.achievement(build_unlock_event(self.db, appid, name, download=False))
+            if len(added) > POPUP_BURST:
+                game = self.db.game(appid)
+                self.notifier.toasts.show(ToastData(
+                    kicker="ACHIEVEMENTS UNLOCKED", title=f"+{len(added) - POPUP_BURST} more",
+                    body=game["name"] or f"App {appid}", sound=None))
+        self.reload(force=True)
+
+    def manual_unlock_on(self, appid: int, name: str) -> None:
+        dialog = UnlockDateDialog(self, "Mark as unlocked")
+        if dialog.exec():
+            self.manual_unlock(appid, [name], dialog.timestamp(), popup=False)
+
+    def change_unlock_date(self, appid: int, name: str, ts: int) -> None:
+        dialog = UnlockDateDialog(self, "Change unlock date", ts)
+        if dialog.exec():
+            self.db.x("UPDATE unlocks SET unlocked_at = ? WHERE appid = ? AND name = ? AND source = ?",
+                      (dialog.timestamp(), appid, name, MANUAL))
+            self.reload(force=True)
+
+    def remove_manual_unlock(self, appid: int, name: str) -> None:
+        self.db.remove_unlock(appid, name, MANUAL)
+        self.reload(force=True)
+
+    def _sync_steam(self) -> None:
+        if not self.cfg.steam_api_key:
+            QMessageBox.information(self, APP_NAME, "Add your Steam Web API key in Settings first.")
+            return
+        self.worker.request("steam_sync")
+        self.statusBar().showMessage("Syncing your Steam library…", 5000)
 
     def request_refresh(self, appid: int) -> None:
         self.worker.request("refresh", appid)
@@ -858,6 +1201,17 @@ class MainWindow(QMainWindow):
         appid = item.data(Qt.ItemDataRole.UserRole)
         game = self.db.game(appid)
         menu = QMenu(self)
+        menu.addAction("Review achievements…", lambda: self.open_review(appid))
+        after = menu.addMenu("After a session")
+        group = QActionGroup(after)
+        for label, value in (("Ask automatically (crack not recording)", None), ("Always ask what I earned", 1),
+                             ("Never ask", 0)):
+            action = after.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(game["review"] == value)
+            action.triggered.connect(lambda _=False, v=value: self.db.update_game(appid, review=v))
+            group.addAction(action)
+        menu.addSeparator()
         menu.addAction("Refresh achievement data", lambda: self.request_refresh(appid))
         menu.addAction("Edit game…", lambda: self.edit_game(appid))
         sources = self.db.sources_for(appid)

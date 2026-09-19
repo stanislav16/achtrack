@@ -11,6 +11,35 @@ emulator (Goldberg / GBE, CODEX, RUNE, EMPRESS, OnlineFix, SKIDROW, 3DM) under W
 - **Library window**: every game shows playtime, last played, a progress bar and the full achievement
   list (unlock dates, rarity, progress bars, hidden achievements collapsed).
 
+## Your Steam library, too
+
+With your Steam Web API key set, AchTrack copies the **Steam games you've played, their Steam playtime
+and every Steam achievement with its real unlock date** into its own database. It does this at startup
+and every 15 minutes, or on demand with **Library → Sync Steam library now** or `achtrack sync-steam`.
+The data lives on your disk, so you keep it even if something changes on Steam's side.
+
+- Your Steam account is detected from the Steam client on this PC. If that fails, paste your profile
+  URL under **Settings → Steam account**.
+- Steam only shares this if your profile's **Game details** are set to *Public* (Steam → Profile →
+  Edit Profile → Privacy Settings).
+- Steam achievements are imported quietly, because Steam already showed its own popup. Games owned
+  but never played are left out.
+
+## When a crack doesn't record achievements
+
+Some cracks never save achievements. For example, some RUNE releases leave `achievements.ini` at
+`Count=0`. No tracker can see those unlocks, so AchTrack helps you add them yourself:
+
+- **Post-session review:** when you quit such a game, AchTrack asks *"Did you earn any of these?"*.
+  It lists the locked achievements, most likely first (based on how many Steam players have each one
+  and how long you've played). Hidden achievements are included, with their real description where
+  Steam's public achievement page has it. Tick what you did and they unlock with the normal popup.
+  Once the crack records an achievement itself, the question stops. You can change this per game by
+  right-clicking the game → **After a session**.
+- **Mark as unlocked:** right-click any achievement → *Mark as unlocked* (now or on a date you pick).
+  Manual unlocks are labelled *Added by you* and can be undone.
+- **Search** the achievement list from the game page.
+
 ## Install (Pop!_OS)
 
 ```bash
@@ -73,6 +102,7 @@ achtrack                  open the library (starts tracking)
 achtrack --background     start hidden (used by autostart)
 achtrack scan             list detected prefixes, achievement files and running games
 achtrack list             print the library with playtime and achievement counts
+achtrack sync-steam       copy your Steam games, playtime and achievements in now
 achtrack test-popup [--rare]
 achtrack quit
 ```

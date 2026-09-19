@@ -32,6 +32,13 @@ POPUP_CORNERS = ("bottom-right", "bottom-left", "top-right", "top-left")
 class Config:
     # Free key from https://steamcommunity.com/dev/apikey - needed for achievement names/icons.
     steam_api_key: str = ""
+    # SteamID64 or profile URL; empty = detect the account logged into the local Steam client.
+    steam_id: str = ""
+    # Copy owned Steam games, their playtime and achievements into the local library.
+    steam_sync: bool = True
+    steam_sync_interval: float = 900.0
+    # After a session of a game whose crack doesn't record achievements, ask what was earned.
+    session_review: bool = True
     language: str = "english"
     # Extra folders to search for Wine prefixes (Lutris, Bottles, custom locations...).
     scan_dirs: list = field(default_factory=list)

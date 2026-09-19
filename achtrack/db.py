@@ -62,7 +62,22 @@ CREATE TABLE IF NOT EXISTS sessions(
 );
 """
 
-GAME_FIELDS = {"name", "header_url", "exe_name", "game_dir", "last_played", "schema_fetched_at", "hidden"}
+# Columns added after the first release; created on startup for existing databases.
+MIGRATIONS = {
+    "games": {
+        "steam_playtime": "INTEGER NOT NULL DEFAULT 0",
+        "steam_last_played": "INTEGER",
+        "steam_owned": "INTEGER NOT NULL DEFAULT 0",
+        "review": "INTEGER",  # NULL = decide automatically, 0 = never ask, 1 = always ask
+    },
+}
+
+GAME_FIELDS = {"name", "header_url", "exe_name", "game_dir", "last_played", "schema_fetched_at", "hidden",
+               "steam_playtime", "steam_last_played", "steam_owned", "review"}
+
+# Unlock sources that don't come from an emulator file.
+MANUAL = "Manual"
+STEAM = "Steam"
 
 
 class Database:
@@ -70,10 +85,23 @@ class Database:
 
     def __init__(self, path: Path = DB_FILE):
         path.parent.mkdir(parents=True, exist_ok=True)
+        self.path = path
         self.conn = sqlite3.connect(str(path), timeout=30, isolation_level=None)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        for table, columns in MIGRATIONS.items():
+            have = {r[1] for r in self.q(f"PRAGMA table_info({table})")}
+            for column, decl in columns.items():
+                if column not in have:
+                    try:
+                        self.x(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+                    except sqlite3.OperationalError as e:
+                        if "duplicate column" not in str(e):  # another connection just added it
+                            raise
 
     def q(self, sql: str, args=()) -> list:
         return self.conn.execute(sql, args).fetchall()
@@ -113,10 +141,12 @@ class Database:
             """
             SELECT g.*,
                    (SELECT COUNT(*) FROM achievements a WHERE a.appid = g.appid) AS total,
-                   (SELECT COUNT(*) FROM unlocks u WHERE u.appid = g.appid) AS unlocked
+                   (SELECT COUNT(*) FROM unlocks u WHERE u.appid = g.appid) AS unlocked,
+                   g.playtime + g.steam_playtime AS total_playtime,
+                   MAX(COALESCE(g.last_played, 0), COALESCE(g.steam_last_played, 0)) AS last_any
             FROM games g
             WHERE ? OR g.hidden = 0
-            ORDER BY COALESCE(g.last_played, 0) DESC, g.name COLLATE NOCASE
+            ORDER BY last_any DESC, g.name COLLATE NOCASE
             """,
             (1 if include_hidden else 0,),
         )
@@ -158,7 +188,7 @@ class Database:
         """Schema rows joined with unlock/progress, plus unlocks the schema doesn't know about."""
         rows = [dict(r) for r in self.q(
             """
-            SELECT a.*, u.unlocked_at, p.cur, p.max FROM achievements a
+            SELECT a.*, u.unlocked_at, u.source, p.cur, p.max FROM achievements a
             LEFT JOIN unlocks u ON u.appid = a.appid AND u.name = a.name
             LEFT JOIN progress p ON p.appid = a.appid AND p.name = a.name
             WHERE a.appid = ? ORDER BY a.sort_order
@@ -167,15 +197,23 @@ class Database:
         )]
         for r in self.q(
             """
-            SELECT u.name, u.unlocked_at FROM unlocks u WHERE u.appid = ?
+            SELECT u.name, u.unlocked_at, u.source FROM unlocks u WHERE u.appid = ?
             AND NOT EXISTS (SELECT 1 FROM achievements a WHERE a.appid = u.appid AND a.name = u.name)
             """,
             (appid,),
         ):
             rows.append({"appid": appid, "name": r["name"], "display_name": r["name"], "description": "",
                          "icon": None, "icon_gray": None, "hidden": 0, "global_pct": None,
-                         "unlocked_at": r["unlocked_at"], "cur": None, "max": None})
+                         "unlocked_at": r["unlocked_at"], "source": r["source"], "cur": None, "max": None})
         return rows
+
+    def remove_unlock(self, appid: int, name: str, source: str) -> bool:
+        cur = self.x("DELETE FROM unlocks WHERE appid = ? AND name = ? AND source = ?", (appid, name, source))
+        return cur.rowcount == 1
+
+    def emulator_unlock_count(self, appid: int) -> int:
+        return self.q("SELECT COUNT(*) FROM unlocks WHERE appid = ? AND COALESCE(source, '') NOT IN (?, ?)",
+                      (appid, MANUAL, STEAM))[0][0]
 
     def unlocked_names(self, appid: int) -> set:
         return {r[0] for r in self.q("SELECT name FROM unlocks WHERE appid = ?", (appid,))}

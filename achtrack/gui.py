@@ -1,0 +1,906 @@
+"""Library window: games, playtime and Steam-style achievement lists."""
+from __future__ import annotations
+
+import os
+import re
+from datetime import datetime
+
+from PySide6.QtCore import QSize, Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QDesktopServices, QIcon, QImage, QPixmap
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
+                               QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+                               QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPlainTextEdit, QProgressBar,
+                               QPushButton, QSplitter, QStackedWidget, QVBoxLayout, QWidget)
+
+from . import __version__, desktop
+from .config import APP_ICON, APP_NAME, POPUP_CORNERS, Config
+from .db import Database
+from .notifier import trophy_pixmap
+from .scanner import detect_appid_in_tree
+from .steam_api import cached_icon
+
+RARE_PCT = 10.0
+LANGUAGES = ["english", "german", "french", "italian", "spanish", "latam", "portuguese", "brazilian", "russian",
+             "polish", "ukrainian", "bulgarian", "czech", "hungarian", "romanian", "turkish", "greek", "dutch",
+             "swedish", "danish", "norwegian", "finnish", "japanese", "koreana", "schinese", "tchinese", "thai",
+             "vietnamese", "indonesian", "arabic"]
+
+STYLE = """
+* { font-family: "Motiva Sans", "Inter", "Noto Sans", "Cantarell", "Ubuntu", sans-serif; }
+QMainWindow, QDialog { background: #1b2028; }
+QWidget { color: #c6d4df; font-size: 13px; }
+QMenuBar { background: #171a21; color: #b8c4cf; padding: 2px; }
+QMenuBar::item { padding: 5px 10px; border-radius: 3px; }
+QMenuBar::item:selected { background: #2a3140; }
+QMenu { background: #252b36; border: 1px solid #343c4a; padding: 4px; }
+QMenu::item { padding: 6px 22px 6px 14px; border-radius: 3px; }
+QMenu::item:selected { background: #3d4a5d; color: white; }
+QMenu::separator { height: 1px; background: #343c4a; margin: 4px 8px; }
+QSplitter::handle { background: #11151b; }
+#Sidebar { background: #171d25; }
+#SidebarList { background: transparent; border: none; outline: 0; }
+#SidebarList::item { border-radius: 4px; margin: 1px 6px; }
+#SidebarList::item:selected { background: #3e4a5c; }
+#SidebarList::item:hover:!selected { background: #232b37; }
+QLineEdit, QPlainTextEdit, QDoubleSpinBox, QComboBox {
+    background: #0f1319; border: 1px solid #2c3441; border-radius: 4px; padding: 6px 8px; color: #dfe7ee;
+    selection-background-color: #2f6ea3; }
+QLineEdit:focus, QPlainTextEdit:focus, QDoubleSpinBox:focus, QComboBox:focus { border-color: #66c0f4; }
+QComboBox::drop-down { border: none; width: 22px; }
+QComboBox QAbstractItemView { background: #252b36; border: 1px solid #343c4a; selection-background-color: #3d4a5d; }
+QPushButton { background: #2f3a4a; border: none; border-radius: 4px; padding: 7px 14px; color: #dfe7ee; }
+QPushButton:hover { background: #3b4a5f; }
+QPushButton:pressed { background: #26303d; }
+QPushButton#Primary { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #47bfff, stop:1 #1a8fd8);
+    color: white; font-weight: 600; }
+QPushButton#Primary:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #5fc9ff, stop:1 #2a9ce3); }
+QProgressBar { background: #0e1218; border: none; border-radius: 4px; max-height: 8px; min-height: 8px; }
+QProgressBar::chunk { border-radius: 4px;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1a9fff, stop:1 #66c0f4); }
+QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
+QScrollBar::handle:vertical { background: #3a4452; border-radius: 4px; min-height: 30px; }
+QScrollBar::handle:vertical:hover { background: #4a5668; }
+QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
+QScrollBar::add-page, QScrollBar::sub-page { background: none; }
+#AchList { background: transparent; border: none; outline: 0; }
+#AchList::item, #AchList::item:selected, #AchList::item:hover { background: transparent; }
+#Muted { color: #7f8b98; }
+#StatLabel { color: #7f8b98; font-size: 11px; font-weight: 600; letter-spacing: 1px; }
+#StatValue { color: #e4ecf2; font-size: 15px; }
+#GameTitle { color: white; font-size: 26px; font-weight: 700; }
+#Banner { background: #10141a; border-radius: 4px; }
+#AchRow { background: #1f2630; border-radius: 4px; }
+#AchRow[unlocked="true"] { background: #273241; }
+#AchName { color: #ffffff; font-size: 14px; font-weight: 600; }
+#AchDesc { color: #95a3b0; font-size: 12.5px; }
+#AchDate { color: #8fa3b6; font-size: 12px; }
+#AchPct { color: #7f8b98; font-size: 12px; }
+#AchPct[rare="true"] { color: #f0c75e; }
+#Empty { color: #7f8b98; font-size: 15px; }
+#Hint { color: #7f8b98; font-size: 12px; }
+#Running { color: #a4d007; font-size: 11px; font-weight: 700; letter-spacing: 1px; }
+QCheckBox { spacing: 8px; }
+QCheckBox::indicator { width: 16px; height: 16px; border-radius: 3px; background: #0f1319; border: 1px solid #3a4452; }
+QCheckBox::indicator:checked { background: #1a9fff; border-color: #1a9fff; }
+QToolTip { background: #252b36; color: #dfe7ee; border: 1px solid #343c4a; padding: 4px; }
+"""
+
+
+# formatting --------------------------------------------------------------
+
+def fmt_playtime(seconds: int) -> str:
+    if seconds < 60:
+        return "Never" if seconds <= 0 else "< 1 minute"
+    if seconds < 3600:
+        m = seconds // 60
+        return f"{m} minute{'s' if m != 1 else ''}"
+    return f"{seconds / 3600:.1f} hours"
+
+
+def fmt_short_playtime(seconds: int) -> str:
+    if seconds < 3600:
+        return f"{seconds // 60} min"
+    return f"{seconds / 3600:.1f} h"
+
+
+def fmt_day(ts: int | None) -> str:
+    if not ts:
+        return "Never"
+    day = datetime.fromtimestamp(ts).date()
+    today = datetime.now().date()
+    delta = (today - day).days
+    if delta == 0:
+        return "Today"
+    if delta == 1:
+        return "Yesterday"
+    return day.strftime("%-d %b %Y") if day.year != today.year else day.strftime("%-d %b")
+
+
+def fmt_unlock(ts: int) -> str:
+    dt = datetime.fromtimestamp(ts)
+    return f"Unlocked {dt.strftime('%-d %b %Y')} @ {dt.strftime('%-I:%M%p').lower()}"
+
+
+def load_pixmap(path: str | None, size: int, gray: bool = False) -> QPixmap:
+    pm = QPixmap(path) if path else QPixmap()
+    if pm.isNull():
+        pm = trophy_pixmap(size * 2)
+    if gray:
+        img = pm.toImage().convertToFormat(QImage.Format.Format_Grayscale8)
+        pm = QPixmap.fromImage(img)
+    return pm.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+
+
+def parse_appid(text: str) -> int | None:
+    m = re.search(r"/app/(\d+)", text)
+    digits = m.group(1) if m else next(iter(re.findall(r"\d+", text)), None)
+    return int(digits) if digits and int(digits) > 0 else None
+
+
+# widgets -----------------------------------------------------------------
+
+class GameRow(QWidget):
+    def __init__(self, row, running: bool):
+        super().__init__()
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 7, 10, 7)
+        lay.setSpacing(2)
+        name = QLabel(row["name"] or f"App {row['appid']}")
+        name.setStyleSheet("color: #e7eef4; font-size: 13.5px; font-weight: 600; background: transparent;")
+        lay.addWidget(name)
+        parts = []
+        if running:
+            parts.append("<span style='color:#a4d007;font-weight:700'>PLAYING</span>")
+        parts.append(fmt_short_playtime(row["playtime"]))
+        if row["total"]:
+            parts.append(f"{min(row['unlocked'], row['total'])}/{row['total']} 🏆")
+        elif row["unlocked"]:
+            parts.append(f"{row['unlocked']} 🏆")
+        sub = QLabel("  ·  ".join(parts))
+        sub.setStyleSheet("color: #7f8b98; font-size: 11.5px; background: transparent;")
+        lay.addWidget(sub)
+
+
+class AchievementRow(QFrame):
+    def __init__(self, appid: int, a: dict, reveal: bool = False):
+        super().__init__()
+        unlocked = bool(a.get("unlocked_at"))
+        self.setObjectName("AchRow")
+        self.setProperty("unlocked", unlocked)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 9, 16, 9)
+        lay.setSpacing(14)
+
+        icon = QLabel()
+        icon.setFixedSize(64, 64)
+        if unlocked:
+            icon.setPixmap(load_pixmap(cached_icon(appid, a.get("icon") or ""), 64))
+        else:
+            gray_path = cached_icon(appid, a.get("icon_gray") or "")
+            icon.setPixmap(load_pixmap(gray_path or cached_icon(appid, a.get("icon") or ""), 64, gray=not gray_path))
+        pct = a.get("global_pct")
+        if unlocked and pct is not None and pct < RARE_PCT:
+            icon.setStyleSheet("border: 2px solid #f0c75e; border-radius: 3px;")
+        lay.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
+
+        texts = QVBoxLayout()
+        texts.setSpacing(3)
+        hidden_locked = a.get("hidden") and not unlocked and not reveal
+        name = QLabel("Hidden achievement" if hidden_locked else (a.get("display_name") or a["name"]))
+        name.setObjectName("AchName")
+        texts.addWidget(name)
+        desc_text = ("Details for this achievement will be revealed once unlocked" if hidden_locked
+                     else a.get("description") or "")
+        if desc_text:
+            desc = QLabel(desc_text)
+            desc.setObjectName("AchDesc")
+            desc.setWordWrap(True)
+            texts.addWidget(desc)
+        if not unlocked and a.get("max"):
+            prog = QHBoxLayout()
+            bar = QProgressBar()
+            bar.setTextVisible(False)
+            bar.setRange(0, int(a["max"]))
+            bar.setValue(int(min(a.get("cur") or 0, a["max"])))
+            bar.setMaximumWidth(260)
+            prog.addWidget(bar)
+            lbl = QLabel(f"{int(a.get('cur') or 0):,} / {int(a['max']):,}")
+            lbl.setObjectName("AchPct")
+            prog.addWidget(lbl)
+            prog.addStretch(1)
+            texts.addLayout(prog)
+        texts.addStretch(1)
+        lay.addLayout(texts, 1)
+
+        right = QVBoxLayout()
+        right.setSpacing(4)
+        if unlocked:
+            date = QLabel(fmt_unlock(a["unlocked_at"]))
+            date.setObjectName("AchDate")
+            date.setAlignment(Qt.AlignmentFlag.AlignRight)
+            right.addWidget(date)
+        if pct is not None:
+            label = QLabel(f"{pct:.1f}% of players" + ("  ·  Rare" if pct < RARE_PCT else ""))
+            label.setObjectName("AchPct")
+            label.setProperty("rare", pct < RARE_PCT)
+            label.setAlignment(Qt.AlignmentFlag.AlignRight)
+            right.addWidget(label)
+        right.addStretch(1)
+        lay.addLayout(right)
+
+
+class HiddenSummaryRow(QFrame):
+    def __init__(self, count: int):
+        super().__init__()
+        self.setObjectName("AchRow")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(14, 14, 16, 14)
+        text = QLabel(f"<b style='color:#e7eef4'>+{count} hidden achievement{'s' if count != 1 else ''} remaining</b>"
+                      "<br><span style='color:#7f8b98'>Details for each achievement will be revealed once unlocked</span>")
+        lay.addWidget(text)
+
+
+class Stat(QWidget):
+    def __init__(self, label: str):
+        super().__init__()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 24, 0)
+        lay.setSpacing(2)
+        cap = QLabel(label.upper())
+        cap.setObjectName("StatLabel")
+        self.value = QLabel("-")
+        self.value.setObjectName("StatValue")
+        lay.addWidget(cap)
+        lay.addWidget(self.value)
+
+
+class DetailView(QWidget):
+    def __init__(self, window: "MainWindow"):
+        super().__init__()
+        self.win = window
+        self.appid: int | None = None
+        self._sig = None
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 20, 24, 12)
+        root.setSpacing(14)
+
+        header = QHBoxLayout()
+        header.setSpacing(20)
+        self.banner = QLabel()
+        self.banner.setObjectName("Banner")
+        self.banner.setFixedSize(276, 129)
+        self.banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        header.addWidget(self.banner, 0, Qt.AlignmentFlag.AlignTop)
+
+        info = QVBoxLayout()
+        info.setSpacing(8)
+        self.running = QLabel("● NOW PLAYING")
+        self.running.setObjectName("Running")
+        info.addWidget(self.running)
+        self.title = QLabel()
+        self.title.setObjectName("GameTitle")
+        self.title.setWordWrap(True)
+        info.addWidget(self.title)
+        stats = QHBoxLayout()
+        stats.setSpacing(0)
+        self.stat_time = Stat("Play time")
+        self.stat_last = Stat("Last played")
+        self.stat_ach = Stat("Achievements")
+        for s in (self.stat_time, self.stat_last, self.stat_ach):
+            stats.addWidget(s)
+        stats.addStretch(1)
+        info.addLayout(stats)
+        prog = QHBoxLayout()
+        self.progress = QProgressBar()
+        self.progress.setTextVisible(False)
+        self.progress.setMaximumWidth(420)
+        prog.addWidget(self.progress)
+        self.progress_label = QLabel()
+        self.progress_label.setObjectName("Muted")
+        prog.addWidget(self.progress_label)
+        prog.addStretch(1)
+        info.addLayout(prog)
+        info.addStretch(1)
+        header.addLayout(info, 1)
+        root.addLayout(header)
+
+        bar = QHBoxLayout()
+        self.filter = QComboBox()
+        self.filter.addItems(["All achievements", "Unlocked", "Locked"])
+        self.filter.currentIndexChanged.connect(lambda _: self.refresh(force=True))
+        bar.addWidget(self.filter)
+        self.reveal = QCheckBox("Reveal hidden achievements")
+        self.reveal.toggled.connect(lambda _: self.refresh(force=True))
+        bar.addWidget(self.reveal)
+        bar.addStretch(1)
+        refresh = QPushButton("Refresh from Steam")
+        refresh.clicked.connect(lambda: self.appid and self.win.request_refresh(self.appid))
+        bar.addWidget(refresh)
+        root.addLayout(bar)
+
+        self.notice = QLabel()
+        self.notice.setObjectName("Hint")
+        self.notice.setWordWrap(True)
+        self.notice.setOpenExternalLinks(False)
+        self.notice.linkActivated.connect(lambda _: self.win.open_settings())
+        root.addWidget(self.notice)
+
+        self.list = QListWidget()
+        self.list.setObjectName("AchList")
+        self.list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.list.setSpacing(3)
+        root.addWidget(self.list, 1)
+
+    def show_game(self, appid: int | None) -> None:
+        if appid != self.appid:
+            self.appid = appid
+            self._sig = None
+            self.list.scrollToTop()
+        self.refresh()
+
+    def refresh(self, force: bool = False) -> None:
+        if self.appid is None:
+            return
+        db = self.win.db
+        game = db.game(self.appid)
+        if game is None:
+            return
+        rows = db.achievements(self.appid)
+        schema_total = db.q("SELECT COUNT(*) FROM achievements WHERE appid = ?", (self.appid,))[0][0]
+        unlocked = sum(1 for r in rows if r.get("unlocked_at"))
+        total = max(schema_total, unlocked)
+
+        self.title.setText(game["name"] or f"App {self.appid}")
+        self.running.setVisible(self.appid in self.win.running)
+        self.stat_time.value.setText(fmt_playtime(game["playtime"]))
+        self.stat_last.value.setText("Now" if self.appid in self.win.running else fmt_day(game["last_played"]))
+        self.stat_ach.value.setText(f"{unlocked} / {total}" if total else "-")
+        self.progress.setRange(0, max(total, 1))
+        self.progress.setValue(unlocked)
+        self.progress_label.setText(f"{unlocked * 100 // total}%" if total else "")
+        banner_path = cached_icon(self.appid, game["header_url"] or "")
+        if banner_path:
+            pm = QPixmap(banner_path).scaled(self.banner.size(), Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                                             Qt.TransformationMode.SmoothTransformation)
+            self.banner.setPixmap(pm)
+        else:
+            self.banner.setPixmap(QPixmap())
+            self.banner.setText("")
+
+        if not schema_total:
+            if not self.win.cfg.steam_api_key:
+                self.notice.setText("Achievement names and icons come from Steam. "
+                                    "<a href='#' style='color:#66c0f4'>Add your free Steam Web API key in Settings</a> "
+                                    "to see this game's achievements.")
+            else:
+                self.notice.setText("No achievement data from Steam yet for this game. "
+                                    "It may have no achievements, or Steam couldn't be reached - try Refresh.")
+            self.notice.show()
+        else:
+            self.notice.hide()
+
+        icons = tuple(bool(cached_icon(self.appid, r.get("icon") or "")) for r in rows)
+        sig = (repr(rows), icons, self.filter.currentIndex(), self.reveal.isChecked(), bool(banner_path))
+        if sig == self._sig and not force:
+            return
+        self._sig = sig
+        scroll = self.list.verticalScrollBar().value()
+        self.list.setUpdatesEnabled(False)
+        self.list.clear()
+
+        done = sorted((r for r in rows if r.get("unlocked_at")), key=lambda r: -r["unlocked_at"])
+        locked = [r for r in rows if not r.get("unlocked_at")]
+        if any(r.get("global_pct") is not None for r in locked):
+            locked.sort(key=lambda r: -(r.get("global_pct") or 0))
+        mode = self.filter.currentIndex()
+        shown = (done if mode != 2 else []) + (locked if mode != 1 else [])
+        reveal = self.reveal.isChecked()
+        hidden_left = 0
+        for r in shown:
+            if r.get("hidden") and not r.get("unlocked_at") and not reveal:
+                hidden_left += 1
+                continue
+            self._add_row(AchievementRow(self.appid, r, reveal))
+        if hidden_left:
+            self._add_row(HiddenSummaryRow(hidden_left))
+        self.list.setUpdatesEnabled(True)
+        QTimer.singleShot(0, lambda: self.list.verticalScrollBar().setValue(scroll))
+
+    def _add_row(self, widget: QWidget) -> None:
+        item = QListWidgetItem()
+        item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+        widget.adjustSize()
+        item.setSizeHint(QSize(0, max(widget.sizeHint().height(), 82)))
+        self.list.addItem(item)
+        self.list.setItemWidget(item, widget)
+
+
+# dialogs -----------------------------------------------------------------
+
+class GameDialog(QDialog):
+    def __init__(self, parent, db: Database, appid: int | None = None):
+        super().__init__(parent)
+        self.db = db
+        self.setWindowTitle("Edit game" if appid else "Add a game")
+        self.setMinimumWidth(560)
+        game = db.game(appid) if appid else None
+        lay = QVBoxLayout(self)
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        self.appid = QLineEdit(str(appid) if appid else "")
+        self.appid.setPlaceholderText("e.g. 367520 or https://store.steampowered.com/app/367520/")
+        self.appid.setEnabled(appid is None)
+        form.addRow("Steam AppID", self.appid)
+
+        folder_row = QHBoxLayout()
+        self.folder = QLineEdit(game["game_dir"] or "" if game else "")
+        self.folder.setPlaceholderText("Folder containing the game (optional)")
+        browse = QPushButton("Browse…")
+        browse.clicked.connect(self._pick_folder)
+        folder_row.addWidget(self.folder, 1)
+        folder_row.addWidget(browse)
+        form.addRow("Game folder", folder_row)
+
+        exe_row = QHBoxLayout()
+        self.exe = QLineEdit(game["exe_name"] or "" if game else "")
+        self.exe.setPlaceholderText("Game.exe  (separate several with ;)")
+        browse_exe = QPushButton("Browse…")
+        browse_exe.clicked.connect(self._pick_exe)
+        exe_row.addWidget(self.exe, 1)
+        exe_row.addWidget(browse_exe)
+        form.addRow("Executable", exe_row)
+        lay.addLayout(form)
+
+        hint = QLabel("Games with a steam_appid.txt or crack config are detected automatically when launched. "
+                      "Set the executable if playtime isn't being tracked. You can also launch any game with "
+                      "<code>ACHTRACK_APPID=&lt;appid&gt;</code> in its environment.")
+        hint.setObjectName("Hint")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Save).setObjectName("Primary")
+        buttons.accepted.connect(self._save)
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(buttons)
+        self.saved_appid: int | None = None
+
+    def _pick_folder(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Game folder", self.folder.text() or os.path.expanduser("~"))
+        if path:
+            self.folder.setText(path)
+            self._autofill_appid(path)
+
+    def _pick_exe(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Game executable", self.folder.text() or os.path.expanduser("~"))
+        if path:
+            self.exe.setText(os.path.basename(path))
+            if not self.folder.text():
+                self.folder.setText(os.path.dirname(path))
+                self._autofill_appid(os.path.dirname(path))
+
+    def _autofill_appid(self, folder: str) -> None:
+        if self.appid.isEnabled() and not self.appid.text().strip():
+            found = detect_appid_in_tree(folder)
+            if found:
+                self.appid.setText(str(found))
+
+    def _save(self) -> None:
+        appid = parse_appid(self.appid.text())
+        if not appid:
+            QMessageBox.warning(self, APP_NAME, "Enter the game's Steam AppID (the number in its store URL).")
+            return
+        self.db.ensure_game(appid)
+        self.db.update_game(appid, hidden=0)
+        self.db.x("UPDATE games SET exe_name = ?, game_dir = ? WHERE appid = ?",
+                  (self.exe.text().strip() or None, self.folder.text().strip() or None, appid))
+        self.saved_appid = appid
+        self.accept()
+
+
+class SettingsDialog(QDialog):
+    def __init__(self, parent: "MainWindow"):
+        super().__init__(parent)
+        self.win = parent
+        cfg = parent.cfg
+        self.setWindowTitle(f"{APP_NAME} settings")
+        self.setMinimumWidth(620)
+        lay = QVBoxLayout(self)
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        key_row = QHBoxLayout()
+        self.key = QLineEdit(cfg.steam_api_key)
+        self.key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.key.setPlaceholderText("32-character key")
+        get_key = QPushButton("Get a free key")
+        get_key.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://steamcommunity.com/dev/apikey")))
+        key_row.addWidget(self.key, 1)
+        key_row.addWidget(get_key)
+        form.addRow("Steam Web API key", key_row)
+
+        self.language = QComboBox()
+        self.language.setEditable(True)
+        self.language.addItems(LANGUAGES)
+        self.language.setCurrentText(cfg.language)
+        form.addRow("Achievement language", self.language)
+
+        self.style = QComboBox()
+        self.style.addItem("Steam-style popup", "steam")
+        self.style.addItem("Desktop notification", "system")
+        self.style.addItem("Both", "both")
+        self.style.addItem("Off", "none")
+        self.style.setCurrentIndex(max(0, self.style.findData(cfg.popup_style)))
+        form.addRow("Unlock popups", self.style)
+
+        self.corner = QComboBox()
+        for corner in POPUP_CORNERS:
+            self.corner.addItem(corner.replace("-", " ").capitalize(), corner)
+        self.corner.setCurrentIndex(max(0, self.corner.findData(cfg.popup_corner)))
+        form.addRow("Popup position", self.corner)
+
+        self.seconds = QDoubleSpinBox()
+        self.seconds.setRange(2, 20)
+        self.seconds.setSingleStep(0.5)
+        self.seconds.setSuffix(" s")
+        self.seconds.setValue(cfg.popup_seconds)
+        form.addRow("Popup duration", self.seconds)
+
+        self.sound = QCheckBox("Play a sound when an achievement unlocks")
+        self.sound.setChecked(cfg.sound)
+        form.addRow("", self.sound)
+        self.sound_file = self._file_row(cfg.sound_file, "Default chime")
+        form.addRow("Custom sound", self.sound_file[0])
+        self.rare_sound_file = self._file_row(cfg.rare_sound_file, "Default rare chime")
+        form.addRow("Custom rare sound", self.rare_sound_file[0])
+
+        self.session = QCheckBox("Show a “Now playing” popup when a game starts")
+        self.session.setChecked(cfg.session_toast)
+        form.addRow("", self.session)
+        self.x11 = QCheckBox("Use XWayland on Wayland so popups stay on top (restart to apply)")
+        self.x11.setChecked(cfg.force_x11)
+        form.addRow("", self.x11)
+        self.autostart = QCheckBox(f"Start {APP_NAME} in the background when I log in")
+        self.autostart.setChecked(desktop.autostart_enabled())
+        form.addRow("", self.autostart)
+
+        self.dirs = QPlainTextEdit("\n".join(cfg.scan_dirs))
+        self.dirs.setPlaceholderText("One folder per line - Wine prefixes, or folders that contain them")
+        self.dirs.setFixedHeight(84)
+        form.addRow("Extra folders", self.dirs)
+        lay.addLayout(form)
+
+        note = QLabel("Prefixes in ~/.wine, ~/Games (Lutris/Heroic), Bottles and Steam's compatdata are found automatically.")
+        note.setObjectName("Hint")
+        note.setWordWrap(True)
+        lay.addWidget(note)
+
+        bottom = QHBoxLayout()
+        test = QPushButton("Test popup")
+        test.clicked.connect(lambda: self._test(False))
+        test_rare = QPushButton("Test rare popup")
+        test_rare.clicked.connect(lambda: self._test(True))
+        bottom.addWidget(test)
+        bottom.addWidget(test_rare)
+        bottom.addStretch(1)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Save).setObjectName("Primary")
+        buttons.accepted.connect(self._save)
+        buttons.rejected.connect(self.reject)
+        bottom.addWidget(buttons)
+        lay.addLayout(bottom)
+
+    def _file_row(self, value: str, placeholder: str):
+        row = QWidget()
+        h = QHBoxLayout(row)
+        h.setContentsMargins(0, 0, 0, 0)
+        edit = QLineEdit(value)
+        edit.setPlaceholderText(placeholder)
+        pick = QPushButton("Browse…")
+        pick.clicked.connect(lambda: self._pick_sound(edit))
+        h.addWidget(edit, 1)
+        h.addWidget(pick)
+        return row, edit
+
+    def _pick_sound(self, edit: QLineEdit) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Sound file", os.path.expanduser("~"), "Audio (*.wav *.ogg *.oga *.mp3 *.flac)")
+        if path:
+            edit.setText(path)
+
+    def _apply(self, cfg: Config) -> None:
+        cfg.popup_style = self.style.currentData()
+        cfg.popup_corner = self.corner.currentData()
+        cfg.popup_seconds = float(self.seconds.value())
+        cfg.sound = self.sound.isChecked()
+        cfg.sound_file = self.sound_file[1].text().strip()
+        cfg.rare_sound_file = self.rare_sound_file[1].text().strip()
+        cfg.session_toast = self.session.isChecked()
+
+    def _test(self, rare: bool) -> None:
+        # Preview with the unsaved popup settings, then put the saved ones back.
+        cfg = self.win.cfg
+        saved = (cfg.popup_style, cfg.popup_corner, cfg.popup_seconds, cfg.sound, cfg.sound_file,
+                 cfg.rare_sound_file, cfg.session_toast)
+        self._apply(cfg)
+        self.win.notifier.test(rare)
+        (cfg.popup_style, cfg.popup_corner, cfg.popup_seconds, cfg.sound, cfg.sound_file,
+         cfg.rare_sound_file, cfg.session_toast) = saved
+
+    def _save(self) -> None:
+        cfg = self.win.cfg
+        old_key, old_lang, old_dirs = cfg.steam_api_key, cfg.language, list(cfg.scan_dirs)
+        self._apply(cfg)
+        cfg.steam_api_key = self.key.text().strip()
+        cfg.language = self.language.currentText().strip() or "english"
+        cfg.force_x11 = self.x11.isChecked()
+        cfg.scan_dirs = [line.strip() for line in self.dirs.toPlainText().splitlines() if line.strip()]
+        cfg.save()
+        try:
+            desktop.set_autostart(self.autostart.isChecked())
+        except OSError as e:
+            QMessageBox.warning(self, APP_NAME, f"Couldn't update autostart: {e}")
+        if cfg.steam_api_key != old_key or cfg.language != old_lang:
+            self.win.worker.request("refresh_all")
+        if cfg.scan_dirs != old_dirs:
+            self.win.worker.request("rescan")
+        self.win.schedule_reload()
+        self.accept()
+
+
+# main window -------------------------------------------------------------
+
+class MainWindow(QMainWindow):
+    def __init__(self, cfg: Config, worker, notifier, has_tray: bool):
+        super().__init__()
+        self.cfg = cfg
+        self.worker = worker
+        self.notifier = notifier
+        self.has_tray = has_tray
+        self.db = Database()
+        self.running: set = set()
+        self._list_sig = None
+        self._dirty = True
+        self._told_background = False
+        self.on_hidden_without_tray = None
+        self.setWindowTitle(APP_NAME)
+        self.setWindowIcon(QIcon(str(APP_ICON)))
+        self.resize(1200, 780)
+        self.setStyleSheet(STYLE)
+
+        self._reload_timer = QTimer(self)
+        self._reload_timer.setSingleShot(True)
+        self._reload_timer.setInterval(400)
+        self._reload_timer.timeout.connect(self.reload)
+
+        splitter = QSplitter()
+        splitter.setHandleWidth(1)
+        side = QWidget()
+        side.setObjectName("Sidebar")
+        side_lay = QVBoxLayout(side)
+        side_lay.setContentsMargins(0, 10, 0, 10)
+        side_lay.setSpacing(8)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search games")
+        self.search.textChanged.connect(lambda _: self.reload(force=True))
+        search_wrap = QHBoxLayout()
+        search_wrap.setContentsMargins(10, 0, 10, 0)
+        search_wrap.addWidget(self.search)
+        side_lay.addLayout(search_wrap)
+        self.games = QListWidget()
+        self.games.setObjectName("SidebarList")
+        self.games.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.games.currentItemChanged.connect(self._on_select)
+        self.games.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.games.customContextMenuRequested.connect(self._context_menu)
+        side_lay.addWidget(self.games, 1)
+        add = QPushButton("＋  Add a game")
+        add.clicked.connect(self.add_game)
+        add_wrap = QHBoxLayout()
+        add_wrap.setContentsMargins(10, 0, 10, 0)
+        add_wrap.addWidget(add)
+        side_lay.addLayout(add_wrap)
+        side.setMinimumWidth(240)
+        splitter.addWidget(side)
+
+        self.stack = QStackedWidget()
+        empty = QWidget()
+        empty_lay = QVBoxLayout(empty)
+        empty_lay.addStretch(1)
+        icon = QLabel()
+        icon.setPixmap(QIcon(str(APP_ICON)).pixmap(96, 96))
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_lay.addWidget(icon)
+        msg = QLabel("No games yet.\n\nLaunch a game that uses a Steam emulator (Goldberg, CODEX, RUNE, EMPRESS, "
+                     "OnlineFix…) and it will show up here automatically,\nor add one by hand.")
+        msg.setObjectName("Empty")
+        msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        msg.setWordWrap(True)
+        empty_lay.addWidget(msg)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        add2 = QPushButton("Add a game")
+        add2.setObjectName("Primary")
+        add2.clicked.connect(self.add_game)
+        settings = QPushButton("Settings")
+        settings.clicked.connect(self.open_settings)
+        row.addWidget(add2)
+        row.addWidget(settings)
+        row.addStretch(1)
+        empty_lay.addLayout(row)
+        empty_lay.addStretch(2)
+        self.stack.addWidget(empty)
+        self.detail = DetailView(self)
+        self.stack.addWidget(self.detail)
+        splitter.addWidget(self.stack)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([280, 920])
+        self.setCentralWidget(splitter)
+        self._build_menu()
+
+    def _build_menu(self) -> None:
+        bar = self.menuBar()
+        lib = bar.addMenu("&Library")
+        lib.addAction("Add a game…", self.add_game)
+        lib.addAction("Rescan for achievement files", lambda: self.worker.request("rescan"))
+        lib.addAction("Refresh all achievement data", lambda: self.worker.request("refresh_all"))
+        lib.addSeparator()
+        self.show_hidden = QAction("Show removed games", self, checkable=True)
+        self.show_hidden.toggled.connect(lambda _: self.reload(force=True))
+        lib.addAction(self.show_hidden)
+        lib.addSeparator()
+        lib.addAction("Settings…", self.open_settings)
+        lib.addSeparator()
+        lib.addAction("Quit", self.quit_app)
+        helpm = bar.addMenu("&Help")
+        helpm.addAction("Test achievement popup", lambda: self.notifier.test(False))
+        helpm.addAction("Test rare achievement popup", lambda: self.notifier.test(True))
+        helpm.addSeparator()
+        helpm.addAction(f"About {APP_NAME}", self._about)
+
+    # data ------------------------------------------------------------------
+
+    def schedule_reload(self) -> None:
+        if self.isVisible():
+            self._reload_timer.start()
+        else:
+            self._dirty = True
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if self._dirty:
+            self._dirty = False
+            self.reload(force=True)
+
+    def current_appid(self) -> int | None:
+        item = self.games.currentItem()
+        return item.data(Qt.ItemDataRole.UserRole) if item else None
+
+    def reload(self, force: bool = False) -> None:
+        rows = self.db.games(include_hidden=self.show_hidden.isChecked())
+        query = self.search.text().strip().lower()
+        if query:
+            rows = [r for r in rows if query in (r["name"] or "").lower() or query in str(r["appid"])]
+        sig = tuple((r["appid"], r["name"], r["playtime"] // 60, r["unlocked"], r["total"], r["hidden"],
+                     r["appid"] in self.running) for r in rows)
+        if force or sig != self._list_sig:
+            self._list_sig = sig
+            current = self.current_appid()
+            self.games.blockSignals(True)
+            self.games.clear()
+            select = None
+            for r in rows:
+                item = QListWidgetItem()
+                item.setData(Qt.ItemDataRole.UserRole, r["appid"])
+                widget = GameRow(r, r["appid"] in self.running)
+                if r["hidden"]:
+                    widget.setEnabled(False)
+                item.setSizeHint(QSize(0, 52))
+                self.games.addItem(item)
+                self.games.setItemWidget(item, widget)
+                if r["appid"] == current:
+                    select = item
+            if select is None and self.games.count():
+                select = self.games.item(0)
+            if select is not None:
+                self.games.setCurrentItem(select)
+            self.games.blockSignals(False)
+        has_games = bool(self.db.games(include_hidden=self.show_hidden.isChecked()))
+        self.stack.setCurrentIndex(1 if has_games and self.games.count() else 0)
+        self.detail.show_game(self.current_appid())
+
+    def _on_select(self, current, _previous) -> None:
+        if current is not None:
+            self.detail.show_game(current.data(Qt.ItemDataRole.UserRole))
+
+    # events from the engine ------------------------------------------------
+
+    def game_started(self, appid: int, *_args) -> None:
+        self.running.add(appid)
+        self.schedule_reload()
+
+    def game_stopped(self, appid: int, _seconds: int) -> None:
+        self.running.discard(appid)
+        self.schedule_reload()
+
+    def request_refresh(self, appid: int) -> None:
+        self.worker.request("refresh", appid)
+
+    # actions ---------------------------------------------------------------
+
+    def add_game(self) -> None:
+        dialog = GameDialog(self, self.db)
+        if dialog.exec() and dialog.saved_appid:
+            self.worker.request("refresh", dialog.saved_appid)
+            self.worker.request("rescan")
+            self.reload(force=True)
+            self._select(dialog.saved_appid)
+
+    def edit_game(self, appid: int) -> None:
+        dialog = GameDialog(self, self.db, appid)
+        if dialog.exec():
+            self.worker.request("rescan")
+            self.reload(force=True)
+
+    def _select(self, appid: int) -> None:
+        for i in range(self.games.count()):
+            if self.games.item(i).data(Qt.ItemDataRole.UserRole) == appid:
+                self.games.setCurrentRow(i)
+                return
+
+    def _context_menu(self, pos) -> None:
+        item = self.games.itemAt(pos)
+        if item is None:
+            return
+        appid = item.data(Qt.ItemDataRole.UserRole)
+        game = self.db.game(appid)
+        menu = QMenu(self)
+        menu.addAction("Refresh achievement data", lambda: self.request_refresh(appid))
+        menu.addAction("Edit game…", lambda: self.edit_game(appid))
+        sources = self.db.sources_for(appid)
+        if sources:
+            menu.addAction("Open achievement file location",
+                           lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(sources[0]))))
+        if game["game_dir"]:
+            menu.addAction("Open game folder", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(game["game_dir"])))
+        menu.addAction("View on Steam store",
+                       lambda: QDesktopServices.openUrl(QUrl(f"https://store.steampowered.com/app/{appid}/")))
+        menu.addSeparator()
+        if game["hidden"]:
+            menu.addAction("Restore to library", lambda: self._set_hidden(appid, False))
+        else:
+            menu.addAction("Remove from library", lambda: self._set_hidden(appid, True))
+        menu.exec(self.games.mapToGlobal(pos))
+
+    def _set_hidden(self, appid: int, hidden: bool) -> None:
+        self.db.update_game(appid, hidden=1 if hidden else 0)
+        self.reload(force=True)
+
+    def open_settings(self) -> None:
+        SettingsDialog(self).exec()
+
+    def _about(self) -> None:
+        QMessageBox.about(self, f"About {APP_NAME}",
+                          f"<h3>{APP_NAME} {__version__}</h3><p>Steam achievements, unlock popups and playtime "
+                          "for games running on Steam emulators under Linux.</p>")
+
+    def closeEvent(self, event) -> None:
+        # Tracking has to keep running while games are played, so closing only hides the library.
+        event.ignore()
+        self.hide()
+        if not self.has_tray and not self._told_background and self.on_hidden_without_tray:
+            self._told_background = True
+            self.on_hidden_without_tray()
+
+    def quit_app(self) -> None:
+        from PySide6.QtWidgets import QApplication
+        QApplication.instance().quit()
+
+    def bring_up(self) -> None:
+        self.show()
+        self.setWindowState((self.windowState() & ~Qt.WindowState.WindowMinimized) | Qt.WindowState.WindowActive)
+        self.raise_()
+        self.activateWindow()

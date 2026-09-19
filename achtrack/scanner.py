@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import fnmatch
+import json
 import os
 import re
 from dataclasses import dataclass
@@ -133,11 +134,77 @@ def steam_libraries() -> list:
     return libs
 
 
+HEROIC_CONFIG_DIRS = (
+    ".config/heroic",
+    ".var/app/com.heroicgameslauncher.hgl/config/heroic",  # Flatpak
+)
+
+
+def _heroic_json_files():
+    home = Path.home()
+    for rel in HEROIC_CONFIG_DIRS:
+        base = home / rel
+        if not base.is_dir():
+            continue
+        yield base / "config.json"
+        yield base / "sideload_apps" / "library.json"
+        yield from sorted((base / "GamesConfig").glob("*.json"))
+
+
+def _collect(data, keys: set, out: list) -> None:
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if k in keys and isinstance(v, str) and v.strip():
+                out.append(v.strip())
+            else:
+                _collect(v, keys, out)
+    elif isinstance(data, list):
+        for v in data:
+            _collect(v, keys, out)
+
+
+def _heroic_values(keys: set) -> list:
+    values: list = []
+    for path in _heroic_json_files():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, ValueError):
+            continue
+        _collect(data, keys, values)
+    return [os.path.expanduser(v) for v in values]
+
+
+def heroic_prefixes() -> list:
+    """Every Wine/Proton prefix Heroic is configured to use (per game and the default)."""
+    return [Path(p) for p in _heroic_values({"winePrefix", "defaultWinePrefix"})]
+
+
+def heroic_game_dirs() -> list:
+    """Install folders of games added to Heroic by hand (sideloaded) - where cracked games live."""
+    dirs = []
+    for value in _heroic_values({"executable", "folder_name", "install_path"}):
+        path = Path(value)
+        folder = path.parent if path.suffix.lower() in (".exe", ".sh", ".x86_64", ".bat") else path
+        if folder.is_dir() and folder != Path.home() and folder not in dirs:
+            dirs.append(folder)
+    return dirs
+
+
+def _as_prefix(path: Path) -> Path | None:
+    """Wine prefixes have drive_c directly; Proton/umu prefixes keep it under pfx/."""
+    if is_prefix(path):
+        return path
+    if is_prefix(path / "pfx"):
+        return path / "pfx"
+    return None
+
+
 def _prefixes_under(root: Path, depth: int):
     if not root.is_dir():
         return
-    if is_prefix(root):
-        yield root
+    prefix = _as_prefix(root)
+    if prefix:
+        yield prefix
         return
     if depth <= 0:
         return
@@ -158,9 +225,13 @@ def find_prefixes(extra_dirs=()) -> list:
             candidates += [Path(e.path) / "pfx" for e in os.scandir(compat) if e.is_dir()]
         except OSError:
             pass
+    for prefix in heroic_prefixes():
+        found = _as_prefix(prefix)
+        if found:
+            candidates.append(found)
     roots = [
         (home / "Games", 2),                      # Lutris default + umu / custom
-        (home / "Games/Heroic/Prefixes", 2),
+        (home / "Games/Heroic/Prefixes", 2),      # Heroic: Prefixes/default/<game>[/pfx]
         (home / ".local/share/bottles/bottles", 1),
         (home / ".var/app/com.usebottles.bottles/data/bottles/bottles", 1),
         (home / ".var/app/net.lutris.Lutris/data/lutris/prefixes", 1),
@@ -179,7 +250,8 @@ def find_prefixes(extra_dirs=()) -> list:
             real = cand.resolve()
         except OSError:
             continue
-        if real not in seen and is_prefix(real):
+        real = _as_prefix(real)
+        if real is not None and real not in seen:
             seen.add(real)
             prefixes.append(real)
     return prefixes
@@ -218,7 +290,7 @@ def find_state_files(extra_dirs=(), game_dirs=()) -> list:
         for sf in _match(linux_data, pattern, index, emulator):
             add(sf)
 
-    for game_dir in game_dirs:
+    for game_dir in list(game_dirs) + [str(d) for d in heroic_game_dirs()]:
         if game_dir and os.path.isdir(game_dir):
             for sf in _walk_game_dir(Path(game_dir)):
                 add(sf)

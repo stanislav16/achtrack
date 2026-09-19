@@ -41,6 +41,10 @@ class Config:
     session_review: bool = True
     # Read games' save files (Unreal, Unity, JSON, XML...) to detect achievements the crack doesn't record.
     save_detection: bool = True
+    # Read on-screen text (locally, with tesseract) while a game runs, as a fallback for unreadable saves.
+    screen_watcher: bool = True
+    screen_interval: float = 2.5
+    screen_monitor: int = 1
     language: str = "english"
     # Extra folders to search for Wine prefixes (Lutris, Bottles, custom locations...).
     scan_dirs: list = field(default_factory=list)

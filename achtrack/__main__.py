@@ -121,6 +121,45 @@ def cmd_saves(appid: int | None, file: str | None, fields: bool) -> int:
     return 0
 
 
+def cmd_screen_test(seconds: float) -> int:
+    """Reads the screen like the watcher does and prints what it sees - run it with a game open."""
+    import os
+    import time
+    from .config import Config
+    from .screenwatch import ScreenReader, available
+
+    ok, reason = available()
+    if not ok:
+        print(f"Screen watcher unavailable: {reason}")
+        return 1
+    cfg = Config.load()
+    print(f"Session type: {os.environ.get('XDG_SESSION_TYPE', 'unknown')}. Reading the screen for {seconds:.0f} s "
+          "- switch to your game now.")
+    time.sleep(3)
+    reader = ScreenReader(cfg.screen_monitor)
+    end = time.time() + seconds
+    reads, total, dark = 0, 0.0, 0
+    try:
+        while True:
+            lines, took, brightness = reader.read()
+            reads += 1
+            total += took
+            dark += brightness < 2
+            print(f"-- read {reads}: {took:.2f} s")
+            for region, text in lines:
+                print(f"   [{region:6}] {text}")
+            if time.time() >= end:
+                break
+            time.sleep(max(0.0, cfg.screen_interval - took))
+    finally:
+        reader.close()
+    print(f"\nAverage read: {total / reads:.2f} s every {cfg.screen_interval:.1f} s.")
+    if dark == reads:
+        print("Every capture was black: this session doesn't let AchTrack see the game. On Wayland, log in with an "
+              "X11 session (on the login screen, pick the Xorg option) for the screen watcher to work.")
+    return 0
+
+
 def cmd_sync_steam() -> int:
     from .config import Config
     from .db import Database
@@ -147,6 +186,8 @@ def main(argv=None) -> int:
     sub.add_parser("scan", help="show detected prefixes, achievement files and running games")
     sub.add_parser("list", help="print the library with playtime and achievement counts")
     sub.add_parser("sync-steam", help="copy your Steam games, playtime and achievements into the library now")
+    screen = sub.add_parser("screen-test", help="read the screen like the watcher does and print what it sees")
+    screen.add_argument("--seconds", type=float, default=20, help="how long to keep reading (default 20)")
     saves = sub.add_parser("saves", help="show the save files AchTrack reads and what it matches in them")
     saves.add_argument("appid", nargs="?", type=int, help="only this game")
     saves.add_argument("--file", help="test any save file (with --appid)")
@@ -164,6 +205,8 @@ def main(argv=None) -> int:
         return cmd_list()
     if args.command == "sync-steam":
         return cmd_sync_steam()
+    if args.command == "screen-test":
+        return cmd_screen_test(args.seconds)
     if args.command == "saves":
         return cmd_saves(args.appid or args.appid_opt, args.file, args.fields)
 

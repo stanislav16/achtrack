@@ -111,6 +111,7 @@ GAME_FIELDS = {"name", "header_url", "exe_name", "game_dir", "last_played", "sch
 MANUAL = "Manual"
 STEAM = "Steam"
 SAVE = "Save"
+SCREEN = "Screen"
 
 
 class Database:
@@ -245,8 +246,8 @@ class Database:
         return cur.rowcount == 1
 
     def emulator_unlock_count(self, appid: int) -> int:
-        return self.q("SELECT COUNT(*) FROM unlocks WHERE appid = ? AND COALESCE(source, '') NOT IN (?, ?, ?)",
-                      (appid, MANUAL, STEAM, SAVE))[0][0]
+        return self.q("SELECT COUNT(*) FROM unlocks WHERE appid = ? AND COALESCE(source, '') NOT IN (?, ?, ?, ?)",
+                      (appid, MANUAL, STEAM, SAVE, SCREEN))[0][0]
 
     def unlock_note(self, appid: int, name: str) -> str | None:
         rows = self.q("SELECT note FROM unlocks WHERE appid = ? AND name = ?", (appid, name))

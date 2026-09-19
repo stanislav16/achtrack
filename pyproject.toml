@@ -8,7 +8,7 @@ version = "1.0.0"
 description = "Steam achievements, Steam-style unlock popups and playtime tracking for games running on Steam emulators on Linux"
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = ["PySide6-Essentials>=6.5"]
+dependencies = ["PySide6-Essentials>=6.5", "mss>=9.0", "Pillow>=10.0"]
 
 [project.scripts]
 achtrack = "achtrack.__main__:main"

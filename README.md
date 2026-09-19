@@ -20,8 +20,9 @@ The data lives on your disk, so you keep it even if something changes on Steam's
 
 - Your Steam account is detected from the Steam client on this PC. If that fails, paste your profile
   URL under **Settings → Steam account**.
-- Steam only shares this if your profile's **Game details** are set to *Public* (Steam → Profile →
-  Edit Profile → Privacy Settings).
+- Steam only shares achievements if your profile's **Game details** are set to *Public* (Steam →
+  Profile → Edit Profile → Privacy Settings). Playtime may still come through when they're private.
+  The last sync's result, including any error, is shown in **Settings** under *Steam account*.
 - Steam achievements are imported quietly, because Steam already showed its own popup. Games owned
   but never played are left out.
 
@@ -32,8 +33,10 @@ save file. AchTrack reads saves in common engine formats and compares each new s
 one. When a change fits an achievement's description, the achievement unlocks with the normal popup.
 This runs locally with no AI, and only reads saves when they change on disk.
 
-- **Formats:** Unreal Engine saves (`.sav`, including compressed ones), JSON (most Unity and indie
-  games), XML, INI, and Unity settings stored in the Wine registry. Encrypted or custom binary saves
+- **Formats:** Unreal Engine saves (`.sav`, including compressed ones), JSON, XML, INI,
+  .NET BinaryFormatter (common in Unity games), BSON, MessagePack, plist, SQLite, RPG Maker MV/MZ,
+  base64-wrapped and zlib/gzip-compressed saves, and Unity settings (Wine registry or
+  `~/.config/unity3d`). Encrypted or custom binary saves
   can't be read. The game page then says so, and you use the review instead.
 - **Finding saves:** no setup. While a game runs, AchTrack notices which files in its Wine prefix
   (AppData, Documents, Saved Games) or its install folder's save folders it writes.
@@ -47,6 +50,29 @@ This runs locally with no AI, and only reads saves when they change on disk.
   achievement again.
 - **Checking what it sees:** `achtrack saves` lists the save files it reads and what matched.
   `achtrack saves <appid> --fields` also prints every value it read.
+
+## Screen watcher (for games with unreadable saves)
+
+Some games encrypt their saves or use a custom format without names (FF7 Rebirth, for example).
+For those, AchTrack can read on-screen text while you play. It runs locally with tesseract OCR,
+with no AI and nothing uploaded:
+
+- Every 2.5 s it grabs five small areas of the screen (top banner, center, bottom boss-bar area,
+  left and right notifications) and reads them in a single low-priority tesseract call.
+- **Direct text:** "STAGGERED" → "Stagger an enemy", "CHAPTER 6" → "Complete Chapter 5",
+  "Moonstones 50/50" → "Collect 50 moonstones". A hit has to be seen twice before it counts.
+  Quest-log lines that just repeat the objective ("Defeat Iudex Gundyr") are ignored.
+- **Bosses:** a named target on screen, then a victory banner with no death screen in between,
+  counts as a defeat.
+- **Learning:** when you confirm an achievement (review or right-click), it looks back at what was
+  on screen and learns that game's victory banner. From then on, that game's boss kills unlock
+  automatically instead of being suggested.
+- Clear hits unlock with a popup, and uncertain ones are pre-ticked in the review. Right-click →
+  *Not earned* undoes a hit and stops that text from matching again.
+
+Setup: `sudo apt install tesseract-ocr`. To check what it reads on your screen, start a game and
+run `achtrack screen-test`. The screen watcher needs an X11 session. On Wayland (e.g. COSMIC) the
+capture comes back black, and `screen-test` tells you so.
 
 ## When a crack doesn't record achievements
 
@@ -66,7 +92,7 @@ Some cracks never save achievements. For example, some RUNE releases leave `achi
 ## Install (Pop!_OS)
 
 ```bash
-sudo apt install python3-venv libxcb-cursor0
+sudo apt install python3-venv libxcb-cursor0 tesseract-ocr
 ./install.sh --autostart
 ```
 
@@ -127,6 +153,7 @@ achtrack scan             list detected prefixes, achievement files and running 
 achtrack list             print the library with playtime and achievement counts
 achtrack sync-steam       copy your Steam games, playtime and achievements in now
 achtrack saves [appid]    show the save files AchTrack reads and what it matched (--fields for all values)
+achtrack screen-test      read the screen like the screen watcher does and print what it sees
 achtrack test-popup [--rare]
 achtrack quit
 ```

@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDateTim
 
 from . import __version__, desktop
 from .config import APP_ICON, APP_NAME, POPUP_CORNERS, Config
-from .db import MANUAL, SAVE, STEAM, Database
+from .db import MANUAL, SAVE, SCREEN, STEAM, Database
 from .engine import build_unlock_event, needs_review
 from .notifier import ToastData, trophy_pixmap
 from .scanner import detect_appid_in_tree, detect_steam_id
@@ -143,6 +143,15 @@ def load_pixmap(path: str | None, size: int, gray: bool = False) -> QPixmap:
     return pm.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
 
 
+def detection_key(reason: str) -> str:
+    """The field or screen text a detected unlock came from, used to stop matching it again."""
+    quoted = re.search(r'"(.+)"\s*$', reason or "")
+    if (reason or "").startswith("Seen on screen") and quoted:
+        from .screenwatch import normalize
+        return f"screen:{normalize(quoted.group(1))}"
+    return (reason or "").split(" = ")[0]
+
+
 def steam_sync_text(status: dict | None) -> str:
     if not status:
         return "Not synced yet."
@@ -247,7 +256,8 @@ class AchievementRow(QFrame):
         right.setSpacing(4)
         if unlocked:
             source = a.get("source")
-            tag = {STEAM: "  ·  Steam", MANUAL: "  ·  Added by you", SAVE: "  ·  Found in your save"}.get(source, "")
+            tag = {STEAM: "  ·  Steam", MANUAL: "  ·  Added by you", SAVE: "  ·  Found in your save",
+                   SCREEN: "  ·  Seen on screen"}.get(source, "")
             date = QLabel(fmt_unlock(a["unlocked_at"]) + tag)
             date.setObjectName("AchDate")
             date.setAlignment(Qt.AlignmentFlag.AlignRight)
@@ -397,13 +407,22 @@ class DetailView(QWidget):
         readable = [f for f in files if f["readable"]]
         pending = len(db.suggestions(self.appid))
         extra = f"  ·  {pending} possible achievement{'s' if pending != 1 else ''} to review" if pending else ""
+        lines = []
         if readable:
             formats = sorted({f["format"] for f in readable if f["format"]})
-            return (f"💾 Reading {len(readable)} save file{'s' if len(readable) != 1 else ''} "
-                    f"({', '.join(formats)}) for progress{extra}")
-        if files:
-            return "💾 Found this game's save, but it's encrypted or in an unknown format - AchTrack can't read it"
-        return ""
+            lines.append(f"💾 Reading {len(readable)} save file{'s' if len(readable) != 1 else ''} "
+                         f"({', '.join(formats)}) for progress{extra}")
+        elif files:
+            lines.append("💾 This game's save is encrypted or in a custom format - AchTrack can't read it"
+                         + extra)
+        elif extra:
+            lines.append(extra.strip(" ·"))
+        screen = db.get_meta("screen_status") or {}
+        if self.win.cfg.screen_watcher and screen.get("appid") == self.appid and self.appid in self.win.running:
+            status = screen.get("status", "")
+            lines.append("👁 Watching the screen for achievements" if status == "watching"
+                         else f"👁 Screen watcher: {status}")
+        return "\n".join(lines)
 
     def _row_menu(self, pos) -> None:
         item = self.list.itemAt(pos)
@@ -418,12 +437,14 @@ class DetailView(QWidget):
         elif a.get("source") == MANUAL:
             menu.addAction("Change unlock date…", lambda: self.win.change_unlock_date(appid, name, a["unlocked_at"]))
             menu.addAction("Undo - mark as locked", lambda: self.win.remove_manual_unlock(appid, name))
-        elif a.get("source") == SAVE:
+        elif a.get("source") in (SAVE, SCREEN):
             note = self.win.db.unlock_note(appid, name) or ""
-            info = menu.addAction(f"Found in save: {note}" if note else "Found in your save")
+            source = a.get("source")
+            label = note if source == SCREEN else f"Found in save: {note}"
+            info = menu.addAction(label or "Detected automatically")
             info.setEnabled(False)
             menu.addAction("Not earned - undo and don't match this again",
-                           lambda: self.win.reject_save_unlock(appid, name))
+                           lambda: self.win.reject_detected_unlock(appid, name, source))
         else:
             info = menu.addAction(f"Unlocked via {a.get('source') or 'emulator'}")
             info.setEnabled(False)
@@ -586,7 +607,7 @@ class ReviewRow(QFrame):
         desc.setWordWrap(True)
         texts.addWidget(desc)
         if found:
-            hit = QLabel(f"Found in your save: {found}")
+            hit = QLabel(found if found.startswith("Seen on screen") else f"Found in your save: {found}")
             hit.setObjectName("Found")
             hit.setWordWrap(True)
             texts.addWidget(hit)
@@ -635,7 +656,8 @@ class ReviewDialog(QDialog):
         sub.setObjectName("Muted")
         lay.addWidget(sub)
         self.suggested = db.suggestions(appid)
-        hint = QLabel(("Ticked ones were found in your save file - untick any you didn't earn. " if self.suggested
+        hint = QLabel(("Ticked ones were spotted in your save file or on screen - untick any you didn't earn. "
+                       if self.suggested
                        else "") +
                       "Tick the ones you've done. The rest is sorted by how likely you are to have each one, based on "
                       "how many Steam players have it and how long you've played. Hidden achievements are included.")
@@ -717,7 +739,7 @@ class ReviewDialog(QDialog):
         for _item, row in self.rows:
             if row.found and row.name not in checked:
                 # Unticked a save suggestion: don't suggest it from that field again.
-                db.reject(self.appid, row.name, row.found.split(" = ")[0])
+                db.reject(self.appid, row.name, detection_key(row.found))
                 db.drop_suggestion(self.appid, row.name)
         self.win.manual_unlock(self.appid, [n for n in self._checked()], int(time.time()),
                                notes={r.name: f"Confirmed from save: {r.found}" for _i, r in self.rows if r.found})
@@ -872,6 +894,12 @@ class SettingsDialog(QDialog):
         self.saves = QCheckBox("Detect achievements from games' save files")
         self.saves.setChecked(cfg.save_detection)
         form.addRow("", self.saves)
+        from .screenwatch import available as screen_available
+        ok, reason = screen_available()
+        self.screen = QCheckBox("Watch on-screen text while playing (local OCR, for games with unreadable saves)"
+                                + ("" if ok else f" - unavailable: {reason}"))
+        self.screen.setChecked(cfg.screen_watcher)
+        form.addRow("", self.screen)
 
         self.language = QComboBox()
         self.language.setEditable(True)
@@ -1007,6 +1035,7 @@ class SettingsDialog(QDialog):
         cfg.steam_sync = self.steam_sync.isChecked()
         cfg.session_review = self.review.isChecked()
         cfg.save_detection = self.saves.isChecked()
+        cfg.screen_watcher = self.screen.isChecked()
         cfg.scan_dirs = [line.strip() for line in self.dirs.toPlainText().splitlines() if line.strip()]
         cfg.save()
         try:
@@ -1225,6 +1254,9 @@ class MainWindow(QMainWindow):
     def manual_unlock(self, appid: int, names: list, ts: int, popup: bool = True, notes: dict | None = None) -> None:
         notes = notes or {}
         added = [n for n in names if self.db.add_unlock(appid, n, ts, MANUAL, notes.get(n))]
+        if added:
+            # Let the screen watcher learn what this game showed around these unlocks.
+            self.worker.request("learn", appid, added, time.time())
         if popup and added:
             for name in added[:POPUP_BURST]:
                 self.notifier.achievement(build_unlock_event(self.db, appid, name, download=False))
@@ -1251,11 +1283,11 @@ class MainWindow(QMainWindow):
         self.db.remove_unlock(appid, name, MANUAL)
         self.reload(force=True)
 
-    def reject_save_unlock(self, appid: int, name: str) -> None:
+    def reject_detected_unlock(self, appid: int, name: str, source: str) -> None:
         note = self.db.unlock_note(appid, name) or ""
         if note:
-            self.db.reject(appid, name, note.split(" = ")[0])
-        self.db.remove_unlock(appid, name, SAVE)
+            self.db.reject(appid, name, detection_key(note))
+        self.db.remove_unlock(appid, name, source)
         self.reload(force=True)
 
     def _sync_steam(self) -> None:

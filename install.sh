@@ -22,6 +22,13 @@ if ! ldconfig -p 2>/dev/null | grep libxcb-cursor >/dev/null; then
     exit 1
 fi
 
+# The screen watcher reads on-screen text with tesseract; everything else works without it.
+if ! command -v tesseract >/dev/null 2>&1; then
+    echo "Note: tesseract isn't installed, so the screen watcher will stay off. To enable it run:"
+    echo "    sudo apt install tesseract-ocr"
+    echo
+fi
+
 echo "Creating virtualenv in $VENV"
 python3 -m venv "$VENV"
 "$VENV/bin/pip" install --quiet --upgrade pip

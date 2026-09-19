@@ -487,14 +487,25 @@ def _walk_files(root: Path, only_save_paths: bool, max_depth: int = 7):
                 yield path
 
 
+def related_prefixes(prefix: str) -> list:
+    """A prefix plus its Wine/Proton twin: Heroic can leave a drive_c both in <dir> and <dir>/pfx,
+    and the game may write saves to either one."""
+    path = Path(prefix)
+    found = []
+    for cand in (path, path / "pfx", path.parent if path.name == "pfx" else None):
+        if cand is not None and (cand / "drive_c").is_dir() and cand not in found:
+            found.append(cand)
+    return [str(p) for p in found]
+
+
 def candidate_files(prefix: str | None, game_dir: str | None) -> list:
     """Files that could be this game's saves: everything in the prefix's user folders, plus
     anything under a *save* folder inside the game's install folder."""
     out = []
-    if prefix:
-        for root in prefix_save_roots(prefix):
+    for pfx in related_prefixes(prefix) if prefix else []:
+        for root in prefix_save_roots(pfx):
             out += list(_walk_files(root, only_save_paths=False))
-        user_reg = Path(prefix) / "user.reg"
+        user_reg = Path(pfx) / "user.reg"
         if user_reg.is_file():
             out.append(str(user_reg))
     root = game_root(game_dir) if game_dir else None

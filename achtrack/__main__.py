@@ -141,7 +141,7 @@ def cmd_screen_test(seconds: float) -> int:
 
     def show(kind: str, lines: list, took: float) -> None:
         stamp = time.strftime("%H:%M:%S")
-        print(f"-- {stamp} {kind} read, OCR {took:.2f} s")
+        print(f"-- {stamp} {kind} read, OCR {took:.2f} s" + ("" if lines else "  (no text)"))
         for region, text in lines:
             print(f"   [{region:6}] {text}")
 

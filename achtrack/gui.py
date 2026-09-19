@@ -408,13 +408,18 @@ class DetailView(QWidget):
         pending = len(db.suggestions(self.appid))
         extra = f"  ·  {pending} possible achievement{'s' if pending != 1 else ''} to review" if pending else ""
         lines = []
-        if readable:
-            formats = sorted({f["format"] for f in readable if f["format"]})
-            lines.append(f"💾 Reading {len(readable)} save file{'s' if len(readable) != 1 else ''} "
-                         f"({', '.join(formats)}) for progress{extra}")
-        elif files:
-            lines.append("💾 This game's save is encrypted or in a custom format - AchTrack can't read it"
-                         + extra)
+        saves = [f for f in files if not f["path"].lower().endswith("user.reg")]
+        readable_saves = [f for f in saves if f["readable"]]
+        registry = any(f["readable"] for f in files if f["path"].lower().endswith("user.reg"))
+        if readable_saves:
+            formats = sorted({f["format"] for f in readable_saves if f["format"]})
+            lines.append(f"💾 Save file readable ({', '.join(formats)}) - checked for progress each time "
+                         f"the game saves{extra}")
+        elif saves:
+            lines.append("💾 Save file uses a custom format AchTrack can't read"
+                         + (" (only the game's registry settings are readable)" if registry else "") + extra)
+        elif registry:
+            lines.append("💾 Only the game's registry settings are readable - no save file found yet" + extra)
         elif extra:
             lines.append(extra.strip(" ·"))
         screen = db.get_meta("screen_status") or {}

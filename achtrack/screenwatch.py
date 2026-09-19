@@ -169,19 +169,34 @@ class ScreenReader:
                 for name, l, t, r, b in REGIONS]
 
     @staticmethod
-    def stack(crops: list):
-        """One image with the regions under each other (one OCR call), plus where each region sits."""
+    def _bright_text(img):
+        """Black-on-white image of only the brightest pixels: game UI text is nearly always bright,
+        and this strips the busy scene behind it, which is what trips tesseract up."""
+        hist = img.histogram()
+        total, seen, p93 = sum(hist), 0, 255
+        for value, count in enumerate(hist):
+            seen += count
+            if seen >= total * 0.93:
+                p93 = value
+                break
+        cut = min(235, max(150, p93 - 10))
+        return img.point([0 if v >= cut else 255 for v in range(256)])
+
+    @classmethod
+    def stack(cls, crops: list):
+        """One image holding every region twice - as captured and as isolated bright text - so a
+        single tesseract call reads them all; plus where each region sits in it."""
         from PIL import Image, ImageOps
         parts, offsets, y = [], [], 0
         for name, img in crops:
-            scale = min(1.0, OCR_WIDTH / img.width)
-            if scale < 1.0:
-                img = img.resize((int(img.width * scale), int(img.height * scale)), Image.BILINEAR)
-            img = ImageOps.autocontrast(img)
-            parts.append(img)
-            offsets.append((name, y, y + img.height))
-            y += img.height + 24
-        canvas = Image.new("L", (max(p.width for p in parts), y), 0)
+            # Tesseract reads text best around 25-40 px high: enlarge the narrow side areas, never shrink.
+            if img.width < 900:
+                img = img.resize((int(img.width * 1.6), int(img.height * 1.6)), Image.BICUBIC)
+            for variant in (ImageOps.autocontrast(img), cls._bright_text(img)):
+                parts.append(variant)
+                offsets.append((name, y, y + variant.height))
+                y += variant.height + 24
+        canvas = Image.new("L", (max(p.width for p in parts), y), 255)
         pos = 0
         for img in parts:
             canvas.paste(img, (0, pos))
@@ -190,11 +205,13 @@ class ScreenReader:
 
     def ocr_regions(self, crops: list) -> list:
         image, offsets = self.stack(crops)
-        out = []
+        out, seen = [], set()
         for y, text in self.ocr(image):
             region = next((name for name, a, b in offsets if a <= y < b), "?")
             text = text.strip()
-            if len(normalize(text)) >= 3:
+            key = (region, normalize(text))
+            if len(key[1]) >= 3 and key not in seen:     # each region is read twice: keep one copy
+                seen.add(key)
                 out.append((region, text))
         return out
 

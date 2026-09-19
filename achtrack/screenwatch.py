@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 
 from . import matcher
@@ -86,7 +87,8 @@ def available() -> tuple:
 
 
 def _brightness(img) -> float:
-    return sum(img.convert("L").resize((16, 16)).getdata()) / 256
+    from PIL import ImageStat
+    return ImageStat.Stat(img.convert("L").resize((16, 16))).mean[0]
 
 
 # --- capture + OCR ------------------------------------------------------------------------------------
@@ -155,16 +157,23 @@ class ScreenReader:
         except Exception:
             pass
 
-    def capture(self):
-        """Stacked grayscale image of all regions, plus the y offset where each region starts."""
-        from PIL import Image, ImageOps
-        full = self._grab_with(self.backend)
+    def grab(self):
+        return self._grab_with(self.backend)
+
+    @staticmethod
+    def crops(full) -> list:
+        """[(region name, grayscale crop)] for every watched area of a full-screen picture."""
         width, height = full.size
+        gray = full.convert("L")
+        return [(name, gray.crop((int(width * l), int(height * t), int(width * r), int(height * b))))
+                for name, l, t, r, b in REGIONS]
+
+    @staticmethod
+    def stack(crops: list):
+        """One image with the regions under each other (one OCR call), plus where each region sits."""
+        from PIL import Image, ImageOps
         parts, offsets, y = [], [], 0
-        brightness = []
-        for name, l, t, r, b in REGIONS:
-            img = full.crop((int(width * l), int(height * t), int(width * r), int(height * b))).convert("L")
-            brightness.append(_brightness(img))
+        for name, img in crops:
             scale = min(1.0, OCR_WIDTH / img.width)
             if scale < 1.0:
                 img = img.resize((int(img.width * scale), int(img.height * scale)), Image.BILINEAR)
@@ -177,7 +186,23 @@ class ScreenReader:
         for img in parts:
             canvas.paste(img, (0, pos))
             pos += img.height + 24
-        return canvas, offsets, max(brightness)
+        return canvas, offsets
+
+    def ocr_regions(self, crops: list) -> list:
+        image, offsets = self.stack(crops)
+        out = []
+        for y, text in self.ocr(image):
+            region = next((name for name, a, b in offsets if a <= y < b), "?")
+            text = text.strip()
+            if len(normalize(text)) >= 3:
+                out.append((region, text))
+        return out
+
+    def capture(self):
+        """Stacked grayscale image of all regions, where each region starts, and the brightest region."""
+        crops = self.crops(self.grab())
+        image, offsets = self.stack(crops)
+        return image, offsets, max(_brightness(img) for _n, img in crops)
 
     @staticmethod
     def ocr(image) -> list:
@@ -397,7 +422,7 @@ class ScreenMatcher:
                     continue
                 if score < matcher.HIGH:
                     continue
-                hit = self._direct(m, text, numbers, now)
+                hit = self._direct(m, text, numbers, now, region)
                 if hit:
                     hits.append(hit)
 
@@ -414,7 +439,7 @@ class ScreenMatcher:
                 del self.encounters[name]
         return hits
 
-    def _direct(self, m: matcher.AchModel, text: str, numbers: list, now: float) -> ScreenHit | None:
+    def _direct(self, m: matcher.AchModel, text: str, numbers: list, now: float, region: str = "") -> ScreenHit | None:
         if m.ordinal and "level" in m.words:
             # Levels are everywhere (enemy nameplates, gear): only a bare "Level 20" or a level-up message counts.
             norm = normalize(text)
@@ -431,6 +456,12 @@ class ScreenMatcher:
                 satisfied = value >= m.number
             if not satisfied:
                 return None
+        # A one-word banner that is exactly the achievement's key word ("STAGGERED" for "Stagger an
+        # enemy") is unambiguous; banners like that can be on screen for under a second.
+        core = [t for t in m.words if t not in matcher.ACTIONS and t not in matcher.GENERIC_WORDS]
+        banner = matcher.tokens(text)
+        if m.number is None and region in ("top", "center") and len(core) == 1 and banner == core:
+            return self._hit(m.name, True, "high", f'Seen on screen: "{text}"')
         first = self.pending.get(m.name)
         if first is None or now - first > CONFIRM_WINDOW:
             self.pending[m.name] = now
@@ -447,23 +478,63 @@ class ScreenMatcher:
 
 # --- background thread ------------------------------------------------------------------------------------
 
-class ScreenWatcher(threading.Thread):
-    """Reads the screen every `interval` seconds and puts ScreenHits on `events`."""
+class FlashDetector:
+    """Cheap per-frame check (a few ms) for text appearing: game banners are bright, sharp-edged
+    shapes, so a jump in "bright edge" density against the region's recent average means new text."""
 
-    def __init__(self, appid: int, screen_matcher: ScreenMatcher, interval: float = 2.5, monitor: int = 1):
+    THUMB_WIDTH = 240
+    _BRIGHT = [255 if v > 185 else 0 for v in range(256)]
+
+    def __init__(self):
+        self.baseline: dict = {}
+
+    def check(self, name: str, img) -> bool:
+        from PIL import ImageChops, ImageFilter, ImageStat
+        scale = self.THUMB_WIDTH / max(1, img.width)
+        thumb = img.resize((self.THUMB_WIDTH, max(1, int(img.height * scale))))
+        edges = thumb.filter(ImageFilter.FIND_EDGES)
+        score = ImageStat.Stat(ImageChops.multiply(edges, thumb.point(self._BRIGHT))).mean[0]
+        base = self.baseline.get(name)
+        if base is None:
+            self.baseline[name] = score
+            return False
+        fired = score > base * 1.6 + 1.5
+        # Follow slow changes (new area, lighting) but not the flash itself.
+        self.baseline[name] = base * 0.97 + score * 0.03 if fired else base * 0.85 + score * 0.15
+        return fired
+
+
+class ScreenWatcher(threading.Thread):
+    """Captures the screen every ~0.5 s. OCR runs when the flash detector sees text appear, plus a
+    full read every few seconds for text that stays up (boss names, counters). OCR time is capped
+    so it never takes more than a fraction of one CPU core."""
+
+    FULL_READ_EVERY = 3.0      # seconds between full reads of all regions
+    OCR_BUDGET = 0.4           # max share of wall time spent in OCR (of one core)
+
+    def __init__(self, appid: int, screen_matcher: "ScreenMatcher | None", interval: float = 0.5,
+                 monitor: int = 1, on_read=None):
         super().__init__(name="achtrack-screen", daemon=True)
         self.appid = appid
         self.matcher = screen_matcher
-        self.interval = max(1.0, interval)
+        self.interval = max(0.2, interval)
         self.monitor = monitor
+        self.on_read = on_read          # callback(kind, lines, ocr_seconds) - used by screen-test
         self.events: queue.Queue = queue.Queue()
         self.status = "starting"
         self.last_ocr_seconds = 0.0
+        self.stats = {"captures": 0, "ocr_runs": 0, "flash_runs": 0, "grab_seconds": 0.0, "ocr_seconds": 0.0}
         self._stop = threading.Event()
         self._dark = 0
+        self._ocr_log: deque = deque()
 
     def stop(self) -> None:
         self._stop.set()
+
+    def _budget_left(self, now: float) -> bool:
+        while self._ocr_log and self._ocr_log[0][0] < now - 10:
+            self._ocr_log.popleft()
+        return sum(d for _t, d in self._ocr_log) < 10 * self.OCR_BUDGET
 
     def run(self) -> None:
         try:
@@ -472,37 +543,76 @@ class ScreenWatcher(threading.Thread):
             self.status = f"can't capture the screen: {e}"
             log.warning(self.status)
             return
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
-        path = LOG_DIR / f"{self.appid}.log"
-        if path.exists() and path.stat().st_size > 4_000_000:
-            path.replace(LOG_DIR / f"{self.appid}.log.1")
+        logf = None
+        if self.appid:
+            LOG_DIR.mkdir(parents=True, exist_ok=True)
+            path = LOG_DIR / f"{self.appid}.log"
+            if path.exists() and path.stat().st_size > 4_000_000:
+                path.replace(LOG_DIR / f"{self.appid}.log.1")
+            logf = open(path, "a", encoding="utf-8")
         self.status = "watching"
         log.info("screen capture method: %s", reader.backend)
+        detector = FlashDetector()
+        next_full = 0.0
+        grab_avg = 0.0
+        delay = 0.0
         try:
-            with open(path, "a", encoding="utf-8") as logf:
-                while not self._stop.wait(self.interval):
+            while not self._stop.wait(delay):
+                tick = time.monotonic()
+                try:
+                    full = reader.grab()
+                except Exception as e:
+                    self.status = f"capture failed: {e}"
+                    delay = 10.0
+                    continue
+                grab = time.monotonic() - tick
+                grab_avg = grab if not grab_avg else grab_avg * 0.8 + grab * 0.2
+                self.stats["captures"] += 1
+                self.stats["grab_seconds"] += grab
+                crops = reader.crops(full)
+                brightness = max(_brightness(img) for _n, img in crops)
+                self._dark = self._dark + 1 if brightness < 2 else 0
+                if self._dark >= 20:
+                    self.status = f"the captured screen is black ({reader.backend} capture)"
+                elif self.status != "watching":
+                    self.status = "watching"
+
+                flashing = [name for name, img in crops if detector.check(name, img)]
+                if tick >= next_full:
+                    targets, kind = [c for c in crops], "full"
+                    next_full = tick + self.FULL_READ_EVERY
+                elif flashing and self._budget_left(tick):
+                    targets, kind = [c for c in crops if c[0] in flashing], "flash"
+                else:
+                    targets, kind = [], ""
+                if targets:
+                    start = time.monotonic()
                     try:
-                        lines, took, brightness = reader.read()
+                        lines = reader.ocr_regions(targets)
                     except (subprocess.SubprocessError, OSError) as e:
                         self.status = f"OCR failed: {e}"
-                        continue
-                    except Exception as e:  # capture backend errors (e.g. display gone)
-                        self.status = f"capture failed: {e}"
-                        self._stop.wait(10)
-                        continue
+                        lines = []
+                    took = time.monotonic() - start
+                    self._ocr_log.append((tick, took))
                     self.last_ocr_seconds = took
-                    # A black capture every time means the session doesn't let X11 capture see the game.
-                    self._dark = self._dark + 1 if brightness < 2 else 0
-                    if self._dark >= 10:
-                        self.status = f"the captured screen is black ({reader.backend} capture)"
-                    elif self.status != "watching":
-                        self.status = "watching"
+                    self.stats["ocr_runs"] += 1
+                    self.stats["flash_runs"] += kind == "flash"
+                    self.stats["ocr_seconds"] += took
                     now = time.time()
-                    for region, text in lines:
-                        logf.write(f"{now:.1f}\t{region}\t{text}\n")
-                    logf.flush()
-                    for hit in self.matcher.feed(lines, now):
-                        self.events.put(hit)
+                    if logf is not None:
+                        for region, text in lines:
+                            logf.write(f"{now:.1f}\t{region}\t{text}\n")
+                        logf.flush()
+                    if self.on_read:
+                        self.on_read(kind, lines, took)
+                    if self.matcher is not None:
+                        for hit in self.matcher.feed(lines, now):
+                            self.events.put(hit)
+                # Capture no faster than the capture method itself can keep up with.
+                period = max(self.interval, grab_avg * 1.3)
+                delay = max(0.02, period - (time.monotonic() - tick))
         finally:
             reader.close()
+            if logf is not None:
+                logf.close()
             self.status = "stopped"

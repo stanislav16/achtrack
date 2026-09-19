@@ -57,10 +57,14 @@ Some games encrypt their saves or use a custom format without names (FF7 Rebirth
 For those, AchTrack can read on-screen text while you play. It runs locally with tesseract OCR,
 with no AI and nothing uploaded:
 
-- Every 2.5 s it grabs five small areas of the screen (top banner, center, bottom boss-bar area,
-  left and right notifications) and reads them in a single low-priority tesseract call.
+- It captures the screen about twice a second and runs a cheap check (a few ms) that notices text
+  appearing in five areas (top banner, center, bottom boss-bar area, left and right notifications).
+  OCR (one low-priority tesseract call) runs only when that check fires, plus a full read every
+  3 s for text that stays up. OCR is capped at 40% of one CPU core, and `screen-test` reports the
+  actual cost on your machine. Banners that flash for under a second, like "STAGGERED", are caught.
 - **Direct text:** "STAGGERED" → "Stagger an enemy", "CHAPTER 6" → "Complete Chapter 5",
-  "Moonstones 50/50" → "Collect 50 moonstones". A hit has to be seen twice before it counts.
+  "Moonstones 50/50" → "Collect 50 moonstones". A one-word banner that is exactly the
+  achievement's key word counts right away; other text has to be seen twice.
   Quest-log lines that just repeat the objective ("Defeat Iudex Gundyr") are ignored.
 - **Bosses:** a named target on screen, then a victory banner with no death screen in between,
   counts as a defeat.

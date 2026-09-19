@@ -43,7 +43,7 @@ class Config:
     save_detection: bool = True
     # Read on-screen text (locally, with tesseract) while a game runs, as a fallback for unreadable saves.
     screen_watcher: bool = True
-    screen_interval: float = 2.5
+    screen_capture_interval: float = 0.5   # capture as often as this (slower if capturing itself takes longer)
     screen_monitor: int = 1
     language: str = "english"
     # Extra folders to search for Wine prefixes (Lutris, Bottles, custom locations...).

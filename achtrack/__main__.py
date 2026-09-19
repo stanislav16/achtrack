@@ -122,46 +122,44 @@ def cmd_saves(appid: int | None, file: str | None, fields: bool) -> int:
 
 
 def cmd_screen_test(seconds: float) -> int:
-    """Reads the screen like the watcher does and prints what it sees - run it with a game open."""
+    """Runs the screen watcher's loop without a game attached and prints what it reads."""
     import os
     import time
     from .config import Config
-    from .screenwatch import ScreenReader, available
+    from .screenwatch import ScreenWatcher, available, probe_backends
 
     ok, reason = available()
     if not ok:
         print(f"Screen watcher unavailable: {reason}")
         return 1
     cfg = Config.load()
-    print(f"Session type: {os.environ.get('XDG_SESSION_TYPE', 'unknown')}. Reading the screen for {seconds:.0f} s "
-          "- switch to your game now.")
-    time.sleep(3)
-    from .screenwatch import probe_backends
+    print(f"Session type: {os.environ.get('XDG_SESSION_TYPE', 'unknown')}")
     print("Capture methods on this desktop:")
     for name, _ok, detail in probe_backends(cfg.screen_monitor):
         print(f"   {name:18} {detail}")
-    reader = ScreenReader(cfg.screen_monitor)
-    print(f"Using: {reader.backend}\n")
-    end = time.time() + seconds
-    reads, total, dark = 0, 0.0, 0
-    try:
-        while True:
-            lines, took, brightness = reader.read()
-            reads += 1
-            total += took
-            dark += brightness < 2
-            print(f"-- read {reads}: {took:.2f} s")
-            for region, text in lines:
-                print(f"   [{region:6}] {text}")
-            if time.time() >= end:
-                break
-            time.sleep(max(0.0, cfg.screen_interval - took))
-    finally:
-        reader.close()
-    print(f"\nAverage read: {total / reads:.2f} s every {cfg.screen_interval:.1f} s.")
-    if dark == reads:
-        print("Every capture was black: no capture method on this desktop can see the game yet. Paste this output "
-              "so the right method can be added.")
+    print(f"\nWatching for {seconds:.0f} s - switch to your game now.\n")
+
+    def show(kind: str, lines: list, took: float) -> None:
+        stamp = time.strftime("%H:%M:%S")
+        print(f"-- {stamp} {kind} read, OCR {took:.2f} s")
+        for region, text in lines:
+            print(f"   [{region:6}] {text}")
+
+    watcher = ScreenWatcher(0, None, cfg.screen_capture_interval, cfg.screen_monitor, on_read=show)
+    watcher.start()
+    time.sleep(seconds)
+    watcher.stop()
+    watcher.join(10)
+    st = watcher.stats
+    if not st["captures"]:
+        print(f"No captures: {watcher.status}")
+        return 1
+    print(f"\n{st['captures']} captures in {seconds:.0f} s ({st['captures'] / seconds:.1f} per second, "
+          f"{st['grab_seconds'] / st['captures'] * 1000:.0f} ms each)")
+    print(f"{st['ocr_runs']} OCR runs ({st['flash_runs']} triggered by text appearing), "
+          f"{st['ocr_seconds']:.1f} s of OCR = {st['ocr_seconds'] / seconds * 100:.0f}% of one CPU core")
+    if "black" in watcher.status:
+        print(f"Warning: {watcher.status}")
     return 0
 
 

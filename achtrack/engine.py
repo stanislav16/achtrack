@@ -543,7 +543,8 @@ class Engine:
         self._stop_screen()
         screen_matcher = screenwatch.ScreenMatcher(models, screenwatch.load_profile(appid), self.db.rejections(appid))
         screen_matcher.done |= self.db.unlocked_names(appid)
-        self.screen = screenwatch.ScreenWatcher(appid, screen_matcher, self.cfg.screen_interval, self.cfg.screen_monitor)
+        self.screen = screenwatch.ScreenWatcher(appid, screen_matcher, self.cfg.screen_capture_interval,
+                                                self.cfg.screen_monitor)
         self.screen.start()
         log.info("watching the screen for %s", appid)
 

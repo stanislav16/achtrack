@@ -71,8 +71,9 @@ with no AI and nothing uploaded:
   *Not earned* undoes a hit and stops that text from matching again.
 
 Setup: `sudo apt install tesseract-ocr`. To check what it reads on your screen, start a game and
-run `achtrack screen-test`. The screen watcher needs an X11 session. On Wayland (e.g. COSMIC) the
-capture comes back black, and `screen-test` tells you so.
+run `achtrack screen-test`. It lists every capture method on your desktop and whether it works.
+On X11 it captures directly. On Wayland it uses the desktop's screenshot tool, whichever is present:
+`grim` (wlroots), `cosmic-screenshot` (COSMIC), `gnome-screenshot` (GNOME) or `spectacle` (KDE).
 
 ## When a crack doesn't record achievements
 

@@ -56,47 +56,115 @@ def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^0-9a-z' ]+", " ", text.lower())).strip()
 
 
+WAYLAND_TOOLS = ("grim", "cosmic-screenshot", "gnome-screenshot", "spectacle")
+
+
+def _is_wayland() -> bool:
+    return os.environ.get("XDG_SESSION_TYPE") == "wayland" or bool(os.environ.get("WAYLAND_DISPLAY"))
+
+
+def backend_candidates() -> list:
+    """Capture methods to try, best first. X11 capture sees nothing of other apps on Wayland."""
+    x11 = ["x11"] if os.environ.get("DISPLAY") else []
+    tools = [t for t in WAYLAND_TOOLS if shutil.which(t)]
+    return tools + x11 if _is_wayland() else x11 + tools
+
+
 def available() -> tuple:
     """(ok, reason)."""
     if not shutil.which("tesseract"):
         return False, "tesseract isn't installed (sudo apt install tesseract-ocr)"
     try:
-        import mss  # noqa: F401
         from PIL import Image  # noqa: F401
+        if not _is_wayland():
+            import mss  # noqa: F401
     except ImportError:
         return False, "the mss / Pillow Python packages are missing - run install.sh again"
-    if not os.environ.get("DISPLAY"):
-        return False, "no X11 display to capture (screen watching needs an X11 or XWayland session)"
+    if not backend_candidates():
+        return False, "no way to capture the screen on this desktop"
     return True, ""
+
+
+def _brightness(img) -> float:
+    return sum(img.convert("L").resize((16, 16)).getdata()) / 256
 
 
 # --- capture + OCR ------------------------------------------------------------------------------------
 
 class ScreenReader:
-    def __init__(self, monitor: int = 1):
-        import mss
-        self._mss = mss.mss()
-        monitors = self._mss.monitors
-        self.monitor = monitors[monitor] if 0 < monitor < len(monitors) else monitors[1 if len(monitors) > 1 else 0]
+    def __init__(self, monitor: int = 1, backend: str | None = "auto"):
+        self.monitor_index = monitor
+        self._mss = None
+        self._shots = LOG_DIR / "shots"
+        self.backend = self._pick() if backend == "auto" else backend
+
+    def _pick(self) -> str:
+        """First method that returns a non-black picture (X11 capture on Wayland returns black)."""
+        fallback = None
+        for name in backend_candidates():
+            try:
+                img = self._grab_with(name)
+            except Exception as e:
+                log.info("screen capture with %s failed: %s", name, e)
+                continue
+            fallback = fallback or name
+            if _brightness(img) >= 2:
+                return name
+        if fallback is None:
+            raise RuntimeError("no screen capture method works here")
+        return fallback
+
+    def _grab_with(self, name: str):
+        from PIL import Image
+        if name == "x11":
+            if self._mss is None:
+                import mss
+                self._mss = mss.mss()
+            monitors = self._mss.monitors
+            m = monitors[self.monitor_index] if 0 < self.monitor_index < len(monitors) else monitors[-1]
+            shot = self._mss.grab(m)
+            return Image.frombytes("RGB", shot.size, shot.rgb)
+        if name == "grim":
+            out = subprocess.run(["grim", "-t", "ppm", "-"], capture_output=True, timeout=10, check=True).stdout
+            return Image.open(io.BytesIO(out)).convert("RGB")
+        self._shots.mkdir(parents=True, exist_ok=True)
+        target = self._shots / "shot.png"
+        if name == "cosmic-screenshot":
+            for old in self._shots.glob("*.png"):
+                old.unlink(missing_ok=True)
+            proc = subprocess.run(["cosmic-screenshot", "--interactive=false", "--modal=false", "--notify=false",
+                                   f"--save-dir={self._shots}"], capture_output=True, timeout=15, check=True)
+            printed = proc.stdout.decode("utf-8", "replace").strip().splitlines()
+            path = printed[-1] if printed and os.path.isfile(printed[-1]) else next(iter(self._shots.glob("*.png")), None)
+            if not path:
+                raise RuntimeError("cosmic-screenshot saved nothing")
+            target = path
+        elif name == "gnome-screenshot":
+            subprocess.run(["gnome-screenshot", "-f", str(target)], capture_output=True, timeout=15, check=True)
+        elif name == "spectacle":
+            subprocess.run(["spectacle", "-b", "-n", "-f", "-o", str(target)], capture_output=True, timeout=15, check=True)
+        img = Image.open(target).convert("RGB")
+        img.load()
+        os.unlink(target)
+        return img
 
     def close(self) -> None:
         try:
-            self._mss.close()
+            if self._mss is not None:
+                self._mss.close()
         except Exception:
             pass
 
     def capture(self):
         """Stacked grayscale image of all regions, plus the y offset where each region starts."""
         from PIL import Image, ImageOps
-        m = self.monitor
+        full = self._grab_with(self.backend)
+        width, height = full.size
         parts, offsets, y = [], [], 0
         brightness = []
         for name, l, t, r, b in REGIONS:
-            box = {"left": m["left"] + int(m["width"] * l), "top": m["top"] + int(m["height"] * t),
-                   "width": max(1, int(m["width"] * (r - l))), "height": max(1, int(m["height"] * (b - t)))}
-            shot = self._mss.grab(box)
-            img = Image.frombytes("RGB", shot.size, shot.rgb).convert("L")
-            brightness.append(sum(img.resize((16, 16)).getdata()) / 256)
+            img = full.crop((int(width * l), int(height * t), int(width * r), int(height * b))).convert("L")
+            brightness.append(_brightness(img))
             scale = min(1.0, OCR_WIDTH / img.width)
             if scale < 1.0:
                 img = img.resize((int(img.width * scale), int(img.height * scale)), Image.BILINEAR)
@@ -147,6 +215,26 @@ class ScreenReader:
             if len(normalize(text)) >= 3:
                 out.append((region, text))
         return out, time.monotonic() - start, brightness
+
+
+def probe_backends(monitor: int = 1) -> list:
+    """[(method, works, detail)] for every capture method available here."""
+    reader = ScreenReader(monitor, backend=None)
+    results = []
+    try:
+        for name in backend_candidates():
+            start = time.monotonic()
+            try:
+                img = reader._grab_with(name)
+            except Exception as e:
+                results.append((name, False, f"failed: {str(e)[:120]}"))
+                continue
+            ok = _brightness(img) >= 2
+            results.append((name, ok, f"{'works' if ok else 'black picture'}, {img.size[0]}x{img.size[1]}, "
+                                      f"{time.monotonic() - start:.2f} s"))
+    finally:
+        reader.close()
+    return results
 
 
 # --- per-game learned profile ----------------------------------------------------------------------------
@@ -389,6 +477,7 @@ class ScreenWatcher(threading.Thread):
         if path.exists() and path.stat().st_size > 4_000_000:
             path.replace(LOG_DIR / f"{self.appid}.log.1")
         self.status = "watching"
+        log.info("screen capture method: %s", reader.backend)
         try:
             with open(path, "a", encoding="utf-8") as logf:
                 while not self._stop.wait(self.interval):
@@ -405,7 +494,7 @@ class ScreenWatcher(threading.Thread):
                     # A black capture every time means the session doesn't let X11 capture see the game.
                     self._dark = self._dark + 1 if brightness < 2 else 0
                     if self._dark >= 10:
-                        self.status = "the captured screen is black - on Wayland, log in with an X11 session"
+                        self.status = f"the captured screen is black ({reader.backend} capture)"
                     elif self.status != "watching":
                         self.status = "watching"
                     now = time.time()

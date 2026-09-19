@@ -136,7 +136,12 @@ def cmd_screen_test(seconds: float) -> int:
     print(f"Session type: {os.environ.get('XDG_SESSION_TYPE', 'unknown')}. Reading the screen for {seconds:.0f} s "
           "- switch to your game now.")
     time.sleep(3)
+    from .screenwatch import probe_backends
+    print("Capture methods on this desktop:")
+    for name, _ok, detail in probe_backends(cfg.screen_monitor):
+        print(f"   {name:18} {detail}")
     reader = ScreenReader(cfg.screen_monitor)
+    print(f"Using: {reader.backend}\n")
     end = time.time() + seconds
     reads, total, dark = 0, 0.0, 0
     try:
@@ -155,8 +160,8 @@ def cmd_screen_test(seconds: float) -> int:
         reader.close()
     print(f"\nAverage read: {total / reads:.2f} s every {cfg.screen_interval:.1f} s.")
     if dark == reads:
-        print("Every capture was black: this session doesn't let AchTrack see the game. On Wayland, log in with an "
-              "X11 session (on the login screen, pick the Xorg option) for the screen watcher to work.")
+        print("Every capture was black: no capture method on this desktop can see the game yet. Paste this output "
+              "so the right method can be added.")
     return 0
 
 

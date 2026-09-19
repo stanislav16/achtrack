@@ -78,8 +78,8 @@ def send_to_running(message: str) -> bool:
 
 def prepare_environment(cfg: Config) -> None:
     # Native Wayland Qt windows can't choose their position or stay above games; XWayland can.
-    if (cfg.force_x11 and os.environ.get("WAYLAND_DISPLAY") and os.environ.get("DISPLAY")
-            and not os.environ.get("QT_QPA_PLATFORM")):
+    # Desktops like COSMIC set QT_QPA_PLATFORM=wayland for every app, so override it here.
+    if cfg.force_x11 and os.environ.get("WAYLAND_DISPLAY") and os.environ.get("DISPLAY"):
         os.environ["QT_QPA_PLATFORM"] = "xcb"
 
 

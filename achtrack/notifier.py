@@ -140,9 +140,15 @@ class Toast(QWidget):
 
     # animation -----------------------------------------------------------
 
+    @staticmethod
+    def _can_fade() -> bool:
+        # Only the X11 backend supports window opacity; elsewhere Qt warns on every frame.
+        return QGuiApplication.platformName() == "xcb"
+
     def present(self, start: QPoint, end: QPoint) -> None:
         self.move(start)
-        self.setWindowOpacity(0.0)
+        if self._can_fade():
+            self.setWindowOpacity(0.0)
         self.show()
         self.raise_()
         group = QParallelAnimationGroup(self)
@@ -156,7 +162,8 @@ class Toast(QWidget):
         fade.setStartValue(0.0)
         fade.setEndValue(1.0)
         group.addAnimation(slide)
-        group.addAnimation(fade)
+        if self._can_fade():
+            group.addAnimation(fade)
         group.start()
         self._anims.append(group)
         if self.data.rare:
@@ -186,6 +193,9 @@ class Toast(QWidget):
             return
         self.closing = True
         self._timer.stop()
+        if not self._can_fade():
+            self._finish()
+            return
         fade = QPropertyAnimation(self, b"windowOpacity", self)
         fade.setDuration(320)
         fade.setStartValue(self.windowOpacity())

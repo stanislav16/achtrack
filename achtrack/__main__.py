@@ -126,21 +126,15 @@ def cmd_sync_steam() -> int:
     from .db import Database
     from .engine import Engine, Listener
 
-    class Printer(Listener):
-        def on_error(self, message: str) -> None:
-            print(f"error: {message}")
-
     cfg = Config.load()
-    if not cfg.steam_api_key:
-        print("Add your Steam Web API key in Settings first.")
-        return 1
     db = Database()
-    before = db.q("SELECT COUNT(*) FROM unlocks WHERE source = 'Steam'")[0][0]
-    engine = Engine(cfg, db, Printer())
-    engine.steam_sync(db)
-    after = db.q("SELECT COUNT(*) FROM unlocks WHERE source = 'Steam'")[0][0]
-    games = db.q("SELECT COUNT(*) FROM games WHERE steam_owned = 1")[0][0]
-    print(f"Steam account {engine._steam_id or '?'}: {games} played games, {after} achievements ({after - before} new).")
+    engine = Engine(cfg, db, Listener())
+    status = engine.steam_sync(db, report=print)
+    if status["error"]:
+        print(f"Steam sync failed: {status['error']}")
+        return 1
+    print(f"Steam account {status['steam_id']}: {status['games']} played games, "
+          f"{status['achievements']} achievements ({status['new_achievements']} new).")
     return 0
 
 

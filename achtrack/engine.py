@@ -537,24 +537,39 @@ class Engine:
         self._steam_thread = threading.Thread(target=work, name="achtrack-steam", daemon=True)
         self._steam_thread.start()
 
-    def steam_sync(self, db: Database) -> None:
-        """Copies owned Steam games, their playtime and Steam-earned achievements into the library."""
+    def steam_sync(self, db: Database, report=None) -> dict:
+        """Copies owned Steam games, their playtime and Steam-earned achievements into the library.
+
+        The outcome is stored as meta "steam_sync" so Settings can show it; report(line) gets
+        one line per game for the command line."""
+        status = {"time": int(time.time()), "ok": False, "error": "", "games": 0, "achievements": 0,
+                  "new_achievements": 0, "steam_id": ""}
+
+        def finish(error: str = "") -> dict:
+            status["error"] = error
+            status["ok"] = not error
+            db.set_meta("steam_sync", status)
+            if error:
+                self._error(f"Steam sync: {error}")
+            self.listener.on_changed()
+            return status
+
         key = self.cfg.steam_api_key.strip()
-        if not self.cfg.steam_sync or not key:
-            return
+        if not self.cfg.steam_sync:
+            return finish("turned off in Settings")
+        if not key:
+            return finish("no Steam Web API key in Settings")
         try:
             if self._steam_id is None:
                 self._steam_id = (steam_api.parse_steam_id(self.cfg.steam_id, key) if self.cfg.steam_id.strip()
                                   else detect_steam_id()) or ""
+            status["steam_id"] = self._steam_id
             if not self._steam_id:
-                self._error("Couldn't find your Steam account - enter your Steam profile URL in Settings")
-                return
+                return finish("couldn't find your Steam account - enter your Steam profile URL in Settings")
             owned = steam_api.fetch_owned_games(key, self._steam_id)
         except steam_api.SteamError as e:
-            self._error(f"Steam library sync failed: {e}")
-            return
+            return finish(str(e))
 
-        imported = 0
         for entry in owned:
             appid = entry.get("appid")
             seconds = int(entry.get("playtime_forever") or 0) * 60
@@ -568,28 +583,36 @@ class Engine:
                                header_url=steam_api.HEADER_URL.format(appid=appid))
                 self.meta_queue.append(appid)
                 game = db.game(appid)
-            changed = (not game["steam_owned"] or game["steam_playtime"] != seconds
-                       or game["steam_last_played"] != last)
+            status["games"] += 1
             db.update_game(appid, steam_owned=1, steam_playtime=seconds, steam_last_played=last)
-            if not changed or not seconds:
+            # Fetch when playtime moved, or until we've successfully read this game once.
+            synced = db.get_meta(f"steam_ach:{appid}")
+            if synced is not None and synced.get("playtime") == seconds and synced.get("last") == last:
+                status["achievements"] += synced.get("count", 0)
                 continue
             try:
                 earned = steam_api.fetch_player_achievements(key, self._steam_id, appid, self.cfg.language or "english")
             except steam_api.SteamError as e:
-                # Put the old values back so the next sync tries this game again.
-                db.update_game(appid, steam_playtime=game["steam_playtime"], steam_last_played=game["steam_last_played"])
                 if e.status in (401, 403):
-                    self._error(f"Steam library sync failed: {e}")
-                    break
-                log.info("achievements for %s: %s", appid, e)
+                    return finish("Steam won't share your achievements: set your Steam profile's Game details to "
+                                  "Public (Steam → Profile → Edit Profile → Privacy Settings), then Sync again")
+                if report:
+                    report(f"  {entry.get('name') or appid}: couldn't read achievements ({e})")
                 continue
+            added = 0
             with db.tx():
                 for api_name, unlocked_at in earned:
                     if db.add_unlock(appid, api_name, unlocked_at or int(time.time()), STEAM):
-                        imported += 1
-        if imported:
-            log.info("imported %d Steam achievements", imported)
-        self.listener.on_changed()
+                        added += 1
+            db.set_meta(f"steam_ach:{appid}", {"playtime": seconds, "last": last, "count": len(earned)})
+            status["achievements"] += len(earned)
+            status["new_achievements"] += added
+            if report:
+                report(f"  {entry.get('name') or appid}: {seconds / 3600:.1f} h, {len(earned)} achievements"
+                       + (f" ({added} new)" if added else ""))
+        if status["new_achievements"]:
+            log.info("imported %d Steam achievements", status["new_achievements"])
+        return finish()
 
     # playtime ------------------------------------------------------------
 

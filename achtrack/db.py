@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -76,6 +77,10 @@ CREATE TABLE IF NOT EXISTS save_rejections(
     name TEXT NOT NULL,
     key TEXT NOT NULL,
     PRIMARY KEY(appid, name, key)
+);
+CREATE TABLE IF NOT EXISTS meta(
+    key TEXT PRIMARY KEY,
+    value TEXT
 );
 CREATE TABLE IF NOT EXISTS sessions(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -246,6 +251,18 @@ class Database:
     def unlock_note(self, appid: int, name: str) -> str | None:
         rows = self.q("SELECT note FROM unlocks WHERE appid = ? AND name = ?", (appid, name))
         return rows[0][0] if rows else None
+
+    def get_meta(self, key: str):
+        rows = self.q("SELECT value FROM meta WHERE key = ?", (key,))
+        if not rows:
+            return None
+        try:
+            return json.loads(rows[0][0])
+        except (TypeError, ValueError):
+            return None
+
+    def set_meta(self, key: str, value) -> None:
+        self.x("INSERT OR REPLACE INTO meta VALUES(?, ?)", (key, json.dumps(value)))
 
     # save files -----------------------------------------------------------
 

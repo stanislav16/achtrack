@@ -143,6 +143,16 @@ def load_pixmap(path: str | None, size: int, gray: bool = False) -> QPixmap:
     return pm.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
 
 
+def steam_sync_text(status: dict | None) -> str:
+    if not status:
+        return "Not synced yet."
+    when = fmt_day(status.get("time"))
+    if status.get("error"):
+        return f"<span style='color:#e5735c'>Last sync failed ({when}): {status['error']}</span>"
+    return (f"Last sync {when.lower() if when in ('Today', 'Yesterday') else when}: {status.get('games', 0)} played "
+            f"games, {status.get('achievements', 0)} Steam achievements.")
+
+
 def likelihood(a: dict, hours: float) -> float:
     """Rough chance the player has this: common ones come early, rare ones need hours in the game."""
     pct = a.get("global_pct")
@@ -454,7 +464,12 @@ class DetailView(QWidget):
             self.banner.setPixmap(QPixmap())
             self.banner.setText("")
 
-        if not schema_total:
+        sync = db.get_meta("steam_sync") or {}
+        if game["steam_owned"] and sync.get("error"):
+            self.notice.setText(f"<span style='color:#e5735c'>Steam sync problem:</span> {sync['error']} "
+                                "<a href='#' style='color:#66c0f4'>Open Settings</a>")
+            self.notice.show()
+        elif not schema_total:
             if not self.win.cfg.steam_api_key:
                 self.notice.setText("Achievement names and icons come from Steam. "
                                     "<a href='#' style='color:#66c0f4'>Add your free Steam Web API key in Settings</a> "
@@ -842,6 +857,15 @@ class SettingsDialog(QDialog):
         self.steam_sync = QCheckBox("Copy my Steam games, playtime and achievements into my library")
         self.steam_sync.setChecked(cfg.steam_sync)
         form.addRow("", self.steam_sync)
+        sync_row = QHBoxLayout()
+        self.sync_status = QLabel(steam_sync_text(parent.db.get_meta("steam_sync")))
+        self.sync_status.setObjectName("Hint")
+        self.sync_status.setWordWrap(True)
+        sync_now = QPushButton("Sync now")
+        sync_now.clicked.connect(self._sync_now)
+        sync_row.addWidget(self.sync_status, 1)
+        sync_row.addWidget(sync_now)
+        form.addRow("", sync_row)
         self.review = QCheckBox("After playing a game whose crack doesn't record achievements, ask what I earned")
         self.review.setChecked(cfg.session_review)
         form.addRow("", self.review)
@@ -919,6 +943,21 @@ class SettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         bottom.addWidget(buttons)
         lay.addLayout(bottom)
+
+    def _sync_now(self) -> None:
+        self.win.cfg.steam_api_key = self.key.text().strip()
+        self.win.cfg.steam_id = self.steam_id.text().strip()
+        self.win.cfg.steam_sync = True
+        self.steam_sync.setChecked(True)
+        self.win.worker.request("steam_sync")
+        self.sync_status.setText("Syncing… (a large library can take a minute)")
+        QTimer.singleShot(4000, self._refresh_sync_status)
+
+    def _refresh_sync_status(self) -> None:
+        status = self.win.db.get_meta("steam_sync")
+        self.sync_status.setText(steam_sync_text(status))
+        if status is None or time.time() - status.get("time", 0) > 5:
+            QTimer.singleShot(3000, self._refresh_sync_status)
 
     def _file_row(self, value: str, placeholder: str):
         row = QWidget()

@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDateTim
 
 from . import __version__, desktop
 from .config import APP_ICON, APP_NAME, POPUP_CORNERS, Config
-from .db import MANUAL, STEAM, Database
+from .db import MANUAL, SAVE, STEAM, Database
 from .engine import build_unlock_event, needs_review
 from .notifier import ToastData, trophy_pixmap
 from .scanner import detect_appid_in_tree, detect_steam_id
@@ -89,6 +89,8 @@ QScrollBar::add-page, QScrollBar::sub-page { background: none; }
 #Tag[kind="rare"] { background: #f0c75e; }
 #ReviewRow { background: #1f2630; border-radius: 4px; }
 #ReviewRow[checked="true"] { background: #2a3b52; }
+#Found { color: #a4d007; font-size: 12px; }
+#SaveStatus { color: #7f8b98; font-size: 12px; }
 QCheckBox { spacing: 8px; }
 QCheckBox::indicator { width: 16px; height: 16px; border-radius: 3px; background: #0f1319; border: 1px solid #3a4452; }
 QCheckBox::indicator:checked { background: #1a9fff; border-color: #1a9fff; }
@@ -235,7 +237,7 @@ class AchievementRow(QFrame):
         right.setSpacing(4)
         if unlocked:
             source = a.get("source")
-            tag = "  ·  Steam" if source == STEAM else "  ·  Added by you" if source == MANUAL else ""
+            tag = {STEAM: "  ·  Steam", MANUAL: "  ·  Added by you", SAVE: "  ·  Found in your save"}.get(source, "")
             date = QLabel(fmt_unlock(a["unlocked_at"]) + tag)
             date.setObjectName("AchDate")
             date.setAlignment(Qt.AlignmentFlag.AlignRight)
@@ -321,6 +323,10 @@ class DetailView(QWidget):
         prog.addWidget(self.progress_label)
         prog.addStretch(1)
         info.addLayout(prog)
+        self.save_status = QLabel()
+        self.save_status.setObjectName("SaveStatus")
+        self.save_status.setWordWrap(True)
+        info.addWidget(self.save_status)
         info.addStretch(1)
         header.addLayout(info, 1)
         root.addLayout(header)
@@ -374,6 +380,21 @@ class DetailView(QWidget):
                 self.win.worker.request("icons", appid)
         self.refresh()
 
+    def _save_status(self, db) -> str:
+        if not self.win.cfg.save_detection:
+            return ""
+        files = db.save_files(self.appid)
+        readable = [f for f in files if f["readable"]]
+        pending = len(db.suggestions(self.appid))
+        extra = f"  ·  {pending} possible achievement{'s' if pending != 1 else ''} to review" if pending else ""
+        if readable:
+            formats = sorted({f["format"] for f in readable if f["format"]})
+            return (f"💾 Reading {len(readable)} save file{'s' if len(readable) != 1 else ''} "
+                    f"({', '.join(formats)}) for progress{extra}")
+        if files:
+            return "💾 Found this game's save, but it's encrypted or in an unknown format - AchTrack can't read it"
+        return ""
+
     def _row_menu(self, pos) -> None:
         item = self.list.itemAt(pos)
         a = item.data(Qt.ItemDataRole.UserRole) if item else None
@@ -387,6 +408,12 @@ class DetailView(QWidget):
         elif a.get("source") == MANUAL:
             menu.addAction("Change unlock date…", lambda: self.win.change_unlock_date(appid, name, a["unlocked_at"]))
             menu.addAction("Undo - mark as locked", lambda: self.win.remove_manual_unlock(appid, name))
+        elif a.get("source") == SAVE:
+            note = self.win.db.unlock_note(appid, name) or ""
+            info = menu.addAction(f"Found in save: {note}" if note else "Found in your save")
+            info.setEnabled(False)
+            menu.addAction("Not earned - undo and don't match this again",
+                           lambda: self.win.reject_save_unlock(appid, name))
         else:
             info = menu.addAction(f"Unlocked via {a.get('source') or 'emulator'}")
             info.setEnabled(False)
@@ -417,6 +444,7 @@ class DetailView(QWidget):
         self.progress.setRange(0, max(total, 1))
         self.progress.setValue(unlocked)
         self.progress_label.setText(f"{unlocked * 100 // total}%" if total else "")
+        self.save_status.setText(self._save_status(db))
         banner_path = cached_icon(self.appid, game["header_url"] or "")
         if banner_path:
             pm = QPixmap(banner_path).scaled(self.banner.size(), Qt.AspectRatioMode.KeepAspectRatioByExpanding,
@@ -503,9 +531,10 @@ def _tag(text: str, kind: str) -> QLabel:
 class ReviewRow(QFrame):
     """One locked achievement with a checkbox; clicking anywhere on the row toggles it."""
 
-    def __init__(self, appid: int, a: dict):
+    def __init__(self, appid: int, a: dict, found: str | None = None):
         super().__init__()
         self.name = a["name"]
+        self.found = found
         self.search_text = f"{a.get('display_name') or ''} {a.get('description') or ''}".lower()
         self.setObjectName("ReviewRow")
         self.setProperty("checked", False)
@@ -541,6 +570,11 @@ class ReviewRow(QFrame):
         desc.setObjectName("AchDesc")
         desc.setWordWrap(True)
         texts.addWidget(desc)
+        if found:
+            hit = QLabel(f"Found in your save: {found}")
+            hit.setObjectName("Found")
+            hit.setWordWrap(True)
+            texts.addWidget(hit)
         lay.addLayout(texts, 1)
 
         if pct is not None:
@@ -585,9 +619,11 @@ class ReviewDialog(QDialog):
         sub = QLabel("  ·  ".join(parts))
         sub.setObjectName("Muted")
         lay.addWidget(sub)
-        hint = QLabel("This game's crack isn't recording achievements, so tick the ones you've done. "
-                      "The list is sorted by how likely you are to have each one, based on how many Steam players "
-                      "have it and how long you've played. Hidden achievements are included.")
+        self.suggested = db.suggestions(appid)
+        hint = QLabel(("Ticked ones were found in your save file - untick any you didn't earn. " if self.suggested
+                       else "") +
+                      "Tick the ones you've done. The rest is sorted by how likely you are to have each one, based on "
+                      "how many Steam players have it and how long you've played. Hidden achievements are included.")
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
         lay.addWidget(hint)
@@ -606,10 +642,11 @@ class ReviewDialog(QDialog):
         lay.addWidget(self.list, 1)
         hours = total_seconds / 3600
         locked = [a for a in db.achievements(appid) if not a.get("unlocked_at")]
-        locked.sort(key=lambda a: -likelihood(a, hours))
+        locked.sort(key=lambda a: (a["name"] not in self.suggested, -likelihood(a, hours)))
         self.rows = []
         for a in locked:
-            row = ReviewRow(appid, a)
+            row = ReviewRow(appid, a, self.suggested.get(a["name"]))
+            row.check.setChecked(a["name"] in self.suggested)
             row.check.toggled.connect(self._update_count)
             item = QListWidgetItem()
             item.setFlags(Qt.ItemFlag.ItemIsEnabled)
@@ -660,7 +697,15 @@ class ReviewDialog(QDialog):
 
     def _unlock(self) -> None:
         self._save_preference()
-        self.win.manual_unlock(self.appid, self._checked(), int(time.time()))
+        checked = set(self._checked())
+        db = self.win.db
+        for _item, row in self.rows:
+            if row.found and row.name not in checked:
+                # Unticked a save suggestion: don't suggest it from that field again.
+                db.reject(self.appid, row.name, row.found.split(" = ")[0])
+                db.drop_suggestion(self.appid, row.name)
+        self.win.manual_unlock(self.appid, [n for n in self._checked()], int(time.time()),
+                               notes={r.name: f"Confirmed from save: {r.found}" for _i, r in self.rows if r.found})
         self.accept()
 
 
@@ -800,6 +845,9 @@ class SettingsDialog(QDialog):
         self.review = QCheckBox("After playing a game whose crack doesn't record achievements, ask what I earned")
         self.review.setChecked(cfg.session_review)
         form.addRow("", self.review)
+        self.saves = QCheckBox("Detect achievements from games' save files")
+        self.saves.setChecked(cfg.save_detection)
+        form.addRow("", self.saves)
 
         self.language = QComboBox()
         self.language.setEditable(True)
@@ -919,6 +967,7 @@ class SettingsDialog(QDialog):
         cfg.steam_id = self.steam_id.text().strip()
         cfg.steam_sync = self.steam_sync.isChecked()
         cfg.session_review = self.review.isChecked()
+        cfg.save_detection = self.saves.isChecked()
         cfg.scan_dirs = [line.strip() for line in self.dirs.toPlainText().splitlines() if line.strip()]
         cfg.save()
         try:
@@ -1134,8 +1183,9 @@ class MainWindow(QMainWindow):
         dialog.raise_()
         dialog.activateWindow()
 
-    def manual_unlock(self, appid: int, names: list, ts: int, popup: bool = True) -> None:
-        added = [n for n in names if self.db.add_unlock(appid, n, ts, MANUAL)]
+    def manual_unlock(self, appid: int, names: list, ts: int, popup: bool = True, notes: dict | None = None) -> None:
+        notes = notes or {}
+        added = [n for n in names if self.db.add_unlock(appid, n, ts, MANUAL, notes.get(n))]
         if popup and added:
             for name in added[:POPUP_BURST]:
                 self.notifier.achievement(build_unlock_event(self.db, appid, name, download=False))
@@ -1160,6 +1210,13 @@ class MainWindow(QMainWindow):
 
     def remove_manual_unlock(self, appid: int, name: str) -> None:
         self.db.remove_unlock(appid, name, MANUAL)
+        self.reload(force=True)
+
+    def reject_save_unlock(self, appid: int, name: str) -> None:
+        note = self.db.unlock_note(appid, name) or ""
+        if note:
+            self.db.reject(appid, name, note.split(" = ")[0])
+        self.db.remove_unlock(appid, name, SAVE)
         self.reload(force=True)
 
     def _sync_steam(self) -> None:

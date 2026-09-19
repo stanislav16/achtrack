@@ -1,0 +1,511 @@
+"""Reading game save files in common engine formats, and finding which files are a game's saves.
+
+Every reader turns a save into a flat {path: value} dict ("Progress.Chapter": 6,
+"Bosses[3]": "SoulOfCinder", "Inventory.Stones.__len__": 23) that the matcher can compare
+between two saves. Supported:
+  * Unreal Engine SaveGame (GVAS), also zlib/gzip-compressed
+  * JSON (Unity JsonUtility, Easy Save 3 unencrypted, most indie games)
+  * XML (.NET/Unity XmlSerializer, many older games)
+  * INI / key=value text
+  * Unity PlayerPrefs, which Wine keeps in the prefix's user.reg
+Encrypted or proprietary binary saves are reported as unreadable.
+"""
+from __future__ import annotations
+
+import gzip
+import json
+import os
+import re
+import struct
+import time
+import xml.etree.ElementTree as ET
+import zlib
+from pathlib import Path
+
+MAX_SAVE_BYTES = 64 * 1024 * 1024
+MAX_FIELDS = 200_000
+MAX_LIST = 5_000
+
+
+class Unreadable(Exception):
+    pass
+
+
+# --- flattening ----------------------------------------------------------------------------------
+
+def flatten(obj, prefix: str = "", out: dict | None = None) -> dict:
+    out = {} if out is None else out
+    if len(out) >= MAX_FIELDS:
+        return out
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            flatten(v, f"{prefix}.{k}" if prefix else str(k), out)
+    elif isinstance(obj, (list, tuple)):
+        out[f"{prefix}.__len__"] = len(obj)
+        for i, v in enumerate(obj[:MAX_LIST]):
+            flatten(v, f"{prefix}[{i}]", out)
+    elif isinstance(obj, (bool, int, float, str)) or obj is None:
+        if isinstance(obj, float) and obj.is_integer() and abs(obj) < 2 ** 53:
+            obj = int(obj)
+        out[prefix or "value"] = obj
+    return out
+
+
+# --- Unreal Engine GVAS ----------------------------------------------------------------------------
+
+FIXED_STRUCTS = {"Vector", "Rotator", "Quat", "Vector2D", "Vector4", "LinearColor", "Color", "Guid", "DateTime",
+                 "Timespan", "IntPoint", "IntVector", "Box", "Box2D", "Plane", "Transform", "Matrix"}
+
+
+class _Reader:
+    def __init__(self, data: bytes):
+        self.data = data
+        self.pos = 0
+
+    def take(self, n: int) -> bytes:
+        if n < 0 or self.pos + n > len(self.data):
+            raise Unreadable("truncated Unreal save")
+        chunk = self.data[self.pos:self.pos + n]
+        self.pos += n
+        return chunk
+
+    def unpack(self, fmt: str):
+        return struct.unpack("<" + fmt, self.take(struct.calcsize("<" + fmt)))[0]
+
+    def fstring(self) -> str:
+        n = self.unpack("i")
+        if n == 0:
+            return ""
+        if n > 0:
+            if n > 65536:
+                raise Unreadable("bad string in Unreal save")
+            return self.take(n).decode("utf-8", "replace").rstrip("\0")
+        if -n > 65536:
+            raise Unreadable("bad string in Unreal save")
+        return self.take(-n * 2).decode("utf-16-le", "replace").rstrip("\0")
+
+    def skip_guid(self) -> None:
+        if self.unpack("B"):
+            self.take(16)
+
+
+SIMPLE = {
+    "IntProperty": "i", "Int64Property": "q", "UInt32Property": "I", "UInt64Property": "Q",
+    "Int16Property": "h", "UInt16Property": "H", "Int8Property": "b", "FloatProperty": "f", "DoubleProperty": "d",
+}
+STRINGY = {"StrProperty", "NameProperty", "ObjectProperty", "SoftObjectProperty", "ClassProperty"}
+
+
+def _gvas_element(r: _Reader, kind: str, struct_name: str = "", elem_size: int = 0):
+    if kind in SIMPLE:
+        return r.unpack(SIMPLE[kind])
+    if kind in STRINGY or kind == "EnumProperty":
+        return r.fstring()
+    if kind == "BoolProperty":
+        return bool(r.unpack("B"))
+    if kind == "ByteProperty":
+        return r.unpack("B")
+    if kind == "StructProperty":
+        if struct_name in FIXED_STRUCTS:
+            r.take(elem_size)
+            return None
+        return _gvas_properties(r)
+    raise Unreadable(f"unsupported element type {kind}")
+
+
+def _gvas_value(r: _Reader, kind: str, size: int):
+    if kind == "BoolProperty":
+        value = bool(r.unpack("B"))
+        r.skip_guid()
+        return value
+    if kind == "StructProperty":
+        struct_name = r.fstring()
+        r.take(16)
+        r.skip_guid()
+        end = r.pos + size
+        value = None if struct_name in FIXED_STRUCTS else _safe(lambda: _gvas_properties(r, end))
+        r.pos = end
+        return value
+    if kind in ("ByteProperty", "EnumProperty"):
+        enum = r.fstring()
+        r.skip_guid()
+        end = r.pos + size
+        if kind == "ByteProperty" and (enum == "None" or size == 1):
+            value = r.unpack("B")
+        else:
+            value = r.fstring()
+        r.pos = end
+        return value
+    if kind == "ArrayProperty":
+        inner = r.fstring()
+        r.skip_guid()
+        end = r.pos + size
+        value = _safe(lambda: _gvas_array(r, inner, size))
+        r.pos = end
+        return value
+    if kind == "SetProperty":
+        inner = r.fstring()
+        r.skip_guid()
+        end = r.pos + size
+
+        def read_set():
+            r.unpack("i")  # removed entries
+            return [_gvas_element(r, inner) for _ in range(min(r.unpack("i"), MAX_LIST))]
+
+        value = _safe(read_set)
+        r.pos = end
+        return value
+    if kind == "MapProperty":
+        key_kind, value_kind = r.fstring(), r.fstring()
+        r.skip_guid()
+        end = r.pos + size
+
+        def read_map():
+            r.unpack("i")
+            out = {}
+            for _ in range(min(r.unpack("i"), MAX_LIST)):
+                k = _gvas_element(r, key_kind)
+                out[str(k) if not isinstance(k, dict) else f"#{len(out)}"] = _gvas_element(r, value_kind)
+            return out
+
+        value = _safe(read_map)
+        r.pos = end
+        return value
+    r.skip_guid()
+    end = r.pos + size
+    value = None
+    if kind in SIMPLE and size == struct.calcsize("<" + SIMPLE[kind]):
+        value = r.unpack(SIMPLE[kind])
+    elif kind in STRINGY:
+        value = _safe(r.fstring)
+    r.pos = end
+    return value
+
+
+def _gvas_array(r: _Reader, inner: str, size: int) -> list:
+    count = r.unpack("i")
+    if count < 0 or count > 10_000_000:
+        raise Unreadable("bad array")
+    if inner == "StructProperty":
+        r.fstring()                     # property name
+        r.fstring()                     # "StructProperty"
+        inner_size = r.unpack("q")      # size + array index
+        struct_name = r.fstring()
+        r.take(16)
+        r.skip_guid()
+        if struct_name in FIXED_STRUCTS:
+            r.take(inner_size & 0xFFFFFFFF)
+            return [None] * min(count, MAX_LIST)
+        return [_gvas_properties(r) for _ in range(min(count, MAX_LIST))]
+    if inner == "ByteProperty" and size - 4 == count:
+        return list(r.take(count)[:MAX_LIST])
+    return [_gvas_element(r, inner) for _ in range(min(count, MAX_LIST))]
+
+
+def _safe(fn):
+    try:
+        return fn()
+    except (Unreadable, struct.error, UnicodeError, RecursionError):
+        return None
+
+
+def _gvas_properties(r: _Reader, end: int | None = None) -> dict:
+    props: dict = {}
+    while r.pos < len(r.data) and (end is None or r.pos < end):
+        name = r.fstring()
+        if name in ("None", ""):
+            break
+        kind = r.fstring()
+        size = r.unpack("i")
+        index = r.unpack("i")
+        value = _gvas_value(r, kind, size)
+        key = name if index == 0 else f"{name}[{index}]"
+        props[key] = value
+    return props
+
+
+def parse_gvas(data: bytes) -> dict:
+    r = _Reader(data)
+    if r.take(4) != b"GVAS":
+        raise Unreadable("not an Unreal save")
+    save_version = r.unpack("i")
+    r.unpack("i")                       # UE4 package version
+    if save_version >= 3:
+        r.unpack("i")                   # UE5 package version
+    r.take(6)                           # engine major/minor/patch
+    r.unpack("I")                       # changelist
+    r.fstring()                         # branch
+    r.unpack("i")                       # custom version format
+    count = r.unpack("i")
+    if not 0 <= count < 10_000:
+        raise Unreadable("bad Unreal save header")
+    r.take(count * 20)
+    save_class = r.fstring()
+    start = r.pos
+    try:
+        props = _gvas_properties(r)
+    except (Unreadable, struct.error):
+        # Some UE 5.4+ saves carry one extra flag byte before the properties.
+        r.pos = start + 1
+        props = _gvas_properties(r)
+    return {"__class__": save_class, **props}
+
+
+# --- other formats ---------------------------------------------------------------------------------
+
+def _xml_to_obj(elem: ET.Element):
+    children = list(elem)
+    if not children and not elem.attrib:
+        return _scalar(elem.text or "")
+    out: dict = {k: _scalar(v) for k, v in elem.attrib.items()}
+    for child in children:
+        tag = child.tag.split("}")[-1]
+        value = _xml_to_obj(child)
+        if tag in out:
+            if not isinstance(out[tag], list):
+                out[tag] = [out[tag]]
+            out[tag].append(value)
+        else:
+            out[tag] = value
+    if elem.text and elem.text.strip() and children:
+        out["#text"] = _scalar(elem.text)
+    return out
+
+
+def _scalar(text: str):
+    s = text.strip()
+    low = s.lower()
+    if low in ("true", "false"):
+        return low == "true"
+    try:
+        return int(s)
+    except ValueError:
+        pass
+    try:
+        return float(s)
+    except ValueError:
+        return s
+
+
+def _parse_ini(text: str) -> dict:
+    out: dict = {}
+    section = ""
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line[0] in ";#":
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1].strip()
+        elif "=" in line:
+            k, v = line.split("=", 1)
+            out[f"{section}.{k.strip()}" if section else k.strip()] = _scalar(v)
+    return out
+
+
+def _decode_text(data: bytes) -> str | None:
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        text = data.decode("utf-16", "replace")
+    else:
+        try:
+            text = data.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            return None
+    sample = text[:4000]
+    printable = sum(ch.isprintable() or ch in "\r\n\t" for ch in sample)
+    return text if sample and printable / len(sample) > 0.97 else None
+
+
+def _decompressed(data: bytes):
+    for offset in (0, 4, 8, 12, 16):
+        chunk = data[offset:]
+        for fn in (zlib.decompress, gzip.decompress):
+            try:
+                out = fn(chunk)
+            except (zlib.error, OSError, EOFError):
+                continue
+            if out:
+                yield out
+
+
+def load_save(path: str) -> tuple:
+    """Returns (format name, flat dict). Raises Unreadable for encrypted/unknown files."""
+    if os.path.basename(path).lower() == "user.reg":
+        return "Unity PlayerPrefs (registry)", parse_user_reg(Path(path))
+    size = os.path.getsize(path)
+    if size > MAX_SAVE_BYTES:
+        raise Unreadable("too large")
+    data = Path(path).read_bytes()
+    if not data:
+        raise Unreadable("empty file")
+
+    for attempt, blob in enumerate([data, *_decompressed(data)]):
+        label = "" if attempt == 0 else " (compressed)"
+        if blob[:4] == b"GVAS":
+            return "Unreal Engine" + label, flatten(parse_gvas(blob))
+        text = _decode_text(blob)
+        if text is None:
+            continue
+        stripped = text.lstrip()
+        if stripped[:1] in "{[":
+            try:
+                return "JSON" + label, flatten(json.loads(stripped))
+            except ValueError:
+                pass
+        if stripped.startswith("<"):
+            try:
+                root = ET.fromstring(stripped)
+                return "XML" + label, flatten({root.tag.split("}")[-1]: _xml_to_obj(root)})
+            except ET.ParseError:
+                pass
+        if sum(1 for line in text.splitlines()[:200] if "=" in line) >= 3:
+            return "INI" + label, flatten(_parse_ini(text))
+    raise Unreadable("encrypted or unknown binary format")
+
+
+# --- Unity PlayerPrefs in Wine's registry ----------------------------------------------------------
+
+REG_SKIP = ("software\\\\wine", "software\\\\microsoft", "software\\\\classes", "software\\\\policies",
+            "software\\\\valve", "control panel", "environment", "system", "volatile", "keyboard", "printers")
+
+
+def _reg_value(raw: str):
+    if raw.startswith('"'):
+        return raw.strip('"').replace('\\"', '"')
+    if raw.startswith("dword:"):
+        value = int(raw[6:], 16)
+        return value - 2 ** 32 if value >= 2 ** 31 else value
+    m = re.match(r"hex(?:\((\w+)\))?:(.*)", raw)
+    if m:
+        try:
+            blob = bytes.fromhex(m.group(2).replace(",", "").replace("\\", "").replace(" ", ""))
+        except ValueError:
+            return None
+        if blob.endswith(b"\0"):                           # Unity strings: UTF-8 + terminator
+            try:
+                decoded = blob.rstrip(b"\0").decode("utf-8")
+                if decoded.isprintable():
+                    return decoded
+            except UnicodeDecodeError:
+                pass
+        if len(blob) == 8:
+            number = struct.unpack("<d", blob)[0]           # Unity floats: 8-byte doubles
+            if number == number and abs(number) < 1e12:
+                return int(number) if float(number).is_integer() else number
+    return None
+
+
+def parse_user_reg(path: Path) -> dict:
+    """Game-owned keys under HKCU\\Software (where Unity keeps PlayerPrefs)."""
+    text = path.read_text(encoding="utf-8", errors="replace").replace("\\\n  ", "")
+    out: dict = {}
+    section = None
+    for line in text.splitlines():
+        if line.startswith("["):
+            name = line[1:line.index("]")] if "]" in line else ""
+            low = name.lower()
+            section = name if low.startswith("software\\\\") and not low.startswith(REG_SKIP) else None
+        elif section and line.startswith('"') and "=" in line:
+            key, _, raw = line.partition("=")
+            key = re.sub(r"_h\d+$", "", key.strip('"'))       # Unity appends a hash to each key
+            value = _reg_value(raw.strip())
+            if value is not None:
+                out[f"{section.replace(chr(92) * 2, '.')}.{key}"] = value
+    return out
+
+
+# --- finding a game's saves ------------------------------------------------------------------------
+
+SKIP_DIR_NAMES = {
+    "microsoft", "temp", "tmp", "nvidia", "nvidia corporation", "d3dscache", "cache", "caches", "shadercache",
+    "shadercaches", "logs", "log", "crashes", "crashreportclient", "webcache", "packages", "config", "configs",
+    "cef", "webview", "gpucache", "dxcache", "vulkan", "mesa_shader_cache", "fontcache", "unrealengine",
+    "epicgameslauncher", "goldberg steamemu saves", "gse saves", "codex", "rune", "empress", "onlinefix", "skidrow",
+    "steam", "wine", "windows", "programs", "start menu", "recent", "inetcache", "history",
+    "content", "paks", "binaries", "engine", "movies", "shaders", "plugins", "__pycache__", "redist", "_commonredist",
+}
+SKIP_EXTENSIONS = {
+    ".log", ".tmp", ".dmp", ".mdmp", ".dxvk-cache", ".pdb", ".dll", ".exe", ".png", ".jpg", ".jpeg", ".bmp", ".dds",
+    ".ttf", ".otf", ".lock", ".etl", ".pak", ".ucas", ".utoc", ".sig", ".mp4", ".bik", ".bk2", ".wav", ".ogg",
+    ".lnk", ".url", ".ico", ".cache", ".shader", ".pso", ".upipelinecache", ".ushaderbytecode",
+}
+
+
+def prefix_save_roots(prefix: str) -> list:
+    """Folders inside a Wine prefix where Windows games keep saves."""
+    roots = []
+    users = Path(prefix) / "drive_c" / "users"
+    try:
+        entries = [e for e in os.scandir(users) if e.is_dir()]
+    except OSError:
+        return roots
+    for entry in entries:
+        home = Path(entry.path)
+        if entry.name.lower() == "public":
+            roots.append(home / "Documents")
+            continue
+        roots += [home / "AppData" / "Local", home / "AppData" / "LocalLow", home / "AppData" / "Roaming",
+                  home / "Documents", home / "Saved Games"]
+    return [r for r in roots if r.is_dir()]
+
+
+def game_root(game_dir: str) -> str | None:
+    """Top folder of an installed game, from any folder inside it (e.g. its Steamworks DLL folder)."""
+    if not game_dir:
+        return None
+    home = os.path.expanduser("~")
+    path = os.path.abspath(game_dir)
+    while True:
+        parent = os.path.dirname(path)
+        if parent in ("/", home, path) or os.path.basename(parent).lower() in (
+                "games", "common", "heroic", "games (x86)", "program files", "program files (x86)", "drive_c"):
+            return path
+        path = parent
+
+
+def _walk_files(root: Path, only_save_paths: bool, max_depth: int = 7):
+    base = len(root.parts)
+    for dirpath, dirs, files in os.walk(root):
+        depth = len(Path(dirpath).parts) - base
+        dirs[:] = [d for d in dirs if d.lower() not in SKIP_DIR_NAMES and not d.startswith(".")] if depth < max_depth else []
+        if only_save_paths and "save" not in dirpath.lower():
+            continue
+        for name in files:
+            if os.path.splitext(name)[1].lower() not in SKIP_EXTENSIONS:
+                yield os.path.join(dirpath, name)
+
+
+def candidate_files(prefix: str | None, game_dir: str | None) -> list:
+    """Files that could be this game's saves: everything in the prefix's user folders, plus
+    anything under a *save* folder inside the game's install folder."""
+    out = []
+    if prefix:
+        for root in prefix_save_roots(prefix):
+            out += list(_walk_files(root, only_save_paths=False))
+        user_reg = Path(prefix) / "user.reg"
+        if user_reg.is_file():
+            out.append(str(user_reg))
+    root = game_root(game_dir) if game_dir else None
+    if root and os.path.isdir(root):
+        out += list(_walk_files(Path(root), only_save_paths=True))
+    return out
+
+
+def changed_since(paths: list, since: float) -> list:
+    out = []
+    for path in paths:
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue
+        if st.st_mtime >= since and 0 < st.st_size <= MAX_SAVE_BYTES:
+            out.append(path)
+    return out
+
+
+def looks_like_save(path: str) -> bool:
+    low = path.lower()
+    return "save" in low or low.endswith((".sav", ".save", ".es3", "user.reg"))
+
+
+def now() -> float:
+    return time.time()

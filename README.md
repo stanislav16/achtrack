@@ -25,6 +25,29 @@ The data lives on your disk, so you keep it even if something changes on Steam's
 - Steam achievements are imported quietly, because Steam already showed its own popup. Games owned
   but never played are left out.
 
+## Achievements from save files
+
+Most games store your progress, such as bosses beaten, current chapter and items collected, in their
+save file. AchTrack reads saves in common engine formats and compares each new save with the previous
+one. When a change fits an achievement's description, the achievement unlocks with the normal popup.
+This runs locally with no AI, and only reads saves when they change on disk.
+
+- **Formats:** Unreal Engine saves (`.sav`, including compressed ones), JSON (most Unity and indie
+  games), XML, INI, and Unity settings stored in the Wine registry. Encrypted or custom binary saves
+  can't be read. The game page then says so, and you use the review instead.
+- **Finding saves:** no setup. While a game runs, AchTrack notices which files in its Wine prefix
+  (AppData, Documents, Saved Games) or its install folder's save folders it writes.
+- **Matching:** "Collect 50 moonstones" ↔ `Moonstones = 50`, "Slay the Soul of Cinder" ↔
+  `bSoulOfCinderDefeated = true`, "Complete Chapter 5" ↔ `CurrentChapter = 6`, "Stagger an enemy" ↔
+  `StaggerCount = 1`. Counters also show as progress bars (23/50). Limits and settings (`MaxLevel`,
+  `MoonstonesRequired`, volume, positions, timers) are ignored.
+- **Safety:** only a clear change seen *during play* unlocks by itself. Weaker matches, and anything
+  already in a save the first time AchTrack reads it, are **pre-ticked in the review** instead.
+  Right-click a save unlock → *Not earned* to undo it; that field won't be matched to that
+  achievement again.
+- **Checking what it sees:** `achtrack saves` lists the save files it reads and what matched.
+  `achtrack saves <appid> --fields` also prints every value it read.
+
 ## When a crack doesn't record achievements
 
 Some cracks never save achievements. For example, some RUNE releases leave `achievements.ini` at
@@ -103,6 +126,7 @@ achtrack --background     start hidden (used by autostart)
 achtrack scan             list detected prefixes, achievement files and running games
 achtrack list             print the library with playtime and achievement counts
 achtrack sync-steam       copy your Steam games, playtime and achievements in now
+achtrack saves [appid]    show the save files AchTrack reads and what it matched (--fields for all values)
 achtrack test-popup [--rare]
 achtrack quit
 ```

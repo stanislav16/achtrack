@@ -53,6 +53,30 @@ CREATE TABLE IF NOT EXISTS sources(
     mtime REAL NOT NULL DEFAULT 0,
     size INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS save_files(
+    path TEXT NOT NULL,
+    appid INTEGER NOT NULL,
+    format TEXT,
+    readable INTEGER NOT NULL DEFAULT 0,
+    reason TEXT,
+    mtime REAL NOT NULL DEFAULT 0,
+    size INTEGER NOT NULL DEFAULT 0,
+    found_at INTEGER NOT NULL,
+    PRIMARY KEY(path, appid)
+);
+CREATE TABLE IF NOT EXISTS save_suggestions(
+    appid INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    reason TEXT,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY(appid, name)
+);
+CREATE TABLE IF NOT EXISTS save_rejections(
+    appid INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    key TEXT NOT NULL,
+    PRIMARY KEY(appid, name, key)
+);
 CREATE TABLE IF NOT EXISTS sessions(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     appid INTEGER NOT NULL,
@@ -70,6 +94,9 @@ MIGRATIONS = {
         "steam_owned": "INTEGER NOT NULL DEFAULT 0",
         "review": "INTEGER",  # NULL = decide automatically, 0 = never ask, 1 = always ask
     },
+    "unlocks": {
+        "note": "TEXT",       # why it unlocked, e.g. the save field that matched
+    },
 }
 
 GAME_FIELDS = {"name", "header_url", "exe_name", "game_dir", "last_played", "schema_fetched_at", "hidden",
@@ -78,6 +105,7 @@ GAME_FIELDS = {"name", "header_url", "exe_name", "game_dir", "last_played", "sch
 # Unlock sources that don't come from an emulator file.
 MANUAL = "Manual"
 STEAM = "Steam"
+SAVE = "Save"
 
 
 class Database:
@@ -212,14 +240,52 @@ class Database:
         return cur.rowcount == 1
 
     def emulator_unlock_count(self, appid: int) -> int:
-        return self.q("SELECT COUNT(*) FROM unlocks WHERE appid = ? AND COALESCE(source, '') NOT IN (?, ?)",
-                      (appid, MANUAL, STEAM))[0][0]
+        return self.q("SELECT COUNT(*) FROM unlocks WHERE appid = ? AND COALESCE(source, '') NOT IN (?, ?, ?)",
+                      (appid, MANUAL, STEAM, SAVE))[0][0]
+
+    def unlock_note(self, appid: int, name: str) -> str | None:
+        rows = self.q("SELECT note FROM unlocks WHERE appid = ? AND name = ?", (appid, name))
+        return rows[0][0] if rows else None
+
+    # save files -----------------------------------------------------------
+
+    def save_files(self, appid: int | None = None) -> list:
+        if appid is None:
+            return self.q("SELECT * FROM save_files")
+        return self.q("SELECT * FROM save_files WHERE appid = ? ORDER BY readable DESC, mtime DESC", (appid,))
+
+    def upsert_save_file(self, path: str, appid: int, fmt: str | None, readable: bool, reason: str | None,
+                         mtime: float, size: int) -> None:
+        self.x("""INSERT INTO save_files(path, appid, format, readable, reason, mtime, size, found_at)
+                  VALUES(?,?,?,?,?,?,?,?)
+                  ON CONFLICT(path, appid) DO UPDATE SET format = excluded.format, readable = excluded.readable,
+                  reason = excluded.reason, mtime = excluded.mtime, size = excluded.size""",
+               (path, appid, fmt, int(readable), reason, mtime, size, int(time.time())))
+
+    def suggestions(self, appid: int) -> dict:
+        return {r["name"]: r["reason"] for r in self.q("SELECT name, reason FROM save_suggestions WHERE appid = ?", (appid,))}
+
+    def add_suggestion(self, appid: int, name: str, reason: str) -> bool:
+        cur = self.x("INSERT OR IGNORE INTO save_suggestions VALUES(?,?,?,?)", (appid, name, reason, int(time.time())))
+        return cur.rowcount == 1
+
+    def drop_suggestion(self, appid: int, name: str) -> None:
+        self.x("DELETE FROM save_suggestions WHERE appid = ? AND name = ?", (appid, name))
+
+    def rejections(self, appid: int) -> set:
+        return {(r["name"], r["key"]) for r in self.q("SELECT name, key FROM save_rejections WHERE appid = ?", (appid,))}
+
+    def reject(self, appid: int, name: str, key: str) -> None:
+        self.x("INSERT OR IGNORE INTO save_rejections VALUES(?,?,?)", (appid, name, key))
 
     def unlocked_names(self, appid: int) -> set:
         return {r[0] for r in self.q("SELECT name FROM unlocks WHERE appid = ?", (appid,))}
 
-    def add_unlock(self, appid: int, name: str, ts: int, source: str) -> bool:
-        cur = self.x("INSERT OR IGNORE INTO unlocks VALUES(?,?,?,?)", (appid, name, ts, source))
+    def add_unlock(self, appid: int, name: str, ts: int, source: str, note: str | None = None) -> bool:
+        cur = self.x("INSERT OR IGNORE INTO unlocks(appid, name, unlocked_at, source, note) VALUES(?,?,?,?,?)",
+                     (appid, name, ts, source, note))
+        if cur.rowcount == 1:
+            self.x("DELETE FROM save_suggestions WHERE appid = ? AND name = ?", (appid, name))
         return cur.rowcount == 1
 
     def set_progress(self, appid: int, name: str, cur, maximum) -> None:

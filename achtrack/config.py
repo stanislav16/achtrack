@@ -39,6 +39,8 @@ class Config:
     steam_sync_interval: float = 900.0
     # After a session of a game whose crack doesn't record achievements, ask what was earned.
     session_review: bool = True
+    # Read games' save files (Unreal, Unity, JSON, XML...) to detect achievements the crack doesn't record.
+    save_detection: bool = True
     language: str = "english"
     # Extra folders to search for Wine prefixes (Lutris, Bottles, custom locations...).
     scan_dirs: list = field(default_factory=list)

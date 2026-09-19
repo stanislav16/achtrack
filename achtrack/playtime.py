@@ -66,6 +66,13 @@ def win_to_linux(arg: str, cwd: str, prefix: str) -> str | None:
     return os.path.join(cwd, path) if cwd else None
 
 
+def _prefix_of(proc: "_Proc") -> str:
+    prefix = proc.env.get("WINEPREFIX", "")
+    if not prefix and proc.env.get("STEAM_COMPAT_DATA_PATH"):
+        prefix = os.path.join(proc.env["STEAM_COMPAT_DATA_PATH"], "pfx")
+    return prefix
+
+
 def _is_steam_install(path: str) -> bool:
     # Games bought on Steam already get real achievements - leave them alone.
     return "/steamapps/common/" in path.lower()
@@ -77,6 +84,7 @@ class ProcessMonitor:
         self.self_pid = str(os.getpid())
         self.cache: dict = {}
         self.dir_cache: dict = {}
+        self.prefixes: dict = {}   # appid -> Wine prefix of its process, from the last scan
 
     @staticmethod
     def available() -> bool:
@@ -91,6 +99,7 @@ class ProcessMonitor:
     def scan(self, exe_map: dict) -> dict:
         """Returns {appid: game_dir or None} for every game currently running."""
         found: dict = {}
+        self.prefixes = {}
         alive = set()
         try:
             pids = [e.name for e in os.scandir("/proc") if e.name.isdigit()]
@@ -125,6 +134,9 @@ class ProcessMonitor:
                 if proc.detected:
                     appid, game_dir = proc.detected
             if appid is not None:
+                prefix = _prefix_of(proc)
+                if prefix and appid not in self.prefixes:
+                    self.prefixes[appid] = prefix
                 found.setdefault(appid, game_dir)
                 if game_dir and not found[appid]:
                     found[appid] = game_dir
@@ -180,9 +192,7 @@ class ProcessMonitor:
                 return appid, d
 
         # Wine rewrites argv[0] to the Windows path of the .exe.
-        prefix = proc.env.get("WINEPREFIX", "")
-        if not prefix and proc.env.get("STEAM_COMPAT_DATA_PATH"):
-            prefix = os.path.join(proc.env["STEAM_COMPAT_DATA_PATH"], "pfx")
+        prefix = _prefix_of(proc)
         cwd = _link(f"/proc/{pid}/cwd")
         exes = [a for a in proc.args[:3] if a.lower().endswith(".exe")]
         paths = [win_to_linux(a, cwd, prefix) for a in exes]

@@ -4,6 +4,8 @@ It has no Qt dependency; the GUI runs it on a worker thread and receives events 
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import queue
@@ -14,9 +16,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import steam_api
-from .config import Config
-from .db import STEAM, Database
+from . import matcher, savefiles, steam_api
+from .config import CACHE_DIR, Config
+from .db import SAVE, STEAM, Database
 from .emulators import parse_file
 from .playtime import ProcessMonitor
 from .scanner import detect_steam_id, find_local_schema, find_state_files
@@ -26,6 +28,9 @@ log = logging.getLogger(__name__)
 META_RETRY = 600            # seconds between failed metadata attempts for the same game
 META_MAX_AGE = 7 * 86400    # refresh names/percentages weekly
 RARE_PCT = 10.0             # Steam marks achievements under 10% as rare
+SAVE_SCAN_EVERY = 30.0      # seconds between looks for newly written save files while a game runs
+SNAPSHOT_FILES = 40         # save-looking files snapshotted when a game starts
+SNAPSHOT_DIR = CACHE_DIR / "saves"
 
 
 class Listener:
@@ -44,6 +49,10 @@ class _Running:
     seconds: float = 0.0
     pending: float = 0.0
     misses: int = 0
+    prefix: str | None = None
+    game_dir: str | None = None
+    next_save_scan: float = 0.0
+    snapshots: dict | None = None   # path -> flattened save as it was when the game started
 
 
 def game_title(row, appid: int) -> str:
@@ -55,6 +64,8 @@ def needs_review(db: Database, appid: int) -> bool:
     game = db.game(appid)
     if game is None or game["review"] == 0:
         return False
+    if db.suggestions(appid):
+        return True
     locked = db.q("""SELECT COUNT(*) FROM achievements a WHERE a.appid = ? AND NOT EXISTS
                      (SELECT 1 FROM unlocks u WHERE u.appid = a.appid AND u.name = a.name)""", (appid,))[0][0]
     if not locked:
@@ -105,6 +116,8 @@ class Engine:
         self._steam_id: str | None = None
         self._steam_thread: threading.Thread | None = None
         self._icons = ThreadPoolExecutor(max_workers=4, thread_name_prefix="achtrack-icons")
+        self.saves = {(r["path"], r["appid"]): dict(r) for r in self.db.save_files()}
+        self._models: dict = {}
         self._last_error = ("", 0.0)
 
     # main loop -----------------------------------------------------------
@@ -123,10 +136,15 @@ class Engine:
                     next_scan = now + max(10.0, self.cfg.rescan_interval)
                 if now >= next_poll:
                     self.poll()
+                    self.poll_saves()
                     next_poll = now + max(0.5, self.cfg.poll_interval)
                 if self.monitor and now >= next_proc:
                     self.track_processes()
                     next_proc = now + max(1.0, self.cfg.process_interval)
+                for appid, run in list(self.running.items()):
+                    if self.cfg.save_detection and time.time() >= run.next_save_scan:
+                        run.next_save_scan = time.time() + SAVE_SCAN_EVERY
+                        self.discover_saves(appid, run)
                 if now >= next_steam or self._force_steam:
                     self._force_steam = False
                     self._start_steam_sync()
@@ -329,6 +347,154 @@ class Engine:
         except RuntimeError:
             pass  # shutting down
 
+    # save files ----------------------------------------------------------
+
+    def _prefix_from_sources(self, appid: int) -> str | None:
+        for path in self.db.sources_for(appid):
+            idx = path.find("/drive_c/")
+            if idx > 0:
+                return path[:idx]
+        return None
+
+    def _is_shared(self, path: str) -> bool:
+        # The registry is shared by everything in the prefix: only read it while the game runs.
+        return os.path.basename(path).lower() == "user.reg"
+
+    def _snapshot_path(self, path: str, appid: int):
+        return SNAPSHOT_DIR / f"{appid}-{hashlib.sha1(path.encode()).hexdigest()[:16]}.json"
+
+    def _read_snapshot(self, path: str, appid: int) -> dict | None:
+        try:
+            return json.loads(self._snapshot_path(path, appid).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    def _write_snapshot(self, path: str, appid: int, flat: dict) -> None:
+        dest = self._snapshot_path(path, appid)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_suffix(".part")
+        tmp.write_text(json.dumps(flat), encoding="utf-8")
+        tmp.replace(dest)
+
+    def _snapshot_candidates(self, appid: int, run: _Running) -> dict:
+        """Remember save-looking files as they are at game start, so the first save of the
+        session can be compared against them instead of only being read as a starting point."""
+        snaps: dict = {}
+        deadline = time.monotonic() + 5.0
+        try:
+            files = savefiles.candidate_files(run.prefix, run.game_dir)
+        except OSError:
+            return snaps
+        files = [f for f in files if savefiles.looks_like_save(f) and (f, appid) not in self.saves
+                 and f not in self.sources]
+        files.sort(key=lambda f: os.path.getmtime(f) if os.path.exists(f) else 0, reverse=True)
+        for path in files[:SNAPSHOT_FILES]:
+            if time.monotonic() > deadline:
+                break
+            try:
+                snaps[path] = savefiles.load_save(path)[1]
+            except (savefiles.Unreadable, OSError, ValueError, UnicodeError):
+                continue
+        return snaps
+
+    def discover_saves(self, appid: int, run: _Running) -> None:
+        """Registers files the game wrote during this session as its saves."""
+        try:
+            files = savefiles.candidate_files(run.prefix, run.game_dir)
+        except OSError:
+            return
+        for path in savefiles.changed_since(files, run.started - 2):
+            if (path, appid) in self.saves or path in self.sources:
+                continue
+            old = (run.snapshots or {}).get(path)
+            try:
+                fmt, flat = savefiles.load_save(path)
+            except savefiles.Unreadable as e:
+                if savefiles.looks_like_save(path):
+                    st = os.stat(path)
+                    log.info("save for %s is unreadable (%s): %s", appid, e, path)
+                    self.db.upsert_save_file(path, appid, None, False, str(e), st.st_mtime, st.st_size)
+                    self.saves[(path, appid)] = {"path": path, "appid": appid, "readable": 0,
+                                                 "mtime": st.st_mtime, "size": st.st_size}
+                    self.listener.on_changed()
+                continue
+            except (OSError, ValueError, UnicodeError):
+                continue
+            log.info("found %s save for %s: %s", fmt, appid, path)
+            self._handle_save(path, appid, fmt, flat, old)
+
+    def poll_saves(self) -> None:
+        if not self.cfg.save_detection:
+            return
+        for (path, appid), info in list(self.saves.items()):
+            if not info.get("readable"):
+                continue
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            if st.st_mtime == info["mtime"] and st.st_size == info["size"]:
+                continue
+            try:
+                fmt, flat = savefiles.load_save(path)
+            except savefiles.Unreadable:
+                continue
+            except (OSError, ValueError, UnicodeError):
+                continue    # probably mid-write; retry next poll
+            match = appid in self.running or not self._is_shared(path)
+            self._handle_save(path, appid, fmt, flat, self._read_snapshot(path, appid), match=match)
+
+    def _handle_save(self, path: str, appid: int, fmt: str, flat: dict, old: dict | None, match: bool = True) -> None:
+        st = os.stat(path)
+        if match:
+            self._apply_save_matches(appid, old, flat, first_time=(path, appid) not in self.saves)
+        self._write_snapshot(path, appid, flat)
+        self.db.upsert_save_file(path, appid, fmt, True, None, st.st_mtime, st.st_size)
+        self.saves[(path, appid)] = {"path": path, "appid": appid, "readable": 1, "format": fmt,
+                                     "mtime": st.st_mtime, "size": st.st_size}
+
+    def _achievement_models(self, appid: int) -> list:
+        rows = self.db.achievements(appid)
+        key = (len(rows), tuple(sorted((r["name"], r.get("description") or "") for r in rows)).__hash__())
+        cached = self._models.get(appid)
+        if cached is None or cached[0] != key:
+            cached = self._models[appid] = (key, matcher.build_models(rows))
+        return cached[1]
+
+    def _apply_save_matches(self, appid: int, old: dict | None, new: dict, first_time: bool = False) -> None:
+        models = self._achievement_models(appid)
+        if not models:
+            return
+        rejected = self.db.rejections(appid)
+        best = matcher.best_per_achievement(matcher.evaluate(models, old, new, rejected))
+        if old is not None and first_time:
+            # A newly found save may already show things earned before AchTrack watched it: suggest those.
+            for name, m in matcher.best_per_achievement(matcher.evaluate(models, None, new, rejected)).items():
+                if name not in best and m.satisfied:
+                    m.confidence = "medium"
+                    best[name] = m
+        unlocked = self.db.unlocked_names(appid)
+        suggested = self.db.suggestions(appid)
+        baseline = old is None
+        fresh = []
+        for name, m in best.items():
+            if name in unlocked:
+                continue
+            if m.progress and m.confidence == "high":
+                self.db.set_progress(appid, name, m.progress[0], m.progress[1])
+            if not m.satisfied:
+                continue
+            # Only a clear change seen during play unlocks by itself; anything else is a suggestion.
+            if not baseline and m.confidence == "high":
+                if self.db.add_unlock(appid, name, int(time.time()), SAVE, m.reason):
+                    fresh.append(name)
+            elif name not in suggested:
+                self.db.add_suggestion(appid, name, m.reason)
+        self.listener.on_changed()
+        for name in fresh:
+            log.info("unlocked %s / %s from save (%s)", appid, name, best[name].reason)
+            self.listener.on_unlock(self.unlock_event(appid, name))
+
     # Steam library -------------------------------------------------------
 
     def _start_steam_sync(self) -> None:
@@ -423,7 +589,12 @@ class Engine:
                 self._force_scan = True  # look for local saves in the new folder
             if game["hidden"]:
                 self.db.update_game(appid, hidden=0)
-            self.running[appid] = _Running(self.db.start_session(appid, int(now)), now, now)
+            run = self.running[appid] = _Running(self.db.start_session(appid, int(now)), now, now)
+            run.prefix = self.monitor.prefixes.get(appid) or self._prefix_from_sources(appid)
+            run.game_dir = game_dir or game["game_dir"]
+            run.next_save_scan = now + SAVE_SCAN_EVERY
+            if self.cfg.save_detection:
+                run.snapshots = self._snapshot_candidates(appid, run)
             self.db.update_game(appid, last_played=int(now))
             self.ensure_meta(appid, force=created)
             game = self.db.game(appid)
@@ -440,6 +611,8 @@ class Engine:
             # Launchers hand off between processes; wait for two empty scans before ending.
             run.misses += 1
             if run.misses >= 2:
+                if self.cfg.save_detection:
+                    self.discover_saves(appid, run)   # games often write the final save on exit
                 self.db.update_session(run.session, int(run.seconds), int(now))
                 del self.running[appid]
                 log.info("game stopped: %s after %ds", appid, run.seconds)

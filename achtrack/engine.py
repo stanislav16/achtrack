@@ -571,6 +571,11 @@ class Engine:
                 break
             if hit.name in self.db.unlocked_names(appid):
                 continue
+            if hit.progress:
+                self.db.set_progress(appid, hit.name, hit.progress[0], hit.progress[1])
+                self.listener.on_changed()
+            if not hit.satisfied:
+                continue
             if hit.confidence == "high":
                 if self.db.add_unlock(appid, hit.name, int(time.time()), SCREEN, hit.reason):
                     fresh.append(hit)

@@ -68,6 +68,12 @@ with no AI and nothing uploaded:
   Quest-log lines that just repeat the objective ("Defeat Iudex Gundyr") are ignored.
 - **Bosses:** a named target on screen, then a victory banner with no death screen in between,
   counts as a defeat.
+- **Battles:** battle vocabulary (Attack, Abilities, ATB…) together with combat evidence (floating
+  damage numbers, "Staggered", "Critical"…) means a fight is on; vocabulary alone is usually just
+  the pause menu. When the combat text goes away with no death or game-over screen, the battle
+  was won. That unlocks "Win a battle", and counts toward "Win 50 battles"-style achievements with
+  a progress bar (only battles AchTrack has watched are counted). Words that keep appearing in
+  fights are learned per game, so detection improves as you play.
 - **Learning:** when you confirm an achievement (review or right-click), it looks back at what was
   on screen and learns that game's victory banner. From then on, that game's boss kills unlock
   automatically instead of being suggested.

@@ -351,6 +351,102 @@ class ScreenHit:
     satisfied: bool
     confidence: str
     reason: str
+    progress: tuple | None = None      # (current, target) for counting achievements
+
+
+# --- battle detection -------------------------------------------------------------------------------
+
+BATTLE_HUD = {"attack", "abilities", "ability", "magic", "items", "limit", "atb", "commands", "command", "guard",
+              "defend", "block", "dodge", "parry", "flee", "escape", "skill", "skills", "summon", "synergy",
+              "combo", "target", "lock", "enemy", "enemies", "boss", "wave", "round", "turn", "hp", "mp", "sp"}
+COMBAT_EVENTS = {"stagger", "staggered", "pressured", "critical", "crit", "weakness", "weak", "resist", "resisted",
+                 "break", "broken", "miss", "missed", "immune", "absorb", "absorbed", "counter", "perfect",
+                 "overkill", "knockdown", "stun", "stunned", "poison", "damage", "combo"}
+REWARD_WORDS = {"exp", "xp", "experience", "gil", "gold", "reward", "rewards", "results", "loot", "spoils",
+                "obtained", "earned", "gained", "level up", "victory", "battle won", "you win", "cleared"}
+BATTLE_NOUNS = {"battle", "fight", "combat", "encounter", "skirmish", "duel", "match", "brawl", "clash"}
+BATTLE_WINDOW = 8.0        # seconds of evidence considered at once
+BATTLE_MIN_LENGTH = 12.0   # shorter "battles" are usually a menu flicker
+BATTLE_END_QUIET = 7.0     # combat text gone this long = the battle is over
+
+
+def _canon_set(words) -> set:
+    return {matcher.canon(w) for w in words}
+
+
+class BattleTracker:
+    """Decides from on-screen text when a battle starts and when it's won.
+
+    In battle: battle vocabulary AND combat evidence (floating damage numbers, "Staggered",
+    "Critical"...) within a few seconds - vocabulary alone is often just the pause menu.
+    Won: the battle lasted a while, combat text has been gone for a few seconds, and no death or
+    game-over screen appeared. Words that keep showing up in battles are learned per game."""
+
+    def __init__(self, profile: dict):
+        self.profile = profile
+        self.hud = _canon_set(BATTLE_HUD) | set(profile.get("battle_words", []))
+        self.events = _canon_set(COMBAT_EVENTS)
+        self.rewards = {normalize(w) for w in REWARD_WORDS}
+        self.evidence: deque = deque()       # (time, "hud" | "event")
+        self.in_battle_since: float | None = None
+        self.last_combat = 0.0
+        self.reward_seen = False
+        self.died = False
+        self.last_win_strong = False
+        self.word_counts = profile.setdefault("word_counts", {"battle": {}, "other": {}})
+
+    def _learn(self, words: set, in_battle: bool) -> None:
+        bucket = self.word_counts["battle" if in_battle else "other"]
+        for w in words:
+            if len(w) > 2 and not w.isdigit():
+                bucket[w] = bucket.get(w, 0) + 1
+        # Words seen in battles far more than elsewhere become part of this game's battle vocabulary.
+        battle, other = self.word_counts["battle"], self.word_counts["other"]
+        learned = [w for w, n in battle.items() if n >= 8 and n >= 4 * (other.get(w, 0) + 1)]
+        learned.sort(key=lambda w: -battle[w])
+        self.profile["battle_words"] = learned[:40]
+        self.hud |= set(learned[:40])
+
+    def feed(self, lines: list, now: float, died: bool) -> bool:
+        """Returns True when a battle was just won."""
+        words: set = set()
+        for region, text in lines:
+            norm = normalize(text)
+            toks = matcher.tokens(text)
+            words |= {t for t in toks if not t.isdigit()}
+            if any(r in norm for r in self.rewards if " " in r) or any(r in norm.split() for r in self.rewards):
+                if self.in_battle_since is not None:
+                    self.reward_seen = True
+            # Floating damage numbers: a bare 1-6 digit number in the middle of the screen.
+            if region in ("center", "top") and re.fullmatch(r"\d{1,6}", norm.replace(" ", "")):
+                self.evidence.append((now, "event"))
+        if words & self.hud:
+            self.evidence.append((now, "hud"))
+        if words & self.events:
+            self.evidence.append((now, "event"))
+        while self.evidence and self.evidence[0][0] < now - BATTLE_WINDOW:
+            self.evidence.popleft()
+        kinds = {k for _t, k in self.evidence}
+        fighting = {"hud", "event"} <= kinds
+        if died:
+            self.died = True
+        if fighting:
+            self.last_combat = now
+            if self.in_battle_since is None:
+                self.in_battle_since, self.reward_seen, self.died = now, False, False
+        if words:
+            self._learn(words, self.in_battle_since is not None and fighting)
+
+        if self.in_battle_since is None or now - self.last_combat < BATTLE_END_QUIET:
+            return False
+        won = (not self.died and self.last_combat - self.in_battle_since >= BATTLE_MIN_LENGTH)
+        strong = self.reward_seen
+        self.in_battle_since = None
+        self.evidence.clear()
+        if won:
+            self.profile["battle_wins"] = self.profile.get("battle_wins", 0) + 1
+            self.last_win_strong = strong
+        return won
 
 
 @dataclass
@@ -376,6 +472,13 @@ class ScreenMatcher:
         self.learned_victory = {normalize(v) for v in self.profile.get("victory", [])}
         self.death = [normalize(d) for d in DEFAULT_DEATH] + [normalize(d) for d in self.profile.get("death", [])]
         self.triggers = {name: [normalize(t) for t in texts] for name, texts in self.profile.get("triggers", {}).items()}
+        self.battles = BattleTracker(self.profile)
+        self.profile_dirty = False
+        # "Win a battle", "Win 50 fights", "Complete 100 battles": counted by the battle tracker.
+        nouns = _canon_set(BATTLE_NOUNS)
+        self.battle_models = [m for m in self.models if m.words.keys() & nouns and not m.phrases
+                              and m.action in (None, "win", "complete", "defeat") and not m.ordinal]
+        self.battle_names = {m.name for m in self.battle_models}
 
     def _blocked(self, name: str, text: str) -> bool:
         return (name, f"screen:{normalize(text)}") in self.rejected
@@ -419,7 +522,7 @@ class ScreenMatcher:
 
             candidates = {id(m): m for t in words for m in self.index.get(t, ())}
             for m in candidates.values():
-                if m.name in self.done or self._blocked(m.name, text):
+                if m.name in self.done or m.name in self.battle_names or self._blocked(m.name, text):
                     continue
                 score = matcher._coverage(m, words)
                 named = bool(m.phrases) and any(p <= words for p in m.phrases)
@@ -442,6 +545,22 @@ class ScreenMatcher:
                 hit = self._direct(m, text, numbers, now, region)
                 if hit:
                     hits.append(hit)
+
+        if self.battles.feed(lines, now, any(self._is_death(n) for _r, _t, n in norms)):
+            self.profile_dirty = True
+            wins = self.profile.get("battle_wins", 0)
+            strong = self.battles.last_win_strong
+            for m in self.battle_models:
+                if m.name in self.done:
+                    continue
+                need = m.number or 1
+                reason = f"Battle won (on-screen combat ended with no game over) - {wins} counted"
+                if wins >= need:
+                    # One win is a clear event; a count only reflects battles AchTrack has watched.
+                    confidence = "high" if need == 1 and strong else "medium"
+                    hits.append(self._hit(m.name, True, confidence, reason))
+                else:
+                    hits.append(ScreenHit(m.name, False, "high", reason, progress=(wins, need)))
 
         # A named target seen repeatedly, then a victory banner with no death in between.
         victory = [(self._victory_kind(n), t) for _r, t, n in norms]
@@ -625,6 +744,9 @@ class ScreenWatcher(threading.Thread):
                     if self.matcher is not None:
                         for hit in self.matcher.feed(lines, now):
                             self.events.put(hit)
+                        if self.appid and (self.matcher.profile_dirty or self.stats["ocr_runs"] % 40 == 0):
+                            self.matcher.profile_dirty = False
+                            save_profile(self.appid, self.matcher.profile)
                 # Capture no faster than the capture method itself can keep up with.
                 period = max(self.interval, grab_avg * 1.3)
                 delay = max(0.02, period - (time.monotonic() - tick))

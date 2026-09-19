@@ -116,7 +116,12 @@ class Engine:
         self._steam_id: str | None = None
         self._steam_thread: threading.Thread | None = None
         self._icons = ThreadPoolExecutor(max_workers=4, thread_name_prefix="achtrack-icons")
-        self.saves = {(r["path"], r["appid"]): dict(r) for r in self.db.save_files()}
+        self.saves = {}
+        for r in self.db.save_files():
+            if savefiles.is_candidate(r["path"]):
+                self.saves[(r["path"], r["appid"])] = dict(r)
+            else:   # registered by an older version that mistook engine caches for saves
+                self.db.x("DELETE FROM save_files WHERE path = ? AND appid = ?", (r["path"], r["appid"]))
         self._models: dict = {}
         self._last_error = ("", 0.0)
 
@@ -360,6 +365,19 @@ class Engine:
         # The registry is shared by everything in the prefix: only read it while the game runs.
         return os.path.basename(path).lower() == "user.reg"
 
+    def _own_registry_keys(self, appid: int, flat: dict) -> dict:
+        """Registry keys that belong to this game: Unity writes them under Software\\<Company>\\<Game>."""
+        game = self.db.game(appid)
+        name_words = {w for w in matcher.tokens(game["name"] or "") if len(w) > 2 and not w.isdigit()} if game else set()
+        if not name_words:
+            return {}
+        own = {}
+        for key, value in flat.items():
+            section = set(matcher.tokens(" ".join(key.split(".")[1:3]), is_key=True))
+            if len(section & name_words) >= max(1, len(name_words) // 2):
+                own[key] = value
+        return own
+
     def _snapshot_path(self, path: str, appid: int):
         return SNAPSHOT_DIR / f"{appid}-{hashlib.sha1(path.encode()).hexdigest()[:16]}.json"
 
@@ -406,9 +424,15 @@ class Engine:
         for path in savefiles.changed_since(files, run.started - 2):
             if (path, appid) in self.saves or path in self.sources:
                 continue
+            if not savefiles.is_candidate(path):
+                continue
             old = (run.snapshots or {}).get(path)
             try:
                 fmt, flat = savefiles.load_save(path)
+                if self._is_shared(path):
+                    flat = self._own_registry_keys(appid, flat)
+                    if not flat:
+                        continue
             except savefiles.Unreadable as e:
                 if savefiles.looks_like_save(path):
                     st = os.stat(path)
@@ -441,6 +465,8 @@ class Engine:
                 continue
             except (OSError, ValueError, UnicodeError):
                 continue    # probably mid-write; retry next poll
+            if self._is_shared(path):
+                flat = self._own_registry_keys(appid, flat)
             match = appid in self.running or not self._is_shared(path)
             self._handle_save(path, appid, fmt, flat, self._read_snapshot(path, appid), match=match)
 

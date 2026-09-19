@@ -420,14 +420,20 @@ SKIP_DIR_NAMES = {
     "shadercaches", "logs", "log", "crashes", "crashreportclient", "webcache", "packages", "config", "configs",
     "cef", "webview", "gpucache", "dxcache", "vulkan", "mesa_shader_cache", "fontcache", "unrealengine",
     "epicgameslauncher", "goldberg steamemu saves", "gse saves", "codex", "rune", "empress", "onlinefix", "skidrow",
-    "steam", "wine", "windows", "programs", "start menu", "recent", "inetcache", "history",
+    "wine", "windows", "programs", "start menu", "recent", "inetcache", "history",
     "content", "paks", "binaries", "engine", "movies", "shaders", "plugins", "__pycache__", "redist", "_commonredist",
 }
 SKIP_EXTENSIONS = {
     ".log", ".tmp", ".dmp", ".mdmp", ".dxvk-cache", ".pdb", ".dll", ".exe", ".png", ".jpg", ".jpeg", ".bmp", ".dds",
     ".ttf", ".otf", ".lock", ".etl", ".pak", ".ucas", ".utoc", ".sig", ".mp4", ".bik", ".bk2", ".wav", ".ogg",
     ".lnk", ".url", ".ico", ".cache", ".shader", ".pso", ".upipelinecache", ".ushaderbytecode",
+    ".ushaderprecache", ".ushadercache", ".stablepc", ".shk", ".bin_cache", ".dxbc", ".spv", ".nvph", ".fossil",
 }
+# Engine data folders and files that live next to saves but aren't saves.
+NOT_SAVE_NAMES = ("d3ddriverbytecodeblob", "shadercache", "pipelinecache", "gameusersettings", "engine.ini",
+                  "input.ini", "scalability", "crashreport", "manifest")
+SAVE_DIR_RE = re.compile(r"(^|[/\\])(save|saves|savegame|savegames|savedata|savefiles?|profiles?|slots?)([/\\]|$)",
+                         re.IGNORECASE)
 
 
 def prefix_save_roots(prefix: str) -> list:
@@ -462,16 +468,23 @@ def game_root(game_dir: str) -> str | None:
         path = parent
 
 
+def is_candidate(path: str) -> bool:
+    name = os.path.basename(path).lower()
+    return (os.path.splitext(name)[1] not in SKIP_EXTENSIONS
+            and not any(bad in name for bad in NOT_SAVE_NAMES))
+
+
 def _walk_files(root: Path, only_save_paths: bool, max_depth: int = 7):
     base = len(root.parts)
     for dirpath, dirs, files in os.walk(root):
         depth = len(Path(dirpath).parts) - base
         dirs[:] = [d for d in dirs if d.lower() not in SKIP_DIR_NAMES and not d.startswith(".")] if depth < max_depth else []
-        if only_save_paths and "save" not in dirpath.lower():
+        if only_save_paths and not SAVE_DIR_RE.search(dirpath) and "savegame" not in dirpath.lower():
             continue
         for name in files:
-            if os.path.splitext(name)[1].lower() not in SKIP_EXTENSIONS:
-                yield os.path.join(dirpath, name)
+            path = os.path.join(dirpath, name)
+            if is_candidate(path):
+                yield path
 
 
 def candidate_files(prefix: str | None, game_dir: str | None) -> list:
@@ -503,8 +516,14 @@ def changed_since(paths: list, since: float) -> list:
 
 
 def looks_like_save(path: str) -> bool:
+    """A file that is probably a save even before it changes. Unreal's "Saved" data folder
+    alone doesn't count - it also holds configs, logs and shader caches."""
+    if not is_candidate(path):
+        return False
     low = path.lower()
-    return "save" in low or low.endswith((".sav", ".save", ".es3", "user.reg"))
+    name = os.path.basename(low)
+    return (low.endswith((".sav", ".save", ".es3", ".sl2", "user.reg")) or "save" in name
+            or bool(SAVE_DIR_RE.search(os.path.dirname(path))) or "savegames" in low)
 
 
 def now() -> float:

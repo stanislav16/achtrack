@@ -16,9 +16,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import matcher, savefiles, steam_api
+from . import matcher, psn, savefiles, steam_api
 from .config import CACHE_DIR, Config
-from .db import SAVE, SCREEN, STEAM, Database
+from .db import PSN, SAVE, SCREEN, STEAM, Database
 from .emulators import parse_file
 from .playtime import ProcessMonitor
 from .scanner import detect_steam_id, find_local_schema, find_state_files
@@ -115,6 +115,8 @@ class Engine:
         self._force_steam = False
         self._steam_id: str | None = None
         self._steam_thread: threading.Thread | None = None
+        self._psn_thread: threading.Thread | None = None
+        self._force_psn = False
         self._icons = ThreadPoolExecutor(max_workers=4, thread_name_prefix="achtrack-icons")
         self.screen = None          # ScreenWatcher of the game being played
         self._screen_status_at = 0.0
@@ -132,7 +134,7 @@ class Engine:
     def run(self, stop: threading.Event) -> None:
         self.db.close_dangling_sessions()
         self.queue_stale_meta()
-        next_scan = next_poll = next_proc = next_steam = 0.0
+        next_scan = next_poll = next_proc = next_steam = next_psn = 0.0
         while not stop.is_set():
             now = time.monotonic()
             try:
@@ -156,6 +158,10 @@ class Engine:
                     self._force_steam = False
                     self._start_steam_sync()
                     next_steam = now + max(120.0, self.cfg.steam_sync_interval)
+                if now >= next_psn or self._force_psn:
+                    self._force_psn = False
+                    self._start_psn_sync()
+                    next_psn = now + max(300.0, self.cfg.psn_sync_interval)
                 if self.meta_queue:
                     self.ensure_meta(self.meta_queue.popleft(), force=True)
                 self._drain_screen()
@@ -192,6 +198,8 @@ class Engine:
             elif kind == "steam_sync":
                 self._steam_id = None
                 self._force_steam = True
+            elif kind == "psn_sync":
+                self._force_psn = True
             elif kind == "icons" and self.db.game(req[1]) is not None:
                 self._prefetch_game_icons(req[1])
             elif kind == "learn":
@@ -279,7 +287,7 @@ class Engine:
 
     def ensure_meta(self, appid: int, force: bool = False) -> None:
         game = self.db.game(appid)
-        if game is None:
+        if game is None or game["psn_id"]:      # PlayStation games get their data from PSN
             return
         if not force and game["schema_fetched_at"] and game["name"] and game["genre"]:
             return
@@ -692,6 +700,108 @@ class Engine:
                        + (f" ({added} new)" if added else ""))
         if status["new_achievements"]:
             log.info("imported %d Steam achievements", status["new_achievements"])
+        return finish()
+
+    # PlayStation ---------------------------------------------------------
+
+    def _start_psn_sync(self) -> None:
+        if self._psn_thread is not None and self._psn_thread.is_alive():
+            return
+
+        def work():
+            try:
+                self.psn_sync(Database(self.db.path))
+            except Exception:
+                log.exception("PlayStation sync crashed")
+
+        self._psn_thread = threading.Thread(target=work, name="achtrack-psn", daemon=True)
+        self._psn_thread.start()
+
+    def psn_sync(self, db: Database, report=None) -> dict:
+        """Copies your PlayStation games, play time and trophies into the library."""
+        status = {"time": int(time.time()), "ok": False, "error": "", "games": 0, "trophies": 0, "new_trophies": 0}
+
+        def finish(error: str = "") -> dict:
+            status["error"] = error
+            status["ok"] = not error
+            db.set_meta("psn_sync", status)
+            if error:
+                self._error(f"PlayStation sync: {error}")
+            self.listener.on_changed()
+            return status
+
+        npsso = self.cfg.psn_npsso.strip()
+        if not self.cfg.psn_sync:
+            return finish("turned off in Settings")
+        if not npsso:
+            return finish("no PlayStation login in Settings")
+        try:
+            tokens = psn.valid_token(db.get_meta("psn_tokens"), npsso)
+            db.set_meta("psn_tokens", tokens)
+            token = tokens["access_token"]
+            titles = psn.trophy_titles(token)
+            played = {psn.normalize_name(t["name"]): t for t in psn.play_times(token)}
+        except psn.PSNError as e:
+            return finish(str(e))
+
+        for title in titles:
+            psn_id = title.get("npCommunicationId")
+            if not psn_id:
+                continue
+            name = title.get("trophyTitleName") or psn_id
+            platform = (title.get("trophyTitlePlatform") or "PS5").split(",")[0].lower()
+            earned = title.get("earnedTrophies") or {}
+            earned_count = sum(int(earned.get(k) or 0) for k in psn.TROPHY_KINDS)
+            game = db.psn_game(psn_id)
+            if game is None:
+                appid = db.next_psn_appid()
+                db.ensure_game(appid)
+                db.update_game(appid, psn_id=psn_id, platform=platform, name=name,
+                               header_url=title.get("trophyTitleIconUrl") or "")
+                game = db.game(appid)
+            appid = game["appid"]
+            status["games"] += 1
+            status["trophies"] += earned_count
+
+            match = played.get(psn.normalize_name(name))
+            if match:
+                db.update_game(appid, psn_playtime=match["seconds"], psn_last_played=match["last_played"])
+            db.update_game(appid, name=name, platform=platform,
+                           header_url=game["header_url"] or title.get("trophyTitleIconUrl") or "")
+
+            # Only re-read a game's trophies when its progress moved since the last sync.
+            seen = db.get_meta(f"psn_title:{psn_id}")
+            stamp = {"earned": earned_count, "updated": title.get("lastUpdatedDateTime"),
+                     "version": title.get("trophySetVersion")}
+            if seen == stamp:
+                continue
+            try:
+                trophies = psn.title_trophies(token, psn_id, title.get("npServiceName") or "trophy2")
+            except psn.PSNError as e:
+                if report:
+                    report(f"  {name}: {e}")
+                continue
+            schema = [{"name": f"trophy_{t['id']}", "display_name": t["name"], "description": t["detail"],
+                       "icon": t["icon"], "icon_gray": t["icon"], "hidden": int(t["hidden"]),
+                       "global_pct": t["rate"], "kind": t["kind"]} for t in trophies]
+            if schema:
+                db.set_schema(appid, schema, {})
+                self._prefetch_icons(appid, [t["icon"] for t in trophies] + [game["header_url"]])
+            added = 0
+            with db.tx():
+                for t in trophies:
+                    if t["earned"] and db.add_unlock(appid, f"trophy_{t['id']}",
+                                                     t["earned_at"] or int(time.time()), PSN):
+                        added += 1
+            db.update_game(appid, schema_fetched_at=int(time.time()))
+            db.set_meta(f"psn_title:{psn_id}", stamp)
+            status["new_trophies"] += added
+            if report:
+                hours = (match["seconds"] / 3600) if match else 0
+                report(f"  {name} [{platform}]: {hours:.1f} h, {earned_count}/{len(trophies)} trophies"
+                       + (f" ({added} new)" if added else ""))
+        if status["new_trophies"]:
+            log.info("imported %d PlayStation trophies", status["new_trophies"])
         return finish()
 
     # playtime ------------------------------------------------------------

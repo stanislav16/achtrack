@@ -99,16 +99,25 @@ MIGRATIONS = {
         "steam_owned": "INTEGER NOT NULL DEFAULT 0",
         "review": "INTEGER",  # NULL = decide automatically, 0 = never ask, 1 = always ask
         "genre": "TEXT",      # from the Steam store, e.g. "Action, RPG"
+        "platform": "TEXT NOT NULL DEFAULT 'pc'",   # pc | ps5 | ps4 ...
+        "psn_id": "TEXT",     # npCommunicationId of the trophy set
+        "psn_playtime": "INTEGER NOT NULL DEFAULT 0",
+        "psn_last_played": "INTEGER",
     },
     "unlocks": {
         "note": "TEXT",       # why it unlocked, e.g. the save field that matched
     },
+    "achievements": {
+        "kind": "TEXT",       # PlayStation trophy type: bronze | silver | gold | platinum
+    },
 }
 
 GAME_FIELDS = {"name", "header_url", "exe_name", "game_dir", "last_played", "schema_fetched_at", "hidden",
-               "steam_playtime", "steam_last_played", "steam_owned", "review", "genre"}
+               "steam_playtime", "steam_last_played", "steam_owned", "review", "genre",
+               "platform", "psn_id", "psn_playtime", "psn_last_played"}
 
 # Unlock sources that don't come from an emulator file.
+PSN = "PlayStation"
 MANUAL = "Manual"
 STEAM = "Steam"
 SAVE = "Save"
@@ -171,14 +180,24 @@ class Database:
         rows = self.q("SELECT * FROM games WHERE appid = ?", (appid,))
         return rows[0] if rows else None
 
+    def psn_game(self, psn_id: str):
+        rows = self.q("SELECT * FROM games WHERE psn_id = ?", (psn_id,))
+        return rows[0] if rows else None
+
+    def next_psn_appid(self) -> int:
+        """PlayStation games get negative ids, so they never collide with Steam AppIDs."""
+        low = self.q("SELECT MIN(appid) FROM games")[0][0] or 0
+        return min(low, 0) - 1
+
     def games(self, include_hidden: bool = False) -> list:
         return self.q(
             """
             SELECT g.*,
                    (SELECT COUNT(*) FROM achievements a WHERE a.appid = g.appid) AS total,
                    (SELECT COUNT(*) FROM unlocks u WHERE u.appid = g.appid) AS unlocked,
-                   g.playtime + g.steam_playtime AS total_playtime,
-                   MAX(COALESCE(g.last_played, 0), COALESCE(g.steam_last_played, 0)) AS last_any
+                   g.playtime + g.steam_playtime + g.psn_playtime AS total_playtime,
+                   MAX(COALESCE(g.last_played, 0), COALESCE(g.steam_last_played, 0),
+                       COALESCE(g.psn_last_played, 0)) AS last_any
             FROM games g
             WHERE ? OR g.hidden = 0
             ORDER BY last_any DESC, g.name COLLATE NOCASE
@@ -196,9 +215,11 @@ class Database:
             self.x("DELETE FROM achievements WHERE appid = ?", (appid,))
             for order, a in enumerate(achievements):
                 self.x(
-                    "INSERT OR REPLACE INTO achievements VALUES(?,?,?,?,?,?,?,?,?)",
+                    """INSERT OR REPLACE INTO achievements(appid, name, display_name, description, icon, icon_gray,
+                       hidden, global_pct, sort_order, kind) VALUES(?,?,?,?,?,?,?,?,?,?)""",
                     (appid, a["name"], a.get("display_name"), a.get("description"), a.get("icon"),
-                     a.get("icon_gray"), int(a.get("hidden") or 0), pct.get(a["name"]), order),
+                     a.get("icon_gray"), int(a.get("hidden") or 0),
+                     pct.get(a["name"], a.get("global_pct")), order, a.get("kind")),
                 )
                 # Emulator files sometimes differ in case from the official API names.
                 for table in ("unlocks", "progress"):
@@ -247,8 +268,8 @@ class Database:
         return cur.rowcount == 1
 
     def emulator_unlock_count(self, appid: int) -> int:
-        return self.q("SELECT COUNT(*) FROM unlocks WHERE appid = ? AND COALESCE(source, '') NOT IN (?, ?, ?, ?)",
-                      (appid, MANUAL, STEAM, SAVE, SCREEN))[0][0]
+        return self.q("SELECT COUNT(*) FROM unlocks WHERE appid = ? AND COALESCE(source, '') "
+                      "NOT IN (?, ?, ?, ?, ?)", (appid, MANUAL, STEAM, SAVE, SCREEN, PSN))[0][0]
 
     def unlock_note(self, appid: int, name: str) -> str | None:
         rows = self.q("SELECT note FROM unlocks WHERE appid = ? AND name = ?", (appid, name))

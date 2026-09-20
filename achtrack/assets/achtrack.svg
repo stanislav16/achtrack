@@ -1,20 +1,19 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#2d3a4f"/>
-      <stop offset="1" stop-color="#171d27"/>
+      <stop offset="0" stop-color="#26262B"/>
+      <stop offset="1" stop-color="#121214"/>
     </linearGradient>
-    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#ffe7a0"/>
-      <stop offset="0.5" stop-color="#f0c75e"/>
-      <stop offset="1" stop-color="#b8862b"/>
+    <linearGradient id="edge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.14"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0"/>
     </linearGradient>
   </defs>
-  <rect x="4" y="4" width="120" height="120" rx="26" fill="url(#bg)"/>
-  <rect x="4.5" y="4.5" width="119" height="119" rx="25.5" fill="none" stroke="#66c0f4" stroke-opacity="0.35"/>
-  <path d="M40 30h48c0 30-10 42-24 42S40 60 40 30z" fill="url(#gold)"/>
-  <path d="M40 36c-12 0-14 20 4 24M88 36c12 0 14 20-4 24" fill="none" stroke="url(#gold)" stroke-width="6" stroke-linecap="round"/>
-  <rect x="58" y="70" width="12" height="16" fill="url(#gold)"/>
-  <rect x="44" y="86" width="40" height="12" rx="3" fill="url(#gold)"/>
-  <path d="M64 38l3.5 7.2 7.9 1.1-5.7 5.6 1.3 7.9L64 56.1l-7 3.7 1.3-7.9-5.7-5.6 7.9-1.1z" fill="#fff8e0"/>
+  <rect x="6" y="6" width="116" height="116" rx="27" fill="url(#bg)"/>
+  <rect x="6.5" y="6.5" width="115" height="115" rx="26.5" fill="none" stroke="url(#edge)"/>
+  <g fill="none" stroke="#E0913C" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M45 34h38v18a19 19 0 0 1-38 0z"/>
+    <path d="M45 40h-8a11 11 0 0 0 11 11M83 40h8a11 11 0 0 1-11 11"/>
+    <path d="M64 71v16M50 94h28"/>
+  </g>
 </svg>

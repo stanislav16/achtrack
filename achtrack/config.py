@@ -37,6 +37,10 @@ class Config:
     # Copy owned Steam games, their playtime and achievements into the local library.
     steam_sync: bool = True
     steam_sync_interval: float = 900.0
+    # PlayStation: NPSSO token from a signed-in browser (see Settings); trophies and play time.
+    psn_npsso: str = ""
+    psn_sync: bool = True
+    psn_sync_interval: float = 1800.0
     # After a session of a game whose crack doesn't record achievements, ask what was earned.
     session_review: bool = True
     # Read games' save files (Unreal, Unity, JSON, XML...) to detect achievements the crack doesn't record.
@@ -58,7 +62,8 @@ class Config:
     # Qt on native Wayland can't place or raise popups, so run through XWayland by default.
     theme: str = "auto"                    # auto | dark | light
     font_family: str = ""                  # empty = the desktop's own UI font
-    sort: str = "recent"                   # recent | name | playtime | progress | genre
+    sort: str = "recent"                   # recent | name | playtime | progress | genre | platform
+    platform_filter: str = "all"           # all | pc | psn
     force_x11: bool = True
     poll_interval: float = 1.5
     process_interval: float = 5.0

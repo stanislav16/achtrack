@@ -72,6 +72,22 @@ def cmd_list() -> int:
     return 0
 
 
+def cmd_psn_sync() -> int:
+    from .config import Config
+    from .db import Database
+    from .engine import Engine, Listener
+
+    cfg = Config.load()
+    db = Database()
+    status = Engine(cfg, db, Listener()).psn_sync(db, report=print)
+    if status["error"]:
+        print(f"PlayStation sync failed: {status['error']}")
+        return 1
+    print(f"{status['games']} PlayStation games, {status['trophies']} trophies earned "
+          f"({status['new_trophies']} new).")
+    return 0
+
+
 def cmd_saves(appid: int | None, file: str | None, fields: bool) -> int:
     """Shows which save files AchTrack reads and what it matches in them."""
     from .db import Database
@@ -189,6 +205,7 @@ def main(argv=None) -> int:
     sub.add_parser("scan", help="show detected prefixes, achievement files and running games")
     sub.add_parser("list", help="print the library with playtime and achievement counts")
     sub.add_parser("sync-steam", help="copy your Steam games, playtime and achievements into the library now")
+    sub.add_parser("sync-psn", help="copy your PlayStation games, play time and trophies into the library now")
     screen = sub.add_parser("screen-test", help="read the screen like the watcher does and print what it sees")
     screen.add_argument("--seconds", type=float, default=20, help="how long to keep reading (default 20)")
     saves = sub.add_parser("saves", help="show the save files AchTrack reads and what it matches in them")
@@ -208,6 +225,8 @@ def main(argv=None) -> int:
         return cmd_list()
     if args.command == "sync-steam":
         return cmd_sync_steam()
+    if args.command == "sync-psn":
+        return cmd_psn_sync()
     if args.command == "screen-test":
         return cmd_screen_test(args.seconds)
     if args.command == "saves":

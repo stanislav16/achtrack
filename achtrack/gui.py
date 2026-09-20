@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDateTim
 
 from . import __version__, desktop, theme
 from .config import APP_ICON, APP_NAME, POPUP_CORNERS, Config
-from .db import MANUAL, SAVE, SCREEN, STEAM, Database
+from .db import MANUAL, PSN, SAVE, SCREEN, STEAM, Database
 from .engine import build_unlock_event, needs_review
 from .notifier import ToastData, trophy_pixmap
 from .scanner import detect_appid_in_tree, detect_steam_id
@@ -92,6 +92,23 @@ def detection_key(reason: str) -> str:
     return (reason or "").split(" = ")[0]
 
 
+PLATFORM_LABEL = {"pc": "PC", "ps5": "PS5", "ps4": "PS4", "ps3": "PS3", "psvita": "Vita"}
+
+
+def platform_name(row) -> str:
+    return PLATFORM_LABEL.get((row["platform"] or "pc").lower(), (row["platform"] or "PC").upper())
+
+
+def sync_text(status: dict | None, what: str, unit: str) -> str:
+    if not status:
+        return "Not synced yet."
+    when = fmt_day(status.get("time"))
+    if status.get("error"):
+        return f"<span style='color:#e5735c'>Last sync failed ({when}): {status['error']}</span>"
+    return (f"Last sync {when.lower() if when in ('Today', 'Yesterday') else when}: "
+            f"{status.get('games', 0)} games, {status.get(what, 0)} {unit}.")
+
+
 def steam_sync_text(status: dict | None) -> str:
     if not status:
         return "Not synced yet."
@@ -146,7 +163,10 @@ class GameRow(QWidget):
         name.setStyleSheet(f"color: {P['text'] if running else P['text2']}; font-size: 13.5px; font-weight: 500;"
                            " background: transparent;")
         lay.addWidget(name)
-        parts = [fmt_short_playtime(row["total_playtime"])]
+        parts = []
+        if (row["platform"] or "pc") != "pc":
+            parts.append(platform_name(row))
+        parts.append(fmt_short_playtime(row["total_playtime"]))
         if row["total"]:
             parts.append(f"{min(row['unlocked'], row['total'])}/{row['total']}")
         elif row["unlocked"]:
@@ -184,9 +204,15 @@ class AchievementRow(QFrame):
         texts = QVBoxLayout()
         texts.setSpacing(3)
         hidden_locked = a.get("hidden") and not unlocked and not reveal
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
         name = QLabel("Hidden achievement" if hidden_locked else (a.get("display_name") or a["name"]))
         name.setObjectName("AchName")
-        texts.addWidget(name)
+        title_row.addWidget(name)
+        if a.get("kind") in ("platinum", "gold"):
+            title_row.addWidget(_tag(a["kind"].upper(), "rare" if a["kind"] == "platinum" else "plain"))
+        title_row.addStretch(1)
+        texts.addLayout(title_row)
         desc_text = ("Details for this achievement will be revealed once unlocked" if hidden_locked
                      else a.get("description") or "")
         if desc_text:
@@ -214,8 +240,8 @@ class AchievementRow(QFrame):
         right.setSpacing(4)
         if unlocked:
             source = a.get("source")
-            tag = {STEAM: "  ·  Steam", MANUAL: "  ·  Added by you", SAVE: "  ·  Found in your save",
-                   SCREEN: "  ·  Seen on screen"}.get(source, "")
+            tag = {STEAM: "  ·  Steam", PSN: "  ·  PlayStation", MANUAL: "  ·  Added by you",
+                   SAVE: "  ·  Found in your save", SCREEN: "  ·  Seen on screen"}.get(source, "")
             date = QLabel(fmt_unlock(a["unlocked_at"]) + tag)
             date.setObjectName("AchDate")
             date.setAlignment(Qt.AlignmentFlag.AlignRight)
@@ -334,7 +360,8 @@ class DetailView(QWidget):
         self.stat_last = Stat("Last played")
         self.stat_ach = Stat("Unlocked")
         self.stat_genre = Stat("Genre")
-        for s in (self.stat_time, self.stat_last, self.stat_ach, self.stat_genre):
+        self.stat_platform = Stat("Platform")
+        for s in (self.stat_time, self.stat_last, self.stat_ach, self.stat_genre, self.stat_platform):
             stats.addWidget(s)
         info.addLayout(stats)
         info.addSpacing(6)
@@ -485,12 +512,17 @@ class DetailView(QWidget):
         self.title.setText(game["name"] or f"App {self.appid}")
         for widget in (self.running, self.running_dot):
             widget.setVisible(self.appid in self.win.running)
-        total_time = game["playtime"] + game["steam_playtime"]
+        total_time = game["total_playtime"] if "total_playtime" in game.keys() else (
+            game["playtime"] + game["steam_playtime"] + game["psn_playtime"])
         self.stat_time.value.setText(fmt_playtime(total_time))
-        self.stat_time.setToolTip(f"Steam: {fmt_playtime(game['steam_playtime'])}\n"
-                                  f"Tracked by {APP_NAME}: {fmt_playtime(game['playtime'])}"
-                                  if game["steam_playtime"] else "")
-        last = max(game["last_played"] or 0, game["steam_last_played"] or 0)
+        sources = [(f"Steam: {fmt_playtime(game['steam_playtime'])}", game["steam_playtime"]),
+                   (f"PlayStation: {fmt_playtime(game['psn_playtime'])}", game["psn_playtime"]),
+                   (f"Tracked by {APP_NAME}: {fmt_playtime(game['playtime'])}", game["playtime"])]
+        shown = [text for text, value in sources if value]
+        self.stat_time.setToolTip("\n".join(shown) if len(shown) > 1 else "")
+        self.stat_platform.value.setText(platform_name(game))
+        self.stat_platform.setVisible((game["platform"] or "pc") != "pc")
+        last = max(game["last_played"] or 0, game["steam_last_played"] or 0, game["psn_last_played"] or 0)
         self.stat_last.value.setText("Now" if self.appid in self.win.running else fmt_day(last))
         self.stat_ach.value.setText(f"{unlocked} / {total}" if total else "-")
         self.stat_genre.value.setText(game["genre"] or "")
@@ -915,6 +947,23 @@ class SettingsDialog(QDialog):
         sync_row.addWidget(self.sync_status, 1)
         sync_row.addWidget(sync_now)
         form.addRow("", sync_row)
+        psn_row = QHBoxLayout()
+        self.psn = QLineEdit(cfg.psn_npsso)
+        self.psn.setEchoMode(QLineEdit.EchoMode.Password)
+        self.psn.setPlaceholderText("NPSSO token from your browser")
+        psn_help = QPushButton("How?")
+        psn_help.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://ca.account.sony.com/api/v1/ssocookie")))
+        psn_sync_now = QPushButton("Sync now")
+        psn_sync_now.clicked.connect(self._psn_now)
+        psn_row.addWidget(self.psn, 1)
+        psn_row.addWidget(psn_help)
+        psn_row.addWidget(psn_sync_now)
+        form.addRow("PlayStation login", psn_row)
+        self.psn_status = QLabel(sync_text(parent.db.get_meta("psn_sync"), "trophies", "trophies"))
+        self.psn_status.setObjectName("Hint")
+        self.psn_status.setWordWrap(True)
+        form.addRow("", self.psn_status)
+
         self.review = QCheckBox("After playing a game whose crack doesn't record achievements, ask what I earned")
         self.review.setChecked(cfg.session_review)
         form.addRow("", self.review)
@@ -1019,6 +1068,14 @@ class SettingsDialog(QDialog):
         self.sync_status.setText("Syncing… (a large library can take a minute)")
         QTimer.singleShot(4000, self._refresh_sync_status)
 
+    def _psn_now(self) -> None:
+        self.win.cfg.psn_npsso = self.psn.text().strip()
+        self.win.cfg.psn_sync = True
+        self.win.worker.request("psn_sync")
+        self.psn_status.setText("Syncing your PlayStation library…")
+        QTimer.singleShot(5000, lambda: self.psn_status.setText(
+            sync_text(self.win.db.get_meta("psn_sync"), "trophies", "trophies")))
+
     def _refresh_sync_status(self) -> None:
         status = self.win.db.get_meta("steam_sync")
         self.sync_status.setText(steam_sync_text(status))
@@ -1070,6 +1127,7 @@ class SettingsDialog(QDialog):
         cfg.language = self.language.currentText().strip() or "english"
         cfg.force_x11 = self.x11.isChecked()
         cfg.steam_id = self.steam_id.text().strip()
+        cfg.psn_npsso = self.psn.text().strip()
         cfg.steam_sync = self.steam_sync.isChecked()
         cfg.session_review = self.review.isChecked()
         cfg.theme = self.theme.currentData()
@@ -1143,13 +1201,20 @@ class MainWindow(QMainWindow):
         side_lay.addLayout(search_wrap)
         self.sort = QComboBox()
         for label, key in (("Recently played", "recent"), ("Name (A-Z)", "name"), ("Play time", "playtime"),
-                           ("Completion", "progress"), ("Genre", "genre")):
+                           ("Completion", "progress"), ("Genre", "genre"), ("Platform", "platform")):
             self.sort.addItem(label, key)
         self.sort.setCurrentIndex(max(0, self.sort.findData(cfg.sort)))
         self.sort.currentIndexChanged.connect(self._sort_changed)
+        self.platform = QComboBox()
+        for label, key in (("All platforms", "all"), ("PC", "pc"), ("PlayStation", "psn")):
+            self.platform.addItem(label, key)
+        self.platform.setCurrentIndex(max(0, self.platform.findData(cfg.platform_filter)))
+        self.platform.currentIndexChanged.connect(self._platform_changed)
         sort_wrap = QHBoxLayout()
         sort_wrap.setContentsMargins(10, 0, 10, 0)
-        sort_wrap.addWidget(self.sort)
+        sort_wrap.setSpacing(6)
+        sort_wrap.addWidget(self.sort, 1)
+        sort_wrap.addWidget(self.platform, 1)
         side_lay.addLayout(sort_wrap)
         self.games = QListWidget()
         self.games.setObjectName("SidebarList")
@@ -1222,6 +1287,7 @@ class MainWindow(QMainWindow):
         lib.addAction("Rescan for achievement files", lambda: self.worker.request("rescan"))
         lib.addAction("Refresh all achievement data", lambda: self.worker.request("refresh_all"))
         lib.addAction("Sync Steam library now", self._sync_steam)
+        lib.addAction("Sync PlayStation now", self._sync_psn)
         lib.addSeparator()
         self.show_hidden = QAction("Show removed games", self, checkable=True)
         self.show_hidden.toggled.connect(lambda _: self.reload(force=True))
@@ -1255,6 +1321,11 @@ class MainWindow(QMainWindow):
         self.cfg.save()
         self.reload(force=True)
 
+    def _platform_changed(self) -> None:
+        self.cfg.platform_filter = self.platform.currentData()
+        self.cfg.save()
+        self.reload(force=True)
+
     @staticmethod
     def _sort_key(mode: str):
         if mode == "name":
@@ -1265,6 +1336,8 @@ class MainWindow(QMainWindow):
             return lambda r: (-(r["unlocked"] / r["total"] if r["total"] else -1), (r["name"] or "").lower())
         if mode == "genre":
             return lambda r: ((r["genre"] or "zzz").lower(), (r["name"] or "").lower())
+        if mode == "platform":
+            return lambda r: ((r["platform"] or "pc"), (r["name"] or "").lower())
         return lambda r: (-(r["last_any"] or 0), (r["name"] or "").lower())
 
     def current_appid(self) -> int | None:
@@ -1277,8 +1350,13 @@ class MainWindow(QMainWindow):
         if query:
             rows = [r for r in rows if query in (r["name"] or "").lower() or query in (r["genre"] or "").lower()
                     or query in str(r["appid"])]
+        chosen = self.cfg.platform_filter
+        if chosen == "pc":
+            rows = [r for r in rows if (r["platform"] or "pc") == "pc"]
+        elif chosen == "psn":
+            rows = [r for r in rows if (r["platform"] or "pc") != "pc"]
         rows = sorted(rows, key=self._sort_key(self.cfg.sort))
-        sig = tuple((r["appid"], r["name"], self.cfg.sort, r["total_playtime"] // 60, r["unlocked"], r["total"], r["hidden"],
+        sig = tuple((r["appid"], r["name"], self.cfg.sort, self.cfg.platform_filter, r["total_playtime"] // 60, r["unlocked"], r["total"], r["hidden"],
                      r["appid"] in self.running) for r in rows)
         if force or sig != self._list_sig:
             self._list_sig = sig
@@ -1319,7 +1397,9 @@ class MainWindow(QMainWindow):
     def game_stopped(self, appid: int, seconds: int) -> None:
         self.running.discard(appid)
         self.schedule_reload()
-        if self.cfg.session_review and seconds >= REVIEW_MIN_SECONDS and needs_review(self.db, appid):
+        game = self.db.game(appid)
+        if (self.cfg.session_review and seconds >= REVIEW_MIN_SECONDS and game is not None
+                and not game["psn_id"] and needs_review(self.db, appid)):
             QTimer.singleShot(1500, lambda: self.open_review(appid, seconds))
 
     # manual unlocks ---------------------------------------------------------
@@ -1381,6 +1461,13 @@ class MainWindow(QMainWindow):
         self.db.remove_unlock(appid, name, source)
         self.reload(force=True)
 
+    def _sync_psn(self) -> None:
+        if not self.cfg.psn_npsso:
+            QMessageBox.information(self, APP_NAME, "Add your PlayStation login (NPSSO token) in Settings first.")
+            return
+        self.worker.request("psn_sync")
+        self.statusBar().showMessage("Syncing your PlayStation library…", 5000)
+
     def _sync_steam(self) -> None:
         if not self.cfg.steam_api_key:
             QMessageBox.information(self, APP_NAME, "Add your Steam Web API key in Settings first.")
@@ -1420,6 +1507,15 @@ class MainWindow(QMainWindow):
         appid = item.data(Qt.ItemDataRole.UserRole)
         game = self.db.game(appid)
         menu = QMenu(self)
+        if game["psn_id"]:
+            menu.addAction("Sync PlayStation now", self._sync_psn)
+            menu.addSeparator()
+            if game["hidden"]:
+                menu.addAction("Restore to library", lambda: self._set_hidden(appid, False))
+            else:
+                menu.addAction("Remove from library", lambda: self._set_hidden(appid, True))
+            menu.exec(self.games.mapToGlobal(pos))
+            return
         menu.addAction("Review achievements…", lambda: self.open_review(appid))
         after = menu.addMenu("After a session")
         group = QActionGroup(after)

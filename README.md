@@ -89,6 +89,21 @@ run `achtrack screen-test`. It lists every capture method on your desktop and wh
 On X11 it captures directly. On Wayland it uses the desktop's screenshot tool, whichever is present:
 `grim` (wlroots), `cosmic-screenshot` (COSMIC), `gnome-screenshot` (GNOME) or `spectacle` (KDE).
 
+## Your PlayStation games
+
+AchTrack can also pull in your PlayStation library: **trophies with their unlock dates and rarity,
+plus PlayStation's own play time** per game. PS5, PS4, PS3 and Vita titles all come through, and they
+sit in the same library with a platform badge. Filter with the **PC / PlayStation** dropdown in the
+sidebar, or sort by platform.
+
+Sony has no public API, so this uses the endpoints the PlayStation mobile app uses, the way community
+trophy trackers do. It is read-only and nothing is written back to your account.
+
+Setup: sign in at playstation.com, open <https://ca.account.sony.com/api/v1/ssocookie>, copy the
+64-character `npsso` value and paste it into **Settings → PlayStation login**. It lasts about two
+months; AchTrack refreshes its session by itself until then and tells you when it needs a new one.
+`achtrack sync-psn` runs a sync from the terminal and prints what it found.
+
 ## When a crack doesn't record achievements
 
 Some cracks never save achievements. For example, some RUNE releases leave `achievements.ini` at
@@ -167,6 +182,7 @@ achtrack --background     start hidden (used by autostart)
 achtrack scan             list detected prefixes, achievement files and running games
 achtrack list             print the library with playtime and achievement counts
 achtrack sync-steam       copy your Steam games, playtime and achievements in now
+achtrack sync-psn         copy your PlayStation games, play time and trophies in now
 achtrack saves [appid]    show the save files AchTrack reads and what it matched (--fields for all values)
 achtrack screen-test      read the screen like the screen watcher does and print what it sees
 achtrack test-popup [--rare]

@@ -104,6 +104,34 @@ Setup: sign in at playstation.com, open <https://ca.account.sony.com/api/v1/ssoc
 months; AchTrack refreshes its session by itself until then and tells you when it needs a new one.
 `achtrack sync-psn` runs a sync from the terminal and prints what it found.
 
+## Backups
+
+Everything lives in one SQLite file, and AchTrack keeps copies of it:
+
+- A **database snapshot** plus a **plain JSON export** of every game, session and unlock, written
+  daily and on demand (**Library → Back up now**, or `achtrack backup`). The JSON stays readable
+  without AchTrack, so the record of what you unlocked and when outlives the app.
+- The newest 10 of each are kept (Settings → Backup folder).
+- `achtrack backup --restore <file>` puts a snapshot back, keeping the current database beside it
+  as `achtrack.db.replaced`.
+- **Settings → Sync command** runs anything you like afterwards, e.g.
+  `rclone copy {dir} gdrive:AchTrack`, so backups land off-machine automatically.
+
+## Your library on your phone
+
+AchTrack exports your whole library as **one self-contained HTML file**: games, play time, genres,
+platforms and every achievement with its unlock date, source and rarity. Open it on a phone and it
+behaves like a small app (search, sorting, per-game lists), with no PC needed once it's published.
+
+- **Encrypted.** With a passphrase set (Settings → Phone page), the data is gzipped and encrypted
+  with AES-GCM before it goes into the file; the browser decrypts it after you type the passphrase
+  once. A public URL is then safe, since without the passphrase it's an unreadable blob.
+- **Published to Vercel** if you add a token (vercel.com → Account Settings → Tokens). You get a
+  free `something.vercel.app` address, no domain needed. Without a token the file is simply written
+  to `~/.local/share/achtrack/phone/`, ready for any cloud folder or host.
+- Rebuilt after each play session and with the daily backup, or on demand with
+  **Library → Build phone page** / `achtrack export --deploy`.
+
 ## When a crack doesn't record achievements
 
 Some cracks never save achievements. For example, some RUNE releases leave `achievements.ini` at
@@ -185,6 +213,8 @@ achtrack sync-steam       copy your Steam games, playtime and achievements in no
 achtrack sync-psn         copy your PlayStation games, play time and trophies in now
 achtrack saves [appid]    show the save files AchTrack reads and what it matched (--fields for all values)
 achtrack screen-test      read the screen like the screen watcher does and print what it sees
+achtrack backup           snapshot the database + JSON export (--restore FILE to put one back)
+achtrack export           build the phone page (--deploy to publish it to Vercel)
 achtrack test-popup [--rare]
 achtrack quit
 ```

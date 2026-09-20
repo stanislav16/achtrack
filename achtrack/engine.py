@@ -9,6 +9,8 @@ import json
 import logging
 import os
 import queue
+import sqlite3
+import subprocess
 import threading
 import time
 from collections import deque
@@ -16,8 +18,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import matcher, psn, savefiles, steam_api
-from .config import CACHE_DIR, Config
+from . import backup, export, matcher, psn, savefiles, steam_api
+from .config import BACKUP_DIR, CACHE_DIR, EXPORT_DIR, Config
 from .db import PSN, SAVE, SCREEN, STEAM, Database
 from .emulators import parse_file
 from .playtime import ProcessMonitor
@@ -117,6 +119,7 @@ class Engine:
         self._steam_thread: threading.Thread | None = None
         self._psn_thread: threading.Thread | None = None
         self._force_psn = False
+        self._next_backup = time.time() + 300      # first automatic backup shortly after startup
         self._icons = ThreadPoolExecutor(max_workers=4, thread_name_prefix="achtrack-icons")
         self.screen = None          # ScreenWatcher of the game being played
         self._screen_status_at = 0.0
@@ -165,6 +168,9 @@ class Engine:
                 if self.meta_queue:
                     self.ensure_meta(self.meta_queue.popleft(), force=True)
                 self._drain_screen()
+                if self.cfg.backup_daily and time.time() >= self._next_backup:
+                    self._next_backup = time.time() + 86400
+                    self.run_backup()
             except Exception:
                 log.exception("engine tick failed")
             stop.wait(0.25)
@@ -200,6 +206,10 @@ class Engine:
                 self._force_steam = True
             elif kind == "psn_sync":
                 self._force_psn = True
+            elif kind == "backup":
+                self.run_backup()
+            elif kind == "export":
+                self.build_export(deploy=len(req) > 1 and bool(req[1]))
             elif kind == "icons" and self.db.game(req[1]) is not None:
                 self._prefetch_game_icons(req[1])
             elif kind == "learn":
@@ -702,6 +712,57 @@ class Engine:
             log.info("imported %d Steam achievements", status["new_achievements"])
         return finish()
 
+    # backups and the phone page -------------------------------------------
+
+    def run_backup(self) -> dict:
+        try:
+            result = backup.run_backup(self.db, Path(self.cfg.backup_dir or BACKUP_DIR), self.cfg.backup_keep)
+        except (OSError, sqlite3.Error) as e:
+            self._error(f"Backup failed: {e}")
+            return {"error": str(e)}
+        log.info("backup written to %s", result["dir"])
+        if self.cfg.export_auto:
+            result["export"] = self.build_export()
+        self.db.set_meta("backup", {**result, "error": ""})
+        self._run_sync_command(result["dir"])
+        self.listener.on_changed()
+        return result
+
+    def build_export(self, deploy: bool = False) -> str:
+        """Writes the phone page; publishes it too when a Vercel token is set."""
+        folder = Path(self.cfg.export_dir or EXPORT_DIR)
+        try:
+            page = export.write_page(self.db, folder, self.cfg.export_passphrase)
+        except (OSError, ValueError) as e:
+            self._error(f"Phone page failed: {e}")
+            return ""
+        status = {"time": int(time.time()), "page": str(page), "url": "", "error": ""}
+        if deploy or (self.cfg.vercel_token.strip() and self.cfg.export_auto):
+            from .deploy import DeployError, publish
+            try:
+                status["url"] = publish(folder, self.cfg.vercel_token, self.cfg.vercel_project,
+                                        self.cfg.vercel_team or None)
+                log.info("phone page published to %s", status["url"])
+            except DeployError as e:
+                status["error"] = str(e)
+                self._error(f"Publishing the phone page failed: {e}")
+        self.db.set_meta("export", status)
+        self._run_sync_command(str(folder))
+        self.listener.on_changed()
+        return status["url"] or str(page)
+
+    def _run_sync_command(self, folder: str) -> None:
+        """Optional command after a backup/export, e.g. rclone copy {dir} gdrive:AchTrack."""
+        template = self.cfg.sync_command.strip()
+        if not template:
+            return
+        try:
+            proc = subprocess.run(template.replace("{dir}", folder), shell=True, capture_output=True, timeout=600)
+            if proc.returncode:
+                self._error(f"Sync command failed: {proc.stderr.decode('utf-8', 'replace')[:200]}")
+        except (OSError, subprocess.SubprocessError) as e:
+            self._error(f"Sync command failed: {e}")
+
     # PlayStation ---------------------------------------------------------
 
     def _start_psn_sync(self) -> None:
@@ -859,6 +920,8 @@ class Engine:
                 self.db.update_session(run.session, int(run.seconds), int(now))
                 del self.running[appid]
                 log.info("game stopped: %s after %ds", appid, run.seconds)
+                if self.cfg.export_auto:
+                    self.build_export()
                 self.listener.on_game_stopped(appid, int(run.seconds))
                 changed = True
 

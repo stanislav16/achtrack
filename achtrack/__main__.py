@@ -72,6 +72,49 @@ def cmd_list() -> int:
     return 0
 
 
+def cmd_backup(restore_from: str | None) -> int:
+    from pathlib import Path
+    from .backup import restore, run_backup
+    from .config import BACKUP_DIR, Config, DB_FILE
+    from .db import Database
+
+    cfg = Config.load()
+    if restore_from:
+        target = restore(Path(restore_from), DB_FILE)
+        print(f"Restored {restore_from} into {target} (the previous database is beside it as .db.replaced).")
+        return 0
+    result = run_backup(Database(), Path(cfg.backup_dir or BACKUP_DIR), cfg.backup_keep)
+    print(f"Database snapshot: {result['database']}")
+    print(f"JSON export:       {result['json']}")
+    if result["pruned"]:
+        print(f"Removed {result['pruned']} older backup file(s), keeping {cfg.backup_keep}.")
+    return 0
+
+
+def cmd_export(deploy_it: bool) -> int:
+    from pathlib import Path
+    from .config import EXPORT_DIR, Config
+    from .db import Database
+    from .export import write_page
+
+    cfg = Config.load()
+    folder = Path(cfg.export_dir or EXPORT_DIR)
+    page = write_page(Database(), folder, cfg.export_passphrase)
+    size = page.stat().st_size / 1024
+    print(f"Phone page: {page} ({size:.0f} KB, "
+          + ("encrypted with your passphrase)" if cfg.export_passphrase.strip() else "NOT encrypted - set a passphrase in Settings)"))
+    if not deploy_it:
+        return 0
+    from .deploy import DeployError, publish
+    try:
+        url = publish(folder, cfg.vercel_token, cfg.vercel_project, cfg.vercel_team or None)
+    except DeployError as e:
+        print(f"Deploy failed: {e}")
+        return 1
+    print(f"Published: {url}")
+    return 0
+
+
 def cmd_psn_sync() -> int:
     from .config import Config
     from .db import Database
@@ -206,6 +249,10 @@ def main(argv=None) -> int:
     sub.add_parser("list", help="print the library with playtime and achievement counts")
     sub.add_parser("sync-steam", help="copy your Steam games, playtime and achievements into the library now")
     sub.add_parser("sync-psn", help="copy your PlayStation games, play time and trophies into the library now")
+    backup = sub.add_parser("backup", help="save a database snapshot and a JSON export")
+    backup.add_argument("--restore", metavar="FILE", help="put a snapshot back instead")
+    export = sub.add_parser("export", help="build the phone page from your library")
+    export.add_argument("--deploy", action="store_true", help="also publish it to Vercel")
     screen = sub.add_parser("screen-test", help="read the screen like the watcher does and print what it sees")
     screen.add_argument("--seconds", type=float, default=20, help="how long to keep reading (default 20)")
     saves = sub.add_parser("saves", help="show the save files AchTrack reads and what it matches in them")
@@ -227,6 +274,10 @@ def main(argv=None) -> int:
         return cmd_sync_steam()
     if args.command == "sync-psn":
         return cmd_psn_sync()
+    if args.command == "backup":
+        return cmd_backup(args.restore)
+    if args.command == "export":
+        return cmd_export(args.deploy)
     if args.command == "screen-test":
         return cmd_screen_test(args.seconds)
     if args.command == "saves":

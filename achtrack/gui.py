@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
                                QWidget)
 
 from . import __version__, desktop, theme
-from .config import APP_ICON, APP_NAME, POPUP_CORNERS, Config
+from .config import APP_ICON, APP_NAME, BACKUP_DIR, POPUP_CORNERS, Config
 from .db import MANUAL, PSN, SAVE, SCREEN, STEAM, Database
 from .engine import build_unlock_event, needs_review
 from .notifier import ToastData, trophy_pixmap
@@ -108,6 +108,24 @@ def sync_text(status: dict | None, what: str, unit: str) -> str:
         return f"<span style='color:#e5735c'>Last sync failed ({when}): {status['error']}</span>"
     return (f"Last sync {when.lower() if when in ('Today', 'Yesterday') else when}: "
             f"{status.get('games', 0)} games, {status.get(what, 0)} {unit}.")
+
+
+def backup_text(status: dict | None) -> str:
+    if not status:
+        return "No backup yet."
+    if status.get("error"):
+        return f"<span style='color:#e5735c'>Last backup failed: {status['error']}</span>"
+    return f"Last backup {fmt_day(status.get('time')).lower()} in {status.get('dir', '')}"
+
+
+def export_text(status: dict | None) -> str:
+    if not status:
+        return "The phone page hasn't been built yet."
+    if status.get("error"):
+        return f"<span style='color:#e5735c'>Publishing failed: {status['error']}</span>"
+    if status.get("url"):
+        return f"Published: <a href='{status['url']}' style='color:#66c0f4'>{status['url']}</a>"
+    return f"Built: {status.get('page', '')} (add a Vercel token to publish it)"
 
 
 def steam_sync_text(status: dict | None) -> str:
@@ -1103,6 +1121,48 @@ class SettingsDialog(QDialog):
         self.autostart.setChecked(desktop.autostart_enabled())
         form.addRow("", self.autostart)
 
+        backup_row = QHBoxLayout()
+        self.backup_dir = QLineEdit(cfg.backup_dir)
+        self.backup_dir.setPlaceholderText(str(BACKUP_DIR))
+        pick_backup = QPushButton("Browse…")
+        pick_backup.clicked.connect(lambda: self._pick_dir(self.backup_dir))
+        backup_now = QPushButton("Back up now")
+        backup_now.clicked.connect(lambda: self.win.worker.request("backup"))
+        backup_row.addWidget(self.backup_dir, 1)
+        backup_row.addWidget(pick_backup)
+        backup_row.addWidget(backup_now)
+        form.addRow("Backup folder", backup_row)
+        self.backup_daily = QCheckBox("Back up daily (database snapshot + readable JSON export)")
+        self.backup_daily.setChecked(cfg.backup_daily)
+        form.addRow("", self.backup_daily)
+        self.backup_status = QLabel(backup_text(parent.db.get_meta("backup")))
+        self.backup_status.setObjectName("Hint")
+        self.backup_status.setWordWrap(True)
+        form.addRow("", self.backup_status)
+
+        self.passphrase = QLineEdit(cfg.export_passphrase)
+        self.passphrase.setEchoMode(QLineEdit.EchoMode.Password)
+        self.passphrase.setPlaceholderText("Passphrase that unlocks the phone page")
+        form.addRow("Phone page", self.passphrase)
+        phone_row = QHBoxLayout()
+        self.vercel = QLineEdit(cfg.vercel_token)
+        self.vercel.setEchoMode(QLineEdit.EchoMode.Password)
+        self.vercel.setPlaceholderText("Vercel token (optional, to publish it)")
+        publish_now = QPushButton("Build && publish")
+        publish_now.clicked.connect(self._publish_now)
+        phone_row.addWidget(self.vercel, 1)
+        phone_row.addWidget(publish_now)
+        form.addRow("", phone_row)
+        self.export_status = QLabel(export_text(parent.db.get_meta("export")))
+        self.export_status.setObjectName("Hint")
+        self.export_status.setWordWrap(True)
+        self.export_status.setOpenExternalLinks(True)
+        form.addRow("", self.export_status)
+
+        self.sync_command = QLineEdit(cfg.sync_command)
+        self.sync_command.setPlaceholderText("Optional command after backups, e.g. rclone copy {dir} gdrive:AchTrack")
+        form.addRow("Sync command", self.sync_command)
+
         self.dirs = QPlainTextEdit("\n".join(cfg.scan_dirs))
         self.dirs.setPlaceholderText("One folder per line - Wine prefixes, or folders that contain them")
         self.dirs.setFixedHeight(84)
@@ -1164,6 +1224,20 @@ class SettingsDialog(QDialog):
         h.addWidget(pick)
         return row, edit
 
+    def _pick_dir(self, edit: QLineEdit) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Folder", edit.text() or os.path.expanduser("~"))
+        if path:
+            edit.setText(path)
+
+    def _publish_now(self) -> None:
+        cfg = self.win.cfg
+        cfg.export_passphrase = self.passphrase.text()
+        cfg.vercel_token = self.vercel.text().strip()
+        cfg.export_dir = getattr(self, "export_dir", None) and self.export_dir.text().strip() or cfg.export_dir
+        self.win.worker.request("export", bool(cfg.vercel_token))
+        self.export_status.setText("Building the phone page…")
+        QTimer.singleShot(6000, lambda: self.export_status.setText(export_text(self.win.db.get_meta("export"))))
+
     def _pick_sound(self, edit: QLineEdit) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Sound file", os.path.expanduser("~"), "Audio (*.wav *.ogg *.oga *.mp3 *.flac)")
         if path:
@@ -1200,6 +1274,11 @@ class SettingsDialog(QDialog):
         cfg.psn_npsso = self.psn.text().strip()
         cfg.steam_sync = self.steam_sync.isChecked()
         cfg.session_review = self.review.isChecked()
+        cfg.backup_dir = self.backup_dir.text().strip()
+        cfg.backup_daily = self.backup_daily.isChecked()
+        cfg.export_passphrase = self.passphrase.text()
+        cfg.vercel_token = self.vercel.text().strip()
+        cfg.sync_command = self.sync_command.text().strip()
         cfg.theme = self.theme.currentData()
         cfg.font_family = self.font.text().strip()
         cfg.save_detection = self.saves.isChecked()
@@ -1355,6 +1434,9 @@ class MainWindow(QMainWindow):
         lib.addAction("Refresh all achievement data", lambda: self.worker.request("refresh_all"))
         lib.addAction("Sync Steam library now", self._sync_steam)
         lib.addAction("Sync PlayStation now", self._sync_psn)
+        lib.addSeparator()
+        lib.addAction("Back up now", lambda: self.worker.request("backup"))
+        lib.addAction("Build phone page", lambda: self.worker.request("export", bool(self.cfg.vercel_token)))
         lib.addSeparator()
         icons_action = QAction("Show game icons", self, checkable=True)
         icons_action.setChecked(self.cfg.show_icons)

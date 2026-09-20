@@ -20,6 +20,8 @@ CACHE_DIR = _xdg("XDG_CACHE_HOME", ".cache") / APP_ID
 ICON_DIR = CACHE_DIR / "icons"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 DB_FILE = DATA_DIR / "achtrack.db"
+BACKUP_DIR = DATA_DIR / "backups"
+EXPORT_DIR = DATA_DIR / "phone"
 AUTOSTART_FILE = _xdg("XDG_CONFIG_HOME", ".config") / "autostart" / f"{APP_ID}.desktop"
 ASSET_DIR = Path(__file__).resolve().parent / "assets"
 APP_ICON = ASSET_DIR / "achtrack.svg"
@@ -65,6 +67,18 @@ class Config:
     sort: str = "recent"                   # recent | name | playtime | progress | genre | platform
     platform_filter: str = "all"           # all | pc | psn
     show_icons: bool = True                # game artwork thumbnails in the library list
+    # Backups: dated database snapshots + a readable JSON export.
+    backup_dir: str = ""                   # empty = ~/.local/share/achtrack/backups
+    backup_keep: int = 10
+    backup_daily: bool = True
+    # Phone page: one self-contained file, encrypted with this passphrase, optionally on Vercel.
+    export_passphrase: str = ""
+    export_dir: str = ""                   # empty = ~/.local/share/achtrack/phone
+    export_auto: bool = True               # rebuild after each session and with the daily backup
+    vercel_token: str = ""
+    vercel_project: str = "achtrack"
+    vercel_team: str = ""
+    sync_command: str = ""                 # optional, e.g. rclone copy {dir} gdrive:AchTrack
     force_x11: bool = True
     poll_interval: float = 1.5
     process_interval: float = 5.0

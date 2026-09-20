@@ -12,8 +12,8 @@ from PySide6.QtGui import (QAction, QActionGroup, QBrush, QColor, QDesktopServic
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateTimeEdit, QDialog,
                                QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout,
                                QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
-                               QPlainTextEdit, QProgressBar, QPushButton, QSplitter, QStackedWidget, QVBoxLayout,
-                               QWidget)
+                               QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSplitter, QStackedWidget,
+                               QTabWidget, QVBoxLayout, QWidget)
 
 from . import __version__, desktop, theme
 from .config import APP_ICON, APP_NAME, BACKUP_DIR, POPUP_CORNERS, Config
@@ -21,6 +21,7 @@ from .db import MANUAL, PSN, SAVE, SCREEN, STEAM, Database
 from .engine import build_unlock_event, needs_review
 from .notifier import ToastData, trophy_pixmap
 from .scanner import detect_appid_in_tree, detect_steam_id
+from .screenwatch import available as screen_available
 from .steam_api import cached_icon
 
 REVIEW_MIN_SECONDS = 120   # don't ask after a game was only opened for a moment
@@ -998,129 +999,148 @@ class GameDialog(QDialog):
 
 
 class SettingsDialog(QDialog):
+    """Grouped into tabs: one screen's worth of settings per topic."""
+
     def __init__(self, parent: "MainWindow"):
         super().__init__(parent)
         self.win = parent
         cfg = parent.cfg
         self.setWindowTitle(f"{APP_NAME} settings")
-        self.setMinimumWidth(620)
-        lay = QVBoxLayout(self)
-        form = QFormLayout()
-        form.setSpacing(10)
+        self.setMinimumSize(660, 520)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 12)
+        root.setSpacing(12)
+        tabs = QTabWidget()
+        root.addWidget(tabs, 1)
 
+        # --- Accounts -------------------------------------------------------
+        accounts = self._page(tabs, "Accounts")
         key_row = QHBoxLayout()
         self.key = QLineEdit(cfg.steam_api_key)
         self.key.setEchoMode(QLineEdit.EchoMode.Password)
         self.key.setPlaceholderText("32-character key")
-        get_key = QPushButton("Get a free key")
+        get_key = QPushButton("Get a key")
         get_key.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://steamcommunity.com/dev/apikey")))
         key_row.addWidget(self.key, 1)
         key_row.addWidget(get_key)
-        form.addRow("Steam Web API key", key_row)
+        accounts.addRow("Steam Web API key", key_row)
 
+        steam_row = QHBoxLayout()
         self.steam_id = QLineEdit(cfg.steam_id)
         detected = detect_steam_id()
-        self.steam_id.setPlaceholderText(f"Detected from Steam: {detected}" if detected
-                                         else "Steam profile URL or SteamID64")
-        form.addRow("Steam account", self.steam_id)
-        self.steam_sync = QCheckBox("Copy my Steam games, playtime and achievements into my library")
-        self.steam_sync.setChecked(cfg.steam_sync)
-        form.addRow("", self.steam_sync)
-        sync_row = QHBoxLayout()
-        self.sync_status = QLabel(steam_sync_text(parent.db.get_meta("steam_sync")))
-        self.sync_status.setObjectName("Hint")
-        self.sync_status.setWordWrap(True)
+        self.steam_id.setPlaceholderText(f"Detected: {detected}" if detected else "Profile URL or SteamID64")
         sync_now = QPushButton("Sync now")
         sync_now.clicked.connect(self._sync_now)
-        sync_row.addWidget(self.sync_status, 1)
-        sync_row.addWidget(sync_now)
-        form.addRow("", sync_row)
+        steam_row.addWidget(self.steam_id, 1)
+        steam_row.addWidget(sync_now)
+        accounts.addRow("Steam account", steam_row)
+        self.steam_sync = QCheckBox("Copy my Steam games, playtime and achievements into my library")
+        self.steam_sync.setChecked(cfg.steam_sync)
+        accounts.addRow("", self.steam_sync)
+        self.sync_status = self._status(accounts, steam_sync_text(parent.db.get_meta("steam_sync")))
+
         psn_row = QHBoxLayout()
         self.psn = QLineEdit(cfg.psn_npsso)
         self.psn.setEchoMode(QLineEdit.EchoMode.Password)
         self.psn.setPlaceholderText("NPSSO token from your browser")
-        psn_help = QPushButton("How?")
+        psn_help = QPushButton("Get one")
         psn_help.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://ca.account.sony.com/api/v1/ssocookie")))
-        psn_sync_now = QPushButton("Sync now")
-        psn_sync_now.clicked.connect(self._psn_now)
+        psn_now = QPushButton("Sync now")
+        psn_now.clicked.connect(self._psn_now)
         psn_row.addWidget(self.psn, 1)
         psn_row.addWidget(psn_help)
-        psn_row.addWidget(psn_sync_now)
-        form.addRow("PlayStation login", psn_row)
-        self.psn_status = QLabel(sync_text(parent.db.get_meta("psn_sync"), "trophies", "trophies"))
-        self.psn_status.setObjectName("Hint")
-        self.psn_status.setWordWrap(True)
-        form.addRow("", self.psn_status)
-
-        self.review = QCheckBox("After playing a game whose crack doesn't record achievements, ask what I earned")
-        self.review.setChecked(cfg.session_review)
-        form.addRow("", self.review)
-        self.saves = QCheckBox("Detect achievements from games' save files")
-        self.saves.setChecked(cfg.save_detection)
-        form.addRow("", self.saves)
-        from .screenwatch import available as screen_available
-        ok, reason = screen_available()
-        self.screen = QCheckBox("Watch on-screen text while playing (local OCR, for games with unreadable saves)"
-                                + ("" if ok else f" - unavailable: {reason}"))
-        self.screen.setChecked(cfg.screen_watcher)
-        form.addRow("", self.screen)
+        psn_row.addWidget(psn_now)
+        accounts.addRow("PlayStation login", psn_row)
+        self.psn_status = self._status(accounts, sync_text(parent.db.get_meta("psn_sync"), "trophies", "trophies"))
 
         self.language = QComboBox()
         self.language.setEditable(True)
         self.language.addItems(LANGUAGES)
         self.language.setCurrentText(cfg.language)
-        form.addRow("Achievement language", self.language)
+        accounts.addRow("Achievement language", self.language)
 
+        # --- Popups ---------------------------------------------------------
+        popups = self._page(tabs, "Popups")
         self.style = QComboBox()
         self.style.addItem("AchTrack popup", "steam")
         self.style.addItem("Desktop notification", "system")
         self.style.addItem("Both", "both")
         self.style.addItem("Off", "none")
         self.style.setCurrentIndex(max(0, self.style.findData(cfg.popup_style)))
-        form.addRow("Unlock popups", self.style)
-
+        popups.addRow("Unlock popups", self.style)
         self.corner = QComboBox()
         for corner in POPUP_CORNERS:
             self.corner.addItem(corner.replace("-", " ").capitalize(), corner)
         self.corner.setCurrentIndex(max(0, self.corner.findData(cfg.popup_corner)))
-        form.addRow("Popup position", self.corner)
-
+        popups.addRow("Position", self.corner)
         self.seconds = QDoubleSpinBox()
         self.seconds.setRange(2, 20)
         self.seconds.setSingleStep(0.5)
         self.seconds.setSuffix(" s")
         self.seconds.setValue(cfg.popup_seconds)
-        form.addRow("Popup duration", self.seconds)
-
+        popups.addRow("Duration", self.seconds)
         self.sound = QCheckBox("Play a sound when an achievement unlocks")
         self.sound.setChecked(cfg.sound)
-        form.addRow("", self.sound)
-        self.sound_file = self._file_row(cfg.sound_file, "Default chime")
-        form.addRow("Custom sound", self.sound_file[0])
-        self.rare_sound_file = self._file_row(cfg.rare_sound_file, "Default rare chime")
-        form.addRow("Custom rare sound", self.rare_sound_file[0])
-
+        popups.addRow("", self.sound)
         self.session = QCheckBox("Show a “Now playing” popup when a game starts")
         self.session.setChecked(cfg.session_toast)
-        form.addRow("", self.session)
-        self.font = QLineEdit(cfg.font_family)
-        self.font.setPlaceholderText("Your desktop's font (e.g. Inter, Fira Sans, Noto Sans)")
-        form.addRow("Font", self.font)
+        popups.addRow("", self.session)
+        self.sound_file = self._file_row(cfg.sound_file, "Default chime")
+        popups.addRow("Custom sound", self.sound_file[0])
+        self.rare_sound_file = self._file_row(cfg.rare_sound_file, "Default rare chime")
+        popups.addRow("Custom rare sound", self.rare_sound_file[0])
+        tests = QHBoxLayout()
+        test = QPushButton("Test popup")
+        test.clicked.connect(lambda: self._test(False))
+        test_rare = QPushButton("Test rare popup")
+        test_rare.clicked.connect(lambda: self._test(True))
+        tests.addWidget(test)
+        tests.addWidget(test_rare)
+        tests.addStretch(1)
+        popups.addRow("", tests)
 
+        # --- Detection ------------------------------------------------------
+        detect = self._page(tabs, "Detection")
+        self.review = QCheckBox("After playing a game whose crack doesn't record achievements, ask what I earned")
+        self.review.setChecked(cfg.session_review)
+        detect.addRow("", self.review)
+        self.saves = QCheckBox("Detect achievements from games' save files")
+        self.saves.setChecked(cfg.save_detection)
+        detect.addRow("", self.saves)
+        ok, reason = screen_available()
+        self.screen = QCheckBox("Watch on-screen text while playing (local OCR, for unreadable saves)")
+        self.screen.setChecked(cfg.screen_watcher)
+        self.screen.setEnabled(ok)
+        detect.addRow("", self.screen)
+        if not ok:
+            self._status(detect, f"Screen watching unavailable: {reason}")
+        self.dirs = QPlainTextEdit("\n".join(cfg.scan_dirs))
+        self.dirs.setPlaceholderText("One folder per line - Wine prefixes, or folders that contain them")
+        self.dirs.setFixedHeight(90)
+        detect.addRow("Extra folders", self.dirs)
+        self._status(detect, "Prefixes in ~/.wine, ~/Games (Lutris/Heroic), Bottles and Steam's compatdata are "
+                             "found automatically.")
+
+        # --- Appearance -----------------------------------------------------
+        look = self._page(tabs, "Appearance")
         self.theme = QComboBox()
         self.theme.addItem("Match the system", "auto")
         self.theme.addItem("Graphite (dark)", "dark")
         self.theme.addItem("Porcelain (light)", "light")
         self.theme.setCurrentIndex(max(0, self.theme.findData(cfg.theme)))
-        form.addRow("Appearance", self.theme)
-
+        look.addRow("Theme", self.theme)
+        self.font = QLineEdit(cfg.font_family)
+        self.font.setPlaceholderText("Your desktop's font (e.g. Inter, Fira Sans, Noto Sans)")
+        look.addRow("Font", self.font)
         self.x11 = QCheckBox("Use XWayland on Wayland so popups stay on top (restart to apply)")
         self.x11.setChecked(cfg.force_x11)
-        form.addRow("", self.x11)
+        look.addRow("", self.x11)
         self.autostart = QCheckBox(f"Start {APP_NAME} in the background when I log in")
         self.autostart.setChecked(desktop.autostart_enabled())
-        form.addRow("", self.autostart)
+        look.addRow("", self.autostart)
 
+        # --- Backup & phone --------------------------------------------------
+        backup = self._page(tabs, "Backup & phone")
         backup_row = QHBoxLayout()
         self.backup_dir = QLineEdit(cfg.backup_dir)
         self.backup_dir.setPlaceholderText(str(BACKUP_DIR))
@@ -1131,94 +1151,67 @@ class SettingsDialog(QDialog):
         backup_row.addWidget(self.backup_dir, 1)
         backup_row.addWidget(pick_backup)
         backup_row.addWidget(backup_now)
-        form.addRow("Backup folder", backup_row)
+        backup.addRow("Backup folder", backup_row)
         self.backup_daily = QCheckBox("Back up daily (database snapshot + readable JSON export)")
         self.backup_daily.setChecked(cfg.backup_daily)
-        form.addRow("", self.backup_daily)
-        self.backup_status = QLabel(backup_text(parent.db.get_meta("backup")))
-        self.backup_status.setObjectName("Hint")
-        self.backup_status.setWordWrap(True)
-        form.addRow("", self.backup_status)
+        backup.addRow("", self.backup_daily)
+        self.backup_status = self._status(backup, backup_text(parent.db.get_meta("backup")))
 
         self.passphrase = QLineEdit(cfg.export_passphrase)
         self.passphrase.setEchoMode(QLineEdit.EchoMode.Password)
-        self.passphrase.setPlaceholderText("Passphrase that unlocks the phone page")
-        form.addRow("Phone page", self.passphrase)
-        phone_row = QHBoxLayout()
+        self.passphrase.setPlaceholderText("Passphrase that unlocks the page on your phone")
+        backup.addRow("Phone page", self.passphrase)
+        token_row = QHBoxLayout()
         self.vercel = QLineEdit(cfg.vercel_token)
         self.vercel.setEchoMode(QLineEdit.EchoMode.Password)
-        self.vercel.setPlaceholderText("Vercel token (optional, to publish it)")
+        self.vercel.setPlaceholderText("Vercel token (optional)")
         publish_now = QPushButton("Build && publish")
         publish_now.clicked.connect(self._publish_now)
-        phone_row.addWidget(self.vercel, 1)
-        phone_row.addWidget(publish_now)
-        form.addRow("", phone_row)
-        self.export_status = QLabel(export_text(parent.db.get_meta("export")))
-        self.export_status.setObjectName("Hint")
-        self.export_status.setWordWrap(True)
-        self.export_status.setOpenExternalLinks(True)
-        form.addRow("", self.export_status)
-
+        token_row.addWidget(self.vercel, 1)
+        token_row.addWidget(publish_now)
+        backup.addRow("Vercel token", token_row)
         self.vercel_team = QLineEdit(cfg.vercel_team)
-        self.vercel_team.setPlaceholderText("Vercel team id or slug (empty = your personal account)")
-        form.addRow("", self.vercel_team)
+        self.vercel_team.setPlaceholderText("Team id or slug (empty = your personal account)")
+        backup.addRow("Vercel team", self.vercel_team)
         self.publish_command = QLineEdit(cfg.publish_command)
-        self.publish_command.setPlaceholderText("Or publish with your own command, e.g. "
-                                                "netlify deploy --dir {dir} --prod")
-        form.addRow("", self.publish_command)
-
+        self.publish_command.setPlaceholderText("Instead of Vercel, e.g. netlify deploy --dir {dir} --prod")
+        backup.addRow("Publish command", self.publish_command)
         self.sync_command = QLineEdit(cfg.sync_command)
-        self.sync_command.setPlaceholderText("Optional command after backups, e.g. rclone copy {dir} gdrive:AchTrack")
-        form.addRow("Sync command", self.sync_command)
+        self.sync_command.setPlaceholderText("After backups, e.g. rclone copy {dir} gdrive:AchTrack")
+        backup.addRow("Sync command", self.sync_command)
+        self.export_status = self._status(backup, export_text(parent.db.get_meta("export")), links=True)
 
-        self.dirs = QPlainTextEdit("\n".join(cfg.scan_dirs))
-        self.dirs.setPlaceholderText("One folder per line - Wine prefixes, or folders that contain them")
-        self.dirs.setFixedHeight(84)
-        form.addRow("Extra folders", self.dirs)
-        lay.addLayout(form)
-
-        note = QLabel("Prefixes in ~/.wine, ~/Games (Lutris/Heroic), Bottles and Steam's compatdata are found automatically.")
-        note.setObjectName("Hint")
-        note.setWordWrap(True)
-        lay.addWidget(note)
-
-        bottom = QHBoxLayout()
-        test = QPushButton("Test popup")
-        test.clicked.connect(lambda: self._test(False))
-        test_rare = QPushButton("Test rare popup")
-        test_rare.clicked.connect(lambda: self._test(True))
-        bottom.addWidget(test)
-        bottom.addWidget(test_rare)
-        bottom.addStretch(1)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.button(QDialogButtonBox.StandardButton.Save).setObjectName("Primary")
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
-        bottom.addWidget(buttons)
-        lay.addLayout(bottom)
+        root.addWidget(buttons)
 
-    def _sync_now(self) -> None:
-        self.win.cfg.steam_api_key = self.key.text().strip()
-        self.win.cfg.steam_id = self.steam_id.text().strip()
-        self.win.cfg.steam_sync = True
-        self.steam_sync.setChecked(True)
-        self.win.worker.request("steam_sync")
-        self.sync_status.setText("Syncing… (a large library can take a minute)")
-        QTimer.singleShot(4000, self._refresh_sync_status)
+    # --- helpers ------------------------------------------------------------
 
-    def _psn_now(self) -> None:
-        self.win.cfg.psn_npsso = self.psn.text().strip()
-        self.win.cfg.psn_sync = True
-        self.win.worker.request("psn_sync")
-        self.psn_status.setText("Syncing your PlayStation library…")
-        QTimer.singleShot(5000, lambda: self.psn_status.setText(
-            sync_text(self.win.db.get_meta("psn_sync"), "trophies", "trophies")))
+    @staticmethod
+    def _page(tabs: QTabWidget, title: str) -> QFormLayout:
+        page = QWidget()
+        form = QFormLayout(page)
+        form.setContentsMargins(18, 18, 18, 18)
+        form.setSpacing(12)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        scroll = QScrollArea()
+        scroll.setWidget(page)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        tabs.addTab(scroll, title)
+        return form
 
-    def _refresh_sync_status(self) -> None:
-        status = self.win.db.get_meta("steam_sync")
-        self.sync_status.setText(steam_sync_text(status))
-        if status is None or time.time() - status.get("time", 0) > 5:
-            QTimer.singleShot(3000, self._refresh_sync_status)
+    @staticmethod
+    def _status(form: QFormLayout, text: str, links: bool = False) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("Hint")
+        label.setWordWrap(True)
+        label.setOpenExternalLinks(links)
+        form.addRow("", label)
+        return label
 
     def _file_row(self, value: str, placeholder: str):
         row = QWidget()
@@ -1237,6 +1230,37 @@ class SettingsDialog(QDialog):
         if path:
             edit.setText(path)
 
+    def _pick_sound(self, edit: QLineEdit) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Sound file", os.path.expanduser("~"),
+                                              "Audio (*.wav *.ogg *.oga *.mp3 *.flac)")
+        if path:
+            edit.setText(path)
+
+    # --- actions ------------------------------------------------------------
+
+    def _sync_now(self) -> None:
+        self.win.cfg.steam_api_key = self.key.text().strip()
+        self.win.cfg.steam_id = self.steam_id.text().strip()
+        self.win.cfg.steam_sync = True
+        self.steam_sync.setChecked(True)
+        self.win.worker.request("steam_sync")
+        self.sync_status.setText("Syncing… (a large library can take a minute)")
+        QTimer.singleShot(4000, self._refresh_sync_status)
+
+    def _refresh_sync_status(self) -> None:
+        status = self.win.db.get_meta("steam_sync")
+        self.sync_status.setText(steam_sync_text(status))
+        if status is None or time.time() - status.get("time", 0) > 5:
+            QTimer.singleShot(3000, self._refresh_sync_status)
+
+    def _psn_now(self) -> None:
+        self.win.cfg.psn_npsso = self.psn.text().strip()
+        self.win.cfg.psn_sync = True
+        self.win.worker.request("psn_sync")
+        self.psn_status.setText("Syncing your PlayStation library…")
+        QTimer.singleShot(5000, lambda: self.psn_status.setText(
+            sync_text(self.win.db.get_meta("psn_sync"), "trophies", "trophies")))
+
     def _publish_now(self) -> None:
         cfg = self.win.cfg
         cfg.export_passphrase = self.passphrase.text()
@@ -1246,11 +1270,6 @@ class SettingsDialog(QDialog):
         self.win.worker.request("export", bool(cfg.vercel_token or cfg.publish_command))
         self.export_status.setText("Building the phone page…")
         QTimer.singleShot(6000, lambda: self.export_status.setText(export_text(self.win.db.get_meta("export"))))
-
-    def _pick_sound(self, edit: QLineEdit) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Sound file", os.path.expanduser("~"), "Audio (*.wav *.ogg *.oga *.mp3 *.flac)")
-        if path:
-            edit.setText(path)
 
     def _apply(self, cfg: Config) -> None:
         cfg.popup_style = self.style.currentData()
@@ -1280,20 +1299,20 @@ class SettingsDialog(QDialog):
         cfg.language = self.language.currentText().strip() or "english"
         cfg.force_x11 = self.x11.isChecked()
         cfg.steam_id = self.steam_id.text().strip()
-        cfg.psn_npsso = self.psn.text().strip()
         cfg.steam_sync = self.steam_sync.isChecked()
+        cfg.psn_npsso = self.psn.text().strip()
         cfg.session_review = self.review.isChecked()
+        cfg.save_detection = self.saves.isChecked()
+        cfg.screen_watcher = self.screen.isChecked()
+        cfg.theme = self.theme.currentData()
+        cfg.font_family = self.font.text().strip()
         cfg.backup_dir = self.backup_dir.text().strip()
         cfg.backup_daily = self.backup_daily.isChecked()
         cfg.export_passphrase = self.passphrase.text()
         cfg.vercel_token = self.vercel.text().strip()
-        cfg.sync_command = self.sync_command.text().strip()
         cfg.vercel_team = self.vercel_team.text().strip()
         cfg.publish_command = self.publish_command.text().strip()
-        cfg.theme = self.theme.currentData()
-        cfg.font_family = self.font.text().strip()
-        cfg.save_detection = self.saves.isChecked()
-        cfg.screen_watcher = self.screen.isChecked()
+        cfg.sync_command = self.sync_command.text().strip()
         cfg.scan_dirs = [line.strip() for line in self.dirs.toPlainText().splitlines() if line.strip()]
         cfg.save()
         try:

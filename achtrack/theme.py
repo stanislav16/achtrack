@@ -200,6 +200,14 @@ QScrollBar::add-page, QScrollBar::sub-page {{ background: none; }}
 #ReviewRow[checked="true"] {{ border-color: {p['accent']}; }}
 #Found {{ color: {p['accent']}; font-size: 11.5px; }}
 #SaveStatus {{ color: {p['muted']}; font-size: 11.5px; }}
+QTabWidget::pane {{ border: 1px solid {p['hair']}; border-radius: 12px; top: -1px; background: {p['side']}; }}
+QTabBar {{ qproperty-drawBase: 0; }}
+QTabBar::tab {{ background: transparent; color: {p['muted']}; padding: 8px 16px; margin-right: 4px;
+    border: 1px solid transparent; border-radius: 9px; }}
+QTabBar::tab:selected {{ background: {p['sel']}; color: {p['text']}; }}
+QTabBar::tab:hover:!selected {{ color: {p['text2']}; }}
+QScrollArea {{ background: transparent; border: none; }}
+QScrollArea > QWidget > QWidget {{ background: transparent; }}
 QCheckBox {{ spacing: 8px; }}
 QCheckBox::indicator {{ width: 16px; height: 16px; border-radius: 5px; background: {p['field']};
     border: 1px solid {p['hair']}; }}

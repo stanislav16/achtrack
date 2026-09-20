@@ -9,7 +9,7 @@ from datetime import datetime
 
 from PySide6.QtCore import QDateTime, QRectF, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import (QAction, QActionGroup, QBrush, QColor, QDesktopServices, QFont, QGuiApplication, QIcon,
-                           QImage, QLinearGradient, QPainter, QPainterPath, QPalette, QPixmap)
+                           QImage, QKeySequence, QLinearGradient, QPainter, QPainterPath, QPalette, QPixmap)
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateTimeEdit, QDialog,
                                QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout,
                                QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
@@ -1541,7 +1541,13 @@ class MainWindow(QMainWindow):
         lib.addSeparator()
         lib.addAction("Settings…", self.open_settings)
         lib.addSeparator()
-        lib.addAction("Quit", self.quit_app)
+        # On macOS this becomes the app menu's Quit item, so Cmd-Q really quits.
+        quit_action = QAction("Quit", self)
+        quit_action.setShortcut(QKeySequence("Ctrl+Q"))     # Qt maps Ctrl to Cmd on macOS
+        quit_action.setMenuRole(QAction.MenuRole.QuitRole)
+        quit_action.triggered.connect(self.quit_app)
+        self.addAction(quit_action)
+        lib.addAction(quit_action)
         helpm = bar.addMenu("Help")
         helpm.addAction("Test achievement popup", lambda: self.notifier.test(False))
         helpm.addAction("Test rare achievement popup", lambda: self.notifier.test(True))

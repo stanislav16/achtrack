@@ -145,8 +145,9 @@ def run_gui(background: bool = False) -> int:
     win = MainWindow(cfg, worker, notifier, has_tray=tray is not None)
 
     def on_close_without_tray():
-        notifier.toasts.show(ToastData(kicker=APP_NAME, title="Still running in the background",
-                                       body=f"Run “{APP_ID}” again to open the library. Quit from Library → Quit.",
+        how = ("Click its Dock icon to open it again, or press Cmd-Q to quit." if sys.platform == "darwin"
+               else f"Run “{APP_ID}” again to open the library. Quit from Library → Quit.")
+        notifier.toasts.show(ToastData(kicker=APP_NAME, title="Still running in the background", body=how,
                                        sound=None))
 
     win.on_hidden_without_tray = on_close_without_tray

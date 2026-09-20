@@ -736,7 +736,12 @@ class Engine:
 
     def run_device_sync(self) -> dict:
         """Exchanges libraries with your other machines through the shared folder."""
+        folder = self.cfg.sync_dir.strip()
+        if folder and self.cfg.sync_pull_command.strip():
+            self._run_command(self.cfg.sync_pull_command, folder, "Fetching the shared folder")
         status = sync.run_sync(self.db, self.cfg.sync_dir)
+        if folder and not status["error"] and self.cfg.sync_push_command.strip():
+            self._run_command(self.cfg.sync_push_command, folder, "Uploading to the shared folder")
         if status["error"]:
             self._error(f"Device sync failed: {status['error']}")
         elif status["unlocks"] or status["games"] or status["removed"] or status["updated"]:

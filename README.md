@@ -154,6 +154,17 @@ Syncthing keeps in step) and they merge their libraries every few minutes:
 Each machine writes one small `achtrack-sync-<id>.json.gz`; there's no server and no account.
 `achtrack sync-devices` does it from the terminal.
 
+If the folder isn't synced by the system itself (iCloud on Linux, for example), set a **fetch** and
+an **upload** command in the same tab and AchTrack runs them around each sync:
+
+```text
+rclone copy icloud:AchTrack {dir}     # fetch, before merging
+rclone copy {dir} icloud:AchTrack     # upload, after writing
+```
+
+Because each machine only ever writes its own file, plain copies in both directions are enough -
+no two-way merge tool is needed.
+
 ## When a crack doesn't record achievements
 
 Some cracks never save achievements. For example, some RUNE releases leave `achievements.ini` at

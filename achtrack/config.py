@@ -87,6 +87,10 @@ class Config:
     # Shared folder where your machines exchange libraries (Dropbox, Drive, Syncthing, ...).
     sync_dir: str = ""
     sync_interval: float = 300.0
+    # For folders your system can't sync itself (e.g. iCloud on Linux): fetch before merging,
+    # upload after writing. {dir} is the shared folder.
+    sync_pull_command: str = ""            # e.g. rclone copy icloud:AchTrack {dir}
+    sync_push_command: str = ""            # e.g. rclone copy {dir} icloud:AchTrack
     force_x11: bool = True
     poll_interval: float = 1.5
     process_interval: float = 5.0

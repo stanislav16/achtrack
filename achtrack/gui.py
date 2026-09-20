@@ -1209,6 +1209,12 @@ class SettingsDialog(QDialog):
         sync_row.addWidget(pick_sync)
         sync_row.addWidget(sync_now_btn)
         devices.addRow("Shared folder", sync_row)
+        self.sync_pull = QLineEdit(cfg.sync_pull_command)
+        self.sync_pull.setPlaceholderText("Optional, before merging, e.g. rclone copy icloud:AchTrack {dir}")
+        devices.addRow("Fetch command", self.sync_pull)
+        self.sync_push = QLineEdit(cfg.sync_push_command)
+        self.sync_push.setPlaceholderText("Optional, after writing, e.g. rclone copy {dir} icloud:AchTrack")
+        devices.addRow("Upload command", self.sync_push)
         self.device_status = self._status(devices, device_sync_text(parent.db.get_meta("sync")))
         self._status(devices, "Point every machine at the same folder. Unlocks from all of them are combined, "
                               "play time takes the highest per source, and anything you undo stays undone.")
@@ -1296,6 +1302,8 @@ class SettingsDialog(QDialog):
 
     def _devices_now(self) -> None:
         self.win.cfg.sync_dir = self.sync_dir.text().strip()
+        self.win.cfg.sync_pull_command = self.sync_pull.text().strip()
+        self.win.cfg.sync_push_command = self.sync_push.text().strip()
         self.win.worker.request("sync")
         self.device_status.setText("Syncing with your other machines…")
         QTimer.singleShot(4000, lambda: self.device_status.setText(device_sync_text(self.win.db.get_meta("sync"))))
@@ -1353,6 +1361,8 @@ class SettingsDialog(QDialog):
         cfg.publish_command = self.publish_command.text().strip()
         cfg.sync_command = self.sync_command.text().strip()
         cfg.sync_dir = self.sync_dir.text().strip()
+        cfg.sync_pull_command = self.sync_pull.text().strip()
+        cfg.sync_push_command = self.sync_push.text().strip()
         cfg.scan_dirs = [line.strip() for line in self.dirs.toPlainText().splitlines() if line.strip()]
         cfg.save()
         try:

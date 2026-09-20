@@ -11,6 +11,7 @@ from PySide6.QtCore import QDateTime, QRectF, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import (QAction, QActionGroup, QBrush, QColor, QDesktopServices, QFont, QGuiApplication, QIcon,
                            QImage, QKeySequence, QLinearGradient, QPainter, QPainterPath, QPalette, QPixmap)
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateTimeEdit, QDialog,
+                               QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsScene,
                                QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout,
                                QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
                                QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSplitter, QStackedWidget,
@@ -403,13 +404,32 @@ def rounded(pm: QPixmap, radius: int) -> QPixmap:
     return out
 
 
+def gaussian(pm: QPixmap, radius: float) -> QPixmap:
+    """A real Gaussian blur - stretching a tiny thumbnail instead leaves visible blocks."""
+    scene = QGraphicsScene()
+    item = QGraphicsPixmapItem(pm)
+    effect = QGraphicsBlurEffect()
+    effect.setBlurRadius(radius)
+    effect.setBlurHints(QGraphicsBlurEffect.BlurHint.QualityHint)
+    item.setGraphicsEffect(effect)
+    scene.addItem(item)
+    out = QImage(pm.size(), QImage.Format.Format_ARGB32_Premultiplied)
+    out.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(out)
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+    scene.render(painter, QRectF(0, 0, pm.width(), pm.height()), QRectF(0, 0, pm.width(), pm.height()))
+    painter.end()
+    return QPixmap.fromImage(out)
+
+
 def blurred_wash(pm: QPixmap, width: int, height: int) -> QPixmap:
     """The game's art, blurred to a soft colour field, fading out downwards - the page's tint."""
-    # Two passes: a small one for smooth colour, a larger one so it doesn't turn into blobs.
-    small = pm.scaled(64, 36, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
-    small = small.scaled(12, 7, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
-    wash = small.scaled(width, height, Qt.AspectRatioMode.IgnoreAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation).toImage().convertToFormat(
+    # Blur at a workable size, then scale up smoothly: sharp enough to avoid banding, cheap enough
+    # to redo whenever you switch games.
+    stage = pm.scaled(480, 240, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+    blurred = gaussian(stage, 42)
+    wash = blurred.scaled(width, height, Qt.AspectRatioMode.IgnoreAspectRatio,
+                          Qt.TransformationMode.SmoothTransformation).toImage().convertToFormat(
         QImage.Format.Format_ARGB32_Premultiplied)
     p = QPainter(wash)
     p.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)

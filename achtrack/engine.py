@@ -119,6 +119,8 @@ class Engine:
         self._steam_id: str | None = None
         self._steam_thread: threading.Thread | None = None
         self._psn_thread: threading.Thread | None = None
+        self._describe_queue: deque = deque()
+        self._describe_thread: threading.Thread | None = None
         self._force_psn = False
         self._next_backup = time.time() + 300      # first automatic backup shortly after startup
         self._next_sync = 0.0
@@ -167,6 +169,8 @@ class Engine:
                     next_psn = now + max(300.0, self.cfg.psn_sync_interval)
                 if self.meta_queue:
                     self.ensure_meta(self.meta_queue.popleft(), force=True)
+                if self._describe_queue:
+                    self._start_describe()
                 if self.cfg.backup_daily and time.time() >= self._next_backup:
                     self._next_backup = time.time() + 86400
                     self.run_backup()
@@ -214,10 +218,8 @@ class Engine:
             elif kind == "export":
                 self.build_export(deploy=len(req) > 1 and bool(req[1]))
             elif kind == "describe" and self.db.game(req[1]) is not None:
-                status = self.describe_hidden(req[1], force=True,
-                                              trophy_list=req[2] if len(req) > 2 else "",
-                                              page_url=req[3] if len(req) > 3 else "")
-                self.listener.on_described(req[1], status)
+                self._describe_queue.append((req[1], req[2] if len(req) > 2 else "",
+                                             req[3] if len(req) > 3 else "", True, True))
             elif kind == "icons" and self.db.game(req[1]) is not None:
                 self._prefetch_game_icons(req[1])
 
@@ -348,7 +350,8 @@ class Engine:
             self.db.set_schema(appid, achievements, pct)
             if not self._steam_only(appid):
                 self._prefetch_game_icons(appid)
-                self.describe_hidden(appid)
+                if self.db.blank_descriptions(appid):
+                    self._describe_queue.append((appid, "", "", False, False))
         elif pct:
             self.db.set_global_pct(appid, pct)
 
@@ -555,6 +558,29 @@ class Engine:
 
     # Steam library -------------------------------------------------------
 
+    def _start_describe(self) -> None:
+        """Hidden-description lookups go over the network, so they get their own thread - the main
+        loop has to stay free to notice that a game has stopped."""
+        if self._describe_thread is not None and self._describe_thread.is_alive():
+            return
+
+        def work():
+            db = Database(self.db.path)
+            while self._describe_queue:
+                appid, trophy_list, page_url, force, announce = self._describe_queue.popleft()
+                try:
+                    status = self.describe_hidden(appid, force=force, trophy_list=trophy_list,
+                                                  page_url=page_url, db=db)
+                except Exception:
+                    log.exception("description lookup crashed")
+                    status = {"filled": 0, "blanks": 0, "source": "", "title": "", "searched": False,
+                              "error": "the lookup failed - see the log"}
+                if announce:
+                    self.listener.on_described(appid, status)
+
+        self._describe_thread = threading.Thread(target=work, name="achtrack-describe", daemon=True)
+        self._describe_thread.start()
+
     def _start_steam_sync(self) -> None:
         # The first sync of a big library takes a while; keep watching achievement files meanwhile.
         if self._steam_thread is not None and self._steam_thread.is_alive():
@@ -736,19 +762,20 @@ class Engine:
         self._psn_thread = threading.Thread(target=work, name="achtrack-psn", daemon=True)
         self._psn_thread.start()
 
-    def _known_trophy_lists(self, appid: int, name: str) -> list:
+    def _known_trophy_lists(self, appid: int, name: str, db: Database | None = None) -> list:
         """Trophy lists worth trying for a PC game: the same game in your PlayStation library,
         and anything you've linked by hand."""
-        game = self.db.game(appid)
+        db = db or self.db
+        game = db.game(appid)
         known = [game["trophy_src"]] if game["trophy_src"] and game["trophy_src"] != "-" else []
         wanted = psn.normalize_name(name)
-        for row in self.db.q("SELECT name, psn_id FROM games WHERE psn_id IS NOT NULL AND psn_id != ''"):
+        for row in db.q("SELECT name, psn_id FROM games WHERE psn_id IS NOT NULL AND psn_id != ''"):
             if psn.normalize_name(row["name"] or "") == wanted and row["psn_id"] not in known:
                 known.append(row["psn_id"])
         return known
 
     def describe_hidden(self, appid: int, note=None, force: bool = False, trophy_list: str = "",
-                        page_url: str = "") -> dict:
+                        page_url: str = "", db: Database | None = None) -> dict:
         """Describes a game's hidden achievements, which Steam blanks out for good.
 
         Either from the game's PlayStation trophy list, or - `page_url` - from a page you found
@@ -756,18 +783,19 @@ class Engine:
         achievements already readable matches; see descriptions.py.
         """
         status = {"filled": 0, "blanks": 0, "source": "", "title": "", "error": "", "searched": False}
-        game = self.db.game(appid)
+        db = db or self.db          # a background thread brings its own connection
+        game = db.game(appid)
         if game is None:
             return {**status, "error": "no such game"}
         if appid < 0:
             return {**status, "error": "PlayStation games already carry their descriptions"}
-        status["blanks"] = self.db.blank_descriptions(appid)
+        status["blanks"] = db.blank_descriptions(appid)
         if not status["blanks"]:
             return status
         if not force and not self.cfg.psn_describe_hidden:
             return {**status, "error": "turned off in Settings"}
         if page_url:
-            return self._describe_from_page(appid, page_url, status, note)
+            return self._describe_from_page(appid, page_url, status, note, db)
         npsso = self.cfg.psn_npsso.strip()
         if not npsso:
             return {**status, "error": "no PlayStation login in Settings"}
@@ -781,10 +809,10 @@ class Engine:
         name = game["name"] or ""
         if not name:
             return {**status, "error": "this game has no name yet"}
-        achievements = self.db.achievements(appid)
+        achievements = db.achievements(appid)
         try:
-            tokens = psn.valid_token(self.db.get_meta("psn_tokens"), npsso)
-            self.db.set_meta("psn_tokens", tokens)
+            tokens = psn.valid_token(db.get_meta("psn_tokens"), npsso)
+            db.set_meta("psn_tokens", tokens)
             token = tokens["access_token"]
             if linked:
                 found, source, title = descriptions.lookup(token, name, achievements, note,
@@ -800,21 +828,23 @@ class Engine:
             else:
                 status["searched"] = True
                 found, source, title = descriptions.lookup(
-                    token, name, achievements, note, known=self._known_trophy_lists(appid, name))
+                    token, name, achievements, note, known=self._known_trophy_lists(appid, name, db))
         except psn.PSNError as e:
             return {**status, "error": str(e)}
 
         if found:
-            status["filled"] = self.db.learn_descriptions(appid, found, source)
+            status["filled"] = db.learn_descriptions(appid, found, source)
         if found or not linked:
-            self.db.update_game(appid, trophy_src=source or "-")
+            db.update_game(appid, trophy_src=source or "-")
         status["source"], status["title"] = source, title
         self.listener.on_changed()
         return status
 
-    def _describe_from_page(self, appid: int, url: str, status: dict, note=None) -> dict:
+    def _describe_from_page(self, appid: int, url: str, status: dict, note=None,
+                            db: Database | None = None) -> dict:
         """Takes the descriptions off a page you pointed AchTrack at."""
-        achievements = self.db.achievements(appid)
+        db = db or self.db
+        achievements = db.achievements(appid)
         try:
             page = descriptions.fetch_page(url)
         except OSError as e:
@@ -824,7 +854,7 @@ class Engine:
             note(f"read {len(page) // 1024} KB - {why}")
         if not found:
             return {**status, "error": why}
-        status["filled"] = self.db.learn_descriptions(appid, found, url)
+        status["filled"] = db.learn_descriptions(appid, found, url)
         status["source"], status["title"] = url, f"{confidence:.0%} sure"
         self.listener.on_changed()
         return status

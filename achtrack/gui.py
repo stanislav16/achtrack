@@ -1785,6 +1785,9 @@ class MainWindow(QMainWindow):
             self.reload(force=True)
             return
         self.statusBar().clearMessage()
+        if not status["blanks"]:
+            self.statusBar().showMessage(f"Every achievement of {name} already has a description.", 8000)
+            return
         self.describe_from_page(appid, why=status["error"])
 
     def forget_descriptions(self, appid: int) -> None:

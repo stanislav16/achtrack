@@ -10,7 +10,9 @@
       <stop offset="0.45" stop-color="#FFFFFF" stop-opacity="0.04"/>
       <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
     </linearGradient>
-    <linearGradient id="metal" x1="0.2" y1="0" x2="0.8" y2="1">
+    <!-- userSpaceOnUse: the stem and base are straight lines, and a bounding-box gradient on a
+         zero-width/height shape isn't rendered at all by spec-following renderers. -->
+    <linearGradient id="metal" gradientUnits="userSpaceOnUse" x1="340" y1="280" x2="700" y2="800">
       <stop offset="0" stop-color="#F6BE72"/>
       <stop offset="0.5" stop-color="#E0913C"/>
       <stop offset="1" stop-color="#C2762B"/>

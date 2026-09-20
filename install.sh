@@ -45,7 +45,20 @@ ln -sf "$VENV/bin/achtrack" "$BIN/achtrack"
 
 if [ "$OS" = "Darwin" ]; then
     APP="$HOME/Applications/AchTrack.app"
-    mkdir -p "$APP/Contents/MacOS"
+    rm -rf "$APP"
+    mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+    # Run a copy of the interpreter from inside the bundle, so macOS names the app (and its Dock
+    # icon) AchTrack instead of Python. pyvenv.cfg + lib make it still see the virtualenv.
+    REAL_PYTHON="$("$VENV/bin/python" -c 'import os, sys; print(os.path.realpath(sys.executable))')"
+    cp "$REAL_PYTHON" "$APP/Contents/MacOS/python3"
+    cp "$VENV/pyvenv.cfg" "$APP/Contents/pyvenv.cfg"
+    ln -sfn "$VENV/lib" "$APP/Contents/lib"
+    cat > "$APP/Contents/MacOS/AchTrack" <<'LAUNCHER'
+#!/bin/sh
+exec "$(dirname "$0")/python3" -m achtrack "$@"
+LAUNCHER
+    chmod +x "$APP/Contents/MacOS/AchTrack"
+    "$VENV/bin/python" tools/make_icons.py "$APP/Contents/Resources" >/dev/null 2>&1 || true
     cat > "$APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -55,6 +68,7 @@ if [ "$OS" = "Darwin" ]; then
     <key>CFBundleDisplayName</key><string>AchTrack</string>
     <key>CFBundleIdentifier</key><string>com.achtrack.app</string>
     <key>CFBundleExecutable</key><string>AchTrack</string>
+    <key>CFBundleIconFile</key><string>AchTrack</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>1.0.0</string>
     <key>LSMinimumSystemVersion</key><string>11.0</string>
@@ -62,11 +76,7 @@ if [ "$OS" = "Darwin" ]; then
 </dict>
 </plist>
 EOF
-    cat > "$APP/Contents/MacOS/AchTrack" <<EOF
-#!/bin/sh
-exec "$VENV/bin/achtrack" "\$@"
-EOF
-    chmod +x "$APP/Contents/MacOS/AchTrack"
+    touch "$APP"          # nudge Finder to pick up the new icon
     echo "Added $APP (find it in Finder → Applications)."
 else
     mkdir -p "$DATA/applications" "$DATA/icons/hicolor/scalable/apps"

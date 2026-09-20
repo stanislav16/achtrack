@@ -245,6 +245,8 @@ def find_prefixes(extra_dirs=()) -> list:
         if found:
             candidates.append(found)
     roots = [
+        (home / "Library/Application Support/CrossOver/Bottles", 1),   # macOS
+        (home / ".cxoffice", 1),                                        # CrossOver on Linux
         (home / "Games", 2),                      # Lutris default + umu / custom
         (home / "Games/Heroic/Prefixes", 2),      # Heroic: Prefixes/default/<game>[/pfx]
         (home / ".local/share/bottles/bottles", 1),

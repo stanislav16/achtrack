@@ -20,6 +20,7 @@ import queue
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from collections import deque
@@ -66,18 +67,21 @@ def _is_wayland() -> bool:
 
 def backend_candidates() -> list:
     """Capture methods to try, best first. X11 capture sees nothing of other apps on Wayland."""
-    x11 = ["x11"] if os.environ.get("DISPLAY") else []
+    if not sys.platform.startswith("linux"):
+        return ["screen"]                   # macOS and Windows: mss captures the desktop directly
+    direct = ["screen"] if os.environ.get("DISPLAY") else []
     tools = [t for t in WAYLAND_TOOLS if shutil.which(t)]
-    return tools + x11 if _is_wayland() else x11 + tools
+    return tools + direct if _is_wayland() else direct + tools
 
 
 def available() -> tuple:
     """(ok, reason)."""
     if not shutil.which("tesseract"):
-        return False, "tesseract isn't installed (sudo apt install tesseract-ocr)"
+        how = "brew install tesseract" if sys.platform == "darwin" else "sudo apt install tesseract-ocr"
+        return False, f"tesseract isn't installed ({how})"
     try:
         from PIL import Image  # noqa: F401
-        if not _is_wayland():
+        if not (sys.platform.startswith("linux") and _is_wayland()):
             import mss  # noqa: F401
     except ImportError:
         return False, "the mss / Pillow Python packages are missing - run install.sh again"
@@ -118,7 +122,7 @@ class ScreenReader:
 
     def _grab_with(self, name: str):
         from PIL import Image
-        if name == "x11":
+        if name == "screen":
             if self._mss is None:
                 import mss
                 self._mss = mss.mss()

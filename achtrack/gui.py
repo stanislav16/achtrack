@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import time
 from datetime import datetime
 
@@ -1113,6 +1114,10 @@ class SettingsDialog(QDialog):
 
         # --- Detection ------------------------------------------------------
         detect = self._page(tabs, "Detection")
+        if not sys.platform.startswith("linux"):
+            self._status(detect, f"Playtime tracking and crack watching need Linux. On this machine "
+                                 f"{APP_NAME} keeps your library, edits achievements, and syncs Steam, "
+                                 f"PlayStation and your other machines.")
         self.review = QCheckBox("After playing a game whose crack doesn't record achievements, ask what I earned")
         self.review.setChecked(cfg.session_review)
         detect.addRow("", self.review)

@@ -169,7 +169,7 @@ Some cracks never save achievements. For example, some RUNE releases leave `achi
   Manual unlocks are labelled *Added by you* and can be undone.
 - **Search** the achievement list from the game page.
 
-## Install (Pop!_OS)
+## Install (Linux)
 
 ```bash
 sudo apt install python3-venv libxcb-cursor0 tesseract-ocr
@@ -179,6 +179,22 @@ sudo apt install python3-venv libxcb-cursor0 tesseract-ocr
 This installs into `~/.local/share/achtrack/venv`, puts `achtrack` in `~/.local/bin`, adds a menu
 entry and (with `--autostart`) starts it in the background at login. Run `./install.sh` again to update.
 `./uninstall.sh` removes it and keeps your data; `./uninstall.sh --purge` deletes the data too.
+
+## Install (macOS)
+
+```bash
+brew install python tesseract     # tesseract only if you want the screen watcher
+./install.sh --autostart
+```
+
+You get `AchTrack.app` in `~/Applications` plus the `achtrack` command. The Mac build is the full
+client apart from the Linux-only parts: your library with manual unlocking and the review, Steam and
+PlayStation sync, backups, the phone page, and sync with your other machines. Watching cracks,
+tracking playtime and reading save files need Linux (Windows support is planned), though CrossOver
+bottles are scanned if you do run Windows games there.
+
+Point **Settings → Devices** at the same shared folder on both machines and your PC library, manual
+unlocks included, appears here and stays in step.
 
 ### First run
 

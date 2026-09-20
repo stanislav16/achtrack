@@ -50,7 +50,9 @@ def chime(kind: str) -> Path:
 
 
 def _player() -> list | None:
-    for cmd in (["pw-play"], ["paplay"], ["aplay", "-q"], ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet"]):
+    candidates = (["afplay"], ["pw-play"], ["paplay"], ["aplay", "-q"],
+                  ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet"])
+    for cmd in candidates:
         if shutil.which(cmd[0]):
             return cmd
     return None

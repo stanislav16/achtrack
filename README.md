@@ -73,25 +73,33 @@ Some cracks never save achievements. For example, some RUNE releases leave `achi
 
 ## Hidden achievements
 
-Steam blanks out a hidden achievement's description and never reveals it - not through the Web API
-and not on the public achievement page. PlayStation is the opposite: every trophy is spelled out,
-because Sony requires a description. For a game you have on both, the two lists are the same list,
-so the trophy list can describe Steam's blanks.
+Steam blanks out a hidden achievement's description and never reveals it - not through the Web API,
+not on the public achievement page. PlayStation is the opposite: every trophy is spelled out,
+because Sony requires a description. For a game on both, the two lists are the same list, so the
+PlayStation side can describe Steam's blanks.
 
-Right-click a game → **Describe hidden achievements…**, or run `achtrack describe`. A trophy list is
-only used once its trophy names line up with the achievement names that are already readable, so a
-wrong match fills nothing. Filled-in descriptions are kept separately, survive an achievement
-refresh, and travel to your other devices and the phone page.
+Right-click a game → **Describe hidden achievements…**. AchTrack fills them in from:
 
-What can be looked up automatically is limited by Sony, not by the matching: PlayStation only tells
-you a game's trophy list id for games your own account has played. For anything else, find the
-id (it looks like `NPWR12345_00`) and hand it over once:
+1. the game's PlayStation trophy list, if your own account has played it (automatic, no setup), or
+2. **a page you point it at** - any page listing the game's trophies or achievements. Paste the
+   address and it reads it once.
+
+Either way the result is checked before a word is kept: the achievements you can *already* read are
+the control, and what the trophy list or page says about those has to match what Steam says. A page
+for the wrong game, or one AchTrack reads badly, fills nothing. The check is shown when it runs
+("28 of 28 known descriptions match").
 
 ```text
-achtrack describe "Baldur's Gate 3" --trophy-list NPWR12345_00
+achtrack describe                                   fill in whatever can be filled in
+achtrack describe "Sekiro" --from-page https://…    read the descriptions off a page
+achtrack describe "Sekiro" --trophy-list NPWR12345_00
+achtrack describe "Sekiro" --forget                 back to Steam's blanks
 ```
 
-Turn the whole thing off in **Settings → Accounts** if you'd rather not have it look things up.
+Filled-in descriptions are stored apart from the achievement list, so they survive a refresh, and
+they travel to your other devices and the phone page. Nothing on a page you paste is followed or
+executed - it is read as text, once. Turn the automatic PlayStation lookup off in
+**Settings → Accounts**.
 
 ## Install (Linux)
 
@@ -173,7 +181,7 @@ achtrack list             print the library with playtime and achievement counts
 achtrack sync-steam       copy your Steam games, playtime and achievements in now
 achtrack sync-psn         copy your PlayStation games, play time and trophies in now
 achtrack sync-devices     merge libraries with your other machines
-achtrack describe [game]  fill hidden achievement descriptions from PlayStation trophy lists
+achtrack describe [game]  fill in hidden achievement descriptions (--from-page URL, --forget)
 achtrack saves [appid]    show the save files AchTrack reads and what it matched (--fields for all values)
 achtrack backup           snapshot the database + JSON export (--restore FILE to put one back)
 achtrack export           build the phone page (--deploy to publish it to Vercel)

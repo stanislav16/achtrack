@@ -177,8 +177,8 @@ def cmd_psn_sync() -> int:
     return 0
 
 
-def cmd_describe(target: str | None, force: bool, trophy_list: str) -> int:
-    """Looks up hidden achievement descriptions in PlayStation's trophy lists."""
+def cmd_describe(target: str | None, force: bool, trophy_list: str, page: str, forget: bool) -> int:
+    """Fills in hidden achievement descriptions, which Steam never reveals."""
     from .config import Config
     from .db import Database
     from .engine import Engine, Listener
@@ -186,8 +186,8 @@ def cmd_describe(target: str | None, force: bool, trophy_list: str) -> int:
     cfg = Config.load()
     db = Database()
     engine = Engine(cfg, db, Listener())
-    games = [r for r in db.q("SELECT appid, name FROM games WHERE appid > 0 ORDER BY name")
-             if db.blank_descriptions(r["appid"])]
+    every = db.q("SELECT appid, name FROM games WHERE appid > 0 ORDER BY name")
+    games = every if forget else [r for r in every if db.blank_descriptions(r["appid"])]
     if target:
         wanted = target.strip().lower()
         games = [g for g in games if wanted in (g["name"] or "").lower() or str(g["appid"]) == wanted]
@@ -198,12 +198,24 @@ def cmd_describe(target: str | None, force: bool, trophy_list: str) -> int:
         print("Every achievement already has a description.")
         return 0
 
+    if (trophy_list or page or forget) and len(games) > 1:
+        print(f"That matches {len(games)} games - name one of them: "
+              + ", ".join((g["name"] or str(g["appid"]))[:30] for g in games[:6]))
+        return 1
+    if forget:
+        if not target:
+            print("Name the game to forget descriptions for.")
+            return 1
+        for game in games:
+            print(f"{game['name']}: forgot {engine.forget_descriptions(game['appid'])} looked-up descriptions")
+        return 0
+
     total = 0
     for game in games:
         blanks = db.blank_descriptions(game["appid"])
         print(f"\n{game['name'] or game['appid']} - {blanks} without a description")
         status = engine.describe_hidden(game["appid"], note=lambda t: print(f"  {t}"), force=force,
-                                        trophy_list=trophy_list)
+                                        trophy_list=trophy_list, page_url=page)
         if status["error"]:
             print(f"  {status['error']}")
         elif status["filled"]:
@@ -302,6 +314,10 @@ def main(argv=None) -> int:
     describe.add_argument("--force", action="store_true", help="search again for games that found nothing before")
     describe.add_argument("--trophy-list", default="", metavar="NPWR12345_00",
                           help="use this PlayStation trophy list for the game (an id or a link containing one)")
+    describe.add_argument("--from-page", default="", metavar="URL", dest="page",
+                          help="read the descriptions off a page that lists this game's achievements")
+    describe.add_argument("--forget", action="store_true",
+                          help="drop the descriptions a lookup filled in for this game")
     saves = sub.add_parser("saves", help="show the save files AchTrack reads and what it matches in them")
     saves.add_argument("appid", nargs="?", type=int, help="only this game")
     saves.add_argument("--file", help="test any save file (with --appid)")
@@ -330,7 +346,7 @@ def main(argv=None) -> int:
     if args.command == "export":
         return cmd_export(args.deploy)
     if args.command == "describe":
-        return cmd_describe(args.game, args.force, args.trophy_list)
+        return cmd_describe(args.game, args.force, args.trophy_list, args.page, args.forget)
     if args.command == "saves":
         return cmd_saves(args.appid or args.appid_opt, args.file, args.fields)
 

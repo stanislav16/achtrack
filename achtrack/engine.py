@@ -214,7 +214,9 @@ class Engine:
             elif kind == "export":
                 self.build_export(deploy=len(req) > 1 and bool(req[1]))
             elif kind == "describe" and self.db.game(req[1]) is not None:
-                status = self.describe_hidden(req[1], force=True, trophy_list=req[2] if len(req) > 2 else "")
+                status = self.describe_hidden(req[1], force=True,
+                                              trophy_list=req[2] if len(req) > 2 else "",
+                                              page_url=req[3] if len(req) > 3 else "")
                 self.listener.on_described(req[1], status)
             elif kind == "icons" and self.db.game(req[1]) is not None:
                 self._prefetch_game_icons(req[1])
@@ -745,11 +747,13 @@ class Engine:
                 known.append(row["psn_id"])
         return known
 
-    def describe_hidden(self, appid: int, note=None, force: bool = False, trophy_list: str = "") -> dict:
-        """Describes a game's hidden achievements from its PlayStation trophy list.
+    def describe_hidden(self, appid: int, note=None, force: bool = False, trophy_list: str = "",
+                        page_url: str = "") -> dict:
+        """Describes a game's hidden achievements, which Steam blanks out for good.
 
-        Steam blanks them out for good; PlayStation spells them out. Only used once the trophy
-        names line up with the achievement names we can already read - see descriptions.py.
+        Either from the game's PlayStation trophy list, or - `page_url` - from a page you found
+        yourself that lists the achievements. Both are only believed once what they say about the
+        achievements already readable matches; see descriptions.py.
         """
         status = {"filled": 0, "blanks": 0, "source": "", "title": "", "error": "", "searched": False}
         game = self.db.game(appid)
@@ -762,6 +766,8 @@ class Engine:
             return status
         if not force and not self.cfg.psn_describe_hidden:
             return {**status, "error": "turned off in Settings"}
+        if page_url:
+            return self._describe_from_page(appid, page_url, status, note)
         npsso = self.cfg.psn_npsso.strip()
         if not npsso:
             return {**status, "error": "no PlayStation login in Settings"}
@@ -805,6 +811,33 @@ class Engine:
         status["source"], status["title"] = source, title
         self.listener.on_changed()
         return status
+
+    def _describe_from_page(self, appid: int, url: str, status: dict, note=None) -> dict:
+        """Takes the descriptions off a page you pointed AchTrack at."""
+        achievements = self.db.achievements(appid)
+        try:
+            page = descriptions.fetch_page(url)
+        except OSError as e:
+            return {**status, "error": str(e)}
+        found, confidence, why = descriptions.from_page(page, achievements)
+        if note:
+            note(f"read {len(page) // 1024} KB - {why}")
+        if not found:
+            return {**status, "error": why}
+        status["filled"] = self.db.learn_descriptions(appid, found, url)
+        status["source"], status["title"] = url, f"{confidence:.0%} sure"
+        self.listener.on_changed()
+        return status
+
+    def forget_descriptions(self, appid: int) -> int:
+        """Drops what a lookup filled in, so a game goes back to Steam's own blanks."""
+        names = [r["name"] for r in self.db.q("SELECT name FROM learned_descriptions WHERE appid = ?", (appid,))]
+        for name in names:
+            self.db.x("UPDATE achievements SET description = '' WHERE appid = ? AND name = ?", (appid, name))
+        self.db.x("DELETE FROM learned_descriptions WHERE appid = ?", (appid,))
+        self.db.update_game(appid, trophy_src="")
+        self.listener.on_changed()
+        return len(names)
 
     def psn_sync(self, db: Database, report=None) -> dict:
         """Copies your PlayStation games, play time and trophies into the library."""

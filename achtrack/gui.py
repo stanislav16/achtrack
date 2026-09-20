@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
                                QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSplitter, QStackedWidget,
                                QTabWidget, QVBoxLayout, QWidget)
 
-from . import __version__, desktop, theme
+from . import __version__, descriptions, desktop, theme
 from .config import APP_ICON, APP_NAME, BACKUP_DIR, POPUP_CORNERS, Config
 from .db import MANUAL, PSN, SAVE, SCREEN, STEAM, Database
 from .engine import build_unlock_event, needs_review
@@ -1763,40 +1763,70 @@ class MainWindow(QMainWindow):
     def request_refresh(self, appid: int) -> None:
         self.worker.request("refresh", appid)
 
-    def describe_hidden(self, appid: int, trophy_list: str = "") -> None:
-        """Looks a game's hidden achievements up in its PlayStation trophy list."""
-        if not self.cfg.psn_npsso:
-            QMessageBox.information(self, APP_NAME, "Add your PlayStation login (NPSSO token) in Settings "
-                                                    "first - the descriptions come from its trophy lists.")
+    def describe_hidden(self, appid: int, trophy_list: str = "", page_url: str = "") -> None:
+        """Fills a game's hidden achievement descriptions, which Steam never reveals."""
+        if not page_url and not self.cfg.psn_npsso:
+            self.describe_from_page(appid, first_ask=True)
             return
         blanks = self.db.blank_descriptions(appid)
         self.statusBar().showMessage(f"Looking up {blanks} hidden achievement"
-                                     f"{'s' if blanks != 1 else ''} on PlayStation…", 30000)
-        self.worker.request("describe", appid, trophy_list)
+                                     f"{'s' if blanks != 1 else ''}…", 30000)
+        self.worker.request("describe", appid, trophy_list, page_url)
 
     def described(self, appid: int, status: dict) -> None:
         """What came back from a trophy-list lookup."""
         game = self.db.game(appid)
         name = (game["name"] if game is not None else "") or f"App {appid}"
         if status["filled"]:
+            where = "that page" if "//" in status["source"] else "its PlayStation trophy list"
             self.statusBar().showMessage(f"Described {status['filled']} hidden achievement"
                                          f"{'s' if status['filled'] != 1 else ''} of {name} "
-                                         f"from its PlayStation trophy list.", 15000)
+                                         f"from {where}.", 15000)
             self.reload(force=True)
             return
         self.statusBar().clearMessage()
-        if status["error"]:
-            QMessageBox.information(self, APP_NAME, f"Couldn't describe {name}: {status['error']}")
+        self.describe_from_page(appid, why=status["error"])
+
+    def forget_descriptions(self, appid: int) -> None:
+        game = self.db.game(appid)
+        name = (game["name"] if game is not None else "") or f"App {appid}"
+        count = len(self.db.q("SELECT 1 FROM learned_descriptions WHERE appid = ?", (appid,)))
+        if QMessageBox.question(self, APP_NAME, f"Forget the {count} description"
+                                f"{'s' if count != 1 else ''} looked up for {name}? They go back to "
+                                f"being blank, the way Steam leaves them.") != QMessageBox.StandardButton.Yes:
             return
-        # Sony only hands out a game's trophy list by its id, and only publishes that id for games
-        # your own account has played - so for everything else, ask for the list.
+        # Blank only what a lookup filled in - hidden achievements Steam did describe stay as they are.
+        for row in self.db.q("SELECT name FROM learned_descriptions WHERE appid = ?", (appid,)):
+            self.db.x("UPDATE achievements SET description = '' WHERE appid = ? AND name = ?",
+                      (appid, row["name"]))
+        self.db.x("DELETE FROM learned_descriptions WHERE appid = ?", (appid,))
+        self.db.update_game(appid, trophy_src="")
+        self.reload(force=True)
+
+    def describe_from_page(self, appid: int, why: str = "", first_ask: bool = False) -> None:
+        """Nothing of PlayStation's matched, so ask for a page that lists the achievements.
+
+        Sony only hands out a trophy list by its id and only publishes that id for games your own
+        account has played, and the trophy sites don't print the ids - but they do print the
+        descriptions, so a page you found is the way through.
+        """
+        game = self.db.game(appid)
+        name = (game["name"] if game is not None else "") or f"App {appid}"
+        opening = (f"Steam never reveals what {name}'s hidden achievements ask for."
+                   if first_ask else f"Couldn't describe {name} from PlayStation: {why}.")
         text, ok = QInputDialog.getText(
             self, APP_NAME,
-            f"No trophy list of PlayStation's matched {name}.\n\n"
-            f"If you can find its trophy list id (NPWR12345_00), paste it here and AchTrack will "
-            f"take the descriptions from there:", text="")
-        if ok and text.strip():
-            self.describe_hidden(appid, text.strip())
+            f"{opening}\n\nFind a page that lists this game's trophies or achievements - a trophy "
+            f"site's page for the PlayStation version works well - and paste its address here. "
+            f"AchTrack reads it once and only keeps the descriptions if what the page says about "
+            f"the achievements you can already read matches.\n", text="")
+        text = text.strip() if ok else ""
+        if not text:
+            return
+        if descriptions.trophy_id(text) and "//" not in text:
+            self.describe_hidden(appid, trophy_list=text)
+        else:
+            self.describe_hidden(appid, page_url=text)
 
     # actions ---------------------------------------------------------------
 
@@ -1849,6 +1879,8 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         if self.db.blank_descriptions(appid):
             menu.addAction("Describe hidden achievements…", lambda: self.describe_hidden(appid))
+        if self.db.q("SELECT 1 FROM learned_descriptions WHERE appid = ? LIMIT 1", (appid,)):
+            menu.addAction("Forget looked-up descriptions", lambda: self.forget_descriptions(appid))
         menu.addAction("Refresh achievement data", lambda: self.request_refresh(appid))
         menu.addAction("Edit game…", lambda: self.edit_game(appid))
         sources = self.db.sources_for(appid)

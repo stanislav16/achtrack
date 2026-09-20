@@ -10,10 +10,15 @@ up with the achievement names we can already see.
 """
 from __future__ import annotations
 
+import difflib
+import gzip
+import html
 import logging
 import re
+import urllib.error
+import urllib.request
 
-from . import psn
+from . import __version__, psn
 
 log = logging.getLogger(__name__)
 
@@ -21,6 +26,17 @@ MIN_VISIBLE = 4        # fewer than this and there's nothing to check a candidat
 MIN_AGREEMENT = 0.6    # share of visible achievements the trophy list must also have
 MAX_TITLES = 3         # store entries to try per game
 MAX_SETS = 2           # trophy lists to try per store entry
+
+# Reading a page you point AchTrack at
+UA = f"AchTrack/{__version__}"
+MAX_PAGE = 4 * 1024 * 1024
+LOOKAHEAD = 4          # text pieces after a name to consider its description
+SAME_TEXT = 0.75       # how alike two descriptions of the same achievement must read
+MIN_CONFIRMED = 0.6    # share of checkable descriptions that must agree
+MIN_NAMES = 0.6        # or, failing that, share of the game's names the page must list
+NOT_DESCRIPTIONS = {"bronze", "silver", "gold", "platinum", "common", "uncommon", "rare", "very rare",
+                    "ultra rare", "hidden", "secret", "locked", "unlocked", "trophy", "achievement",
+                    "dlc", "base game", "story", "missable", "online", "offline"}
 
 
 def key(name: str) -> str:
@@ -134,3 +150,108 @@ def lookup(token: str, game_name: str, achievements: list, note=None, known: lis
     if not best[0]:
         say("no trophy list matched this game")
     return best[0], best[2], best[3]
+
+
+# --- reading a page you found yourself ------------------------------------------------------------
+# Sony only hands out a trophy list id for games your own account has played, and the trophy sites
+# don't publish those ids. But they do publish the descriptions, so you can point AchTrack at the
+# page instead. Nothing on the page is followed or executed - it is read as text, and a description
+# is only kept once the page has proved it is listing this game.
+
+def fetch_page(url: str, timeout: float = 25) -> str:
+    """The text of a page, as text. Raises OSError with something readable if it can't be had."""
+    if not re.match(r"https?://", url.strip(), re.I):
+        raise OSError("that doesn't look like a web address")
+    request = urllib.request.Request(url.strip(), headers={
+        "User-Agent": UA, "Accept": "text/html,application/xhtml+xml", "Accept-Language": "en;q=0.9",
+        "Accept-Encoding": "gzip"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read(MAX_PAGE)
+            if (response.headers.get("Content-Encoding") or "").lower() == "gzip":
+                raw = gzip.decompress(raw)
+            charset = response.headers.get_content_charset() or "utf-8"
+    except urllib.error.HTTPError as e:
+        blocked = " - the site is refusing to be read automatically" if e.code in (403, 429) else ""
+        raise OSError(f"the page returned {e.code}{blocked}") from e
+    except urllib.error.URLError as e:
+        raise OSError(f"couldn't reach the page: {e.reason}") from e
+    return raw.decode(charset, errors="replace")
+
+
+def text_pieces(page: str) -> list:
+    """Every run of visible text on the page, in order, with the markup taken out."""
+    body = re.sub(r"(?is)<(script|style|noscript|template)\b.*?</\1>", " ", page)
+    body = re.sub(r"(?s)<!--.*?-->", " ", body)
+    out = []
+    for piece in re.split(r"(?s)<[^>]*>", body):
+        text = html.unescape(piece)
+        text = re.sub(r"\s+", " ", text).strip()
+        if text:
+            out.append(text)
+    return out
+
+
+def _is_description(text: str, names: set) -> bool:
+    if not 3 <= len(text) <= 400 or key(text) in names:
+        return False
+    if text.lower().strip(" .") in NOT_DESCRIPTIONS:
+        return False
+    return bool(re.search(r"[a-z]{3}", text, re.I)) and not re.fullmatch(r"[\d\s.,%/()x+-]+", text)
+
+
+def read_page(page: str, achievements: list) -> dict:
+    """Pairs each achievement name found on the page with the text that follows it."""
+    names = {key(a["display_name"] or a["name"]) for a in achievements}
+    pieces = text_pieces(page)
+    found: dict = {}
+    for index, piece in enumerate(pieces):
+        name = key(piece)
+        if name not in names or name in found:
+            continue
+        for following in pieces[index + 1:index + 1 + LOOKAHEAD]:
+            if _is_description(following, names):
+                found[name] = following
+                break
+    return found
+
+
+def _alike(one: str, two: str) -> float:
+    return difflib.SequenceMatcher(None, key(one), key(two)).ratio()
+
+
+def from_page(page: str, achievements: list) -> tuple:
+    """(descriptions to fill in, how sure we are, why) for a page you pointed AchTrack at."""
+    on_page = read_page(page, achievements)
+    if not on_page:
+        return {}, 0.0, "none of this game's achievements are named on that page"
+
+    # Achievements we can already read are the control: if the page's text for those matches what
+    # Steam says, the page is this game's list and its other descriptions can be trusted too.
+    checkable = [a for a in achievements if (a["description"] or "").strip()
+                 and key(a["display_name"] or a["name"]) in on_page]
+    agreed = [a for a in checkable
+              if _alike(a["description"], on_page[key(a["display_name"] or a["name"])]) >= SAME_TEXT]
+    confirmed = len(agreed) / len(checkable) if checkable else 0.0
+    listed = len(on_page) / len(achievements) if achievements else 0.0
+    if len(checkable) >= MIN_VISIBLE:
+        if confirmed < MIN_CONFIRMED:
+            return {}, confirmed, (f"the page describes {len(checkable)} achievements differently from Steam "
+                                   f"({len(agreed)} of {len(checkable)} agree) - it looks like another game "
+                                   f"or another version")
+        why = f"{len(agreed)} of {len(checkable)} known descriptions match"
+    elif listed < MIN_NAMES:
+        return {}, listed, (f"only {len(on_page)} of {len(achievements)} achievement names appear on that "
+                            f"page, and too few known descriptions to check it against")
+    else:
+        confirmed = listed
+        why = f"{len(on_page)} of {len(achievements)} achievement names appear on it"
+
+    filled = {}
+    for a in achievements:
+        if (a["description"] or "").strip():
+            continue
+        text = on_page.get(key(a["display_name"] or a["name"]))
+        if text:
+            filled[a["name"]] = text
+    return filled, confirmed, why

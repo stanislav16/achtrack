@@ -49,20 +49,29 @@ def make_icns(out_dir: Path) -> Path | None:
 
 
 def make_pngs(out_dir: Path) -> list:
-    return [render(SVG, size, out_dir / f"achtrack-{size}.png") or out_dir / f"achtrack-{size}.png"
-            for size in PNG_SIZES]
+    made = []
+    for size in PNG_SIZES:
+        dest = out_dir / f"achtrack-{size}.png"
+        render(SVG, size, dest)
+        made.append(dest)
+    return made
 
 
 def main() -> int:
+    """make_icons.py [outdir] [--icns] [--pngs]; without flags, whatever this system uses."""
     QGuiApplication(["make_icons", "-platform", "offscreen"])
-    out_dir = Path(sys.argv[1]).expanduser() if len(sys.argv) > 1 else ROOT / "build"
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    flags = {a for a in sys.argv[1:] if a.startswith("--")}
+    out_dir = Path(args[0]).expanduser() if args else ROOT / "build"
     out_dir.mkdir(parents=True, exist_ok=True)
-    if sys.platform == "darwin":
+    want_icns = "--icns" in flags or (not flags and sys.platform == "darwin")
+    want_pngs = "--pngs" in flags or (not flags and sys.platform != "darwin")
+    if want_icns:
         icns = make_icns(out_dir)
         print(f"icns: {icns}" if icns else "icns: failed")
-        return 0
-    made = make_pngs(out_dir)
-    print(f"pngs: {len(made)} sizes in {out_dir}")
+    if want_pngs:
+        made = make_pngs(out_dir)
+        print(f"pngs: {len(made)} sizes in {out_dir}")
     return 0
 
 

@@ -70,6 +70,17 @@ if [ "$OS" = "Darwin" ]; then
 else
     mkdir -p "$DATA/applications" "$DATA/icons/hicolor/scalable/apps"
     cp achtrack/assets/achtrack.svg "$DATA/icons/hicolor/scalable/apps/achtrack.svg"
+    # Desktops rasterize SVGs with their own renderers, which don't all agree; ship PNGs too.
+    ICONS="$DATA/achtrack/icons"
+    rm -rf "$ICONS"
+    if "$VENV/bin/python" tools/make_icons.py "$ICONS" --pngs >/dev/null 2>&1; then
+        for size in 16 32 48 64 128 256 512; do
+            mkdir -p "$DATA/icons/hicolor/${size}x${size}/apps"
+            cp "$ICONS/achtrack-${size}.png" "$DATA/icons/hicolor/${size}x${size}/apps/achtrack.png"
+        done
+        command -v gtk-update-icon-cache >/dev/null 2>&1 && \
+            gtk-update-icon-cache -f -t "$DATA/icons/hicolor" >/dev/null 2>&1 || true
+    fi
     cat > "$DATA/applications/achtrack.desktop" <<EOF
 [Desktop Entry]
 Type=Application

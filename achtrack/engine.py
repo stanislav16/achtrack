@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import queue
+import re
 import sqlite3
 import subprocess
 import threading
@@ -219,7 +220,7 @@ class Engine:
                 self.build_export(deploy=len(req) > 1 and bool(req[1]))
             elif kind == "describe" and self.db.game(req[1]) is not None:
                 self._describe_queue.append((req[1], req[2] if len(req) > 2 else "",
-                                             req[3] if len(req) > 3 else "", True, True))
+                                             req[3] if len(req) > 3 else "", True, True, True))
             elif kind == "icons" and self.db.game(req[1]) is not None:
                 self._prefetch_game_icons(req[1])
 
@@ -351,7 +352,7 @@ class Engine:
             if not self._steam_only(appid):
                 self._prefetch_game_icons(appid)
                 if self.db.blank_descriptions(appid):
-                    self._describe_queue.append((appid, "", "", False, False))
+                    self._describe_queue.append((appid, "", "", False, False, False))
         elif pct:
             self.db.set_global_pct(appid, pct)
 
@@ -567,10 +568,10 @@ class Engine:
         def work():
             db = Database(self.db.path)
             while self._describe_queue:
-                appid, trophy_list, page_url, force, announce = self._describe_queue.popleft()
+                appid, trophy_list, page_url, force, announce, find_page = self._describe_queue.popleft()
                 try:
                     status = self.describe_hidden(appid, force=force, trophy_list=trophy_list,
-                                                  page_url=page_url, db=db)
+                                                  page_url=page_url, find_page=find_page, db=db)
                 except Exception:
                     log.exception("description lookup crashed")
                     status = {"filled": 0, "blanks": 0, "source": "", "title": "", "searched": False,
@@ -775,7 +776,8 @@ class Engine:
         return known
 
     def describe_hidden(self, appid: int, note=None, force: bool = False, trophy_list: str = "",
-                        page_url: str = "", db: Database | None = None) -> dict:
+                        page_url: str = "", find_page: bool = False,
+                        db: Database | None = None) -> dict:
         """Describes a game's hidden achievements, which Steam blanks out for good.
 
         Either from the game's PlayStation trophy list, or - `page_url` - from a page you found
@@ -799,16 +801,18 @@ class Engine:
         npsso = self.cfg.psn_npsso.strip()
         if not npsso:
             return {**status, "error": "no PlayStation login in Settings"}
+        name = game["name"] or ""
+        if not name:
+            return {**status, "error": "this game has no name yet"}
         linked = descriptions.trophy_id(trophy_list)
         if trophy_list and not linked:
             return {**status, "error": f"{trophy_list!r} has no trophy list id in it (looks like NPWR12345_00)"}
         known = game["trophy_src"] or ""
-        if known == "-" and not force and not linked:
+        if known == "-" and not (force or linked or find_page):
             return {**status, "error": "no matching trophy list (searched before)"}
+        if known == "-" and find_page and not linked:
+            return self._describe_from_page(appid, name, status, note, db)
 
-        name = game["name"] or ""
-        if not name:
-            return {**status, "error": "this game has no name yet"}
         achievements = db.achievements(appid)
         try:
             tokens = psn.valid_token(db.get_meta("psn_tokens"), npsso)
@@ -832,6 +836,11 @@ class Engine:
         except psn.PSNError as e:
             return {**status, "error": str(e)}
 
+        if not found and find_page and not linked:
+            if note:
+                note("PlayStation has no trophy list for this account - looking for a page instead")
+            db.update_game(appid, trophy_src="-")
+            return self._describe_from_page(appid, name, status, note, db)
         if found:
             status["filled"] = db.learn_descriptions(appid, found, source)
         if found or not linked:
@@ -840,24 +849,41 @@ class Engine:
         self.listener.on_changed()
         return status
 
-    def _describe_from_page(self, appid: int, url: str, status: dict, note=None,
+    def _describe_from_page(self, appid: int, where: str, status: dict, note=None,
                             db: Database | None = None) -> dict:
-        """Takes the descriptions off a page you pointed AchTrack at."""
+        """Takes the descriptions off a page. `where` is an address, or a name to look one up by."""
         db = db or self.db
         achievements = db.achievements(appid)
-        try:
-            page = descriptions.fetch_page(url)
-        except OSError as e:
-            return {**status, "error": str(e)}
-        found, confidence, why = descriptions.from_page(page, achievements)
-        if note:
-            note(f"read {len(page) // 1024} KB - {why}")
-        if not found:
-            return {**status, "error": why}
-        status["filled"] = db.learn_descriptions(appid, found, url)
-        status["source"], status["title"] = url, f"{confidence:.0%} sure"
-        self.listener.on_changed()
-        return status
+        if re.match(r"https?://", where.strip(), re.I):
+            pages = [(where.strip(), "")]
+        else:
+            pages = descriptions.find_pages(where)
+            if note:
+                note(f"looked for a page about {where!r}: "
+                     + (", ".join(title for _url, title in pages) if pages else "found nothing"))
+            if not pages:
+                return {**status, "error": f"couldn't find a page listing {where}'s achievements"}
+
+        last = "nothing matched"
+        for url, title in pages:
+            try:
+                page = descriptions.fetch_page(url)
+            except OSError as e:
+                last = str(e)
+                if note:
+                    note(f"  {url}: {last}")
+                continue
+            found, confidence, why = descriptions.from_page(page, achievements)
+            if note:
+                note(f"  {title or url} - {why}")
+            if not found:
+                last = why
+                continue
+            status["filled"] = db.learn_descriptions(appid, found, url)
+            status["source"], status["title"] = url, title or f"{confidence:.0%} sure"
+            self.listener.on_changed()
+            return status
+        return {**status, "error": last}
 
     def forget_descriptions(self, appid: int) -> int:
         """Drops what a lookup filled in, so a game goes back to Steam's own blanks."""

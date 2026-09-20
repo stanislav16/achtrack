@@ -81,8 +81,8 @@ PlayStation side can describe Steam's blanks.
 Right-click a game → **Describe hidden achievements…**. AchTrack fills them in from:
 
 1. the game's PlayStation trophy list, if your own account has played it (automatic, no setup), or
-2. **a page you point it at** - any page listing the game's trophies or achievements. Paste the
-   address and it reads it once.
+2. **a page** listing the game's trophies or achievements - paste the address, or just type a
+   name and AchTrack looks for one. Any page works: a trophy site, a wiki, whatever you found.
 
 Either way the result is checked before a word is kept: the achievements you can *already* read are
 the control, and what the trophy list or page says about those has to match what Steam says. A page
@@ -91,7 +91,8 @@ for the wrong game, or one AchTrack reads badly, fills nothing. The check is sho
 
 ```text
 achtrack describe                                   fill in whatever can be filled in
-achtrack describe "Sekiro" --from-page https://…    read the descriptions off a page
+achtrack describe "Sekiro"                          PlayStation first, then look for a page
+achtrack describe "Sekiro" --from-page https://…    read this exact page
 achtrack describe "Sekiro" --trophy-list NPWR12345_00
 achtrack describe "Sekiro" --forget                 back to Steam's blanks
 ```

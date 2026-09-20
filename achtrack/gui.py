@@ -1819,10 +1819,10 @@ class MainWindow(QMainWindow):
                    if first_ask else f"Couldn't describe {name} from PlayStation: {why}.")
         text, ok = QInputDialog.getText(
             self, APP_NAME,
-            f"{opening}\n\nFind a page that lists this game's trophies or achievements - a trophy "
-            f"site's page for the PlayStation version works well - and paste its address here. "
-            f"AchTrack reads it once and only keeps the descriptions if what the page says about "
-            f"the achievements you can already read matches.\n", text="")
+            f"{opening}\n\nPaste the address of a page that lists this game's trophies or "
+            f"achievements, or just type a name to search by. AchTrack reads the page once and "
+            f"only keeps the descriptions if what it says about the achievements you can already "
+            f"read matches.\n", text=name)
         text = text.strip() if ok else ""
         if not text:
             return

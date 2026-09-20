@@ -215,7 +215,7 @@ def cmd_describe(target: str | None, force: bool, trophy_list: str, page: str, f
         blanks = db.blank_descriptions(game["appid"])
         print(f"\n{game['name'] or game['appid']} - {blanks} without a description")
         status = engine.describe_hidden(game["appid"], note=lambda t: print(f"  {t}"), force=force,
-                                        trophy_list=trophy_list, page_url=page)
+                                        trophy_list=trophy_list, page_url=page, find_page=True)
         if status["error"]:
             print(f"  {status['error']}")
         elif status["filled"]:
@@ -314,8 +314,9 @@ def main(argv=None) -> int:
     describe.add_argument("--force", action="store_true", help="search again for games that found nothing before")
     describe.add_argument("--trophy-list", default="", metavar="NPWR12345_00",
                           help="use this PlayStation trophy list for the game (an id or a link containing one)")
-    describe.add_argument("--from-page", default="", metavar="URL", dest="page",
-                          help="read the descriptions off a page that lists this game's achievements")
+    describe.add_argument("--from-page", default="", metavar="URL|NAME", dest="page",
+                          help="read the descriptions off a page listing this game's achievements - "
+                               "an address, or a name to look one up by")
     describe.add_argument("--forget", action="store_true",
                           help="drop the descriptions a lookup filled in for this game")
     saves = sub.add_parser("saves", help="show the save files AchTrack reads and what it matches in them")

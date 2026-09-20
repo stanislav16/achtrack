@@ -16,6 +16,7 @@ import html
 import logging
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from . import __version__, psn
@@ -255,3 +256,27 @@ def from_page(page: str, achievements: list) -> tuple:
         if text:
             filled[a["name"]] = text
     return filled, confirmed, why
+
+
+# Finding the page yourself is the tedious part, so AchTrack can look for one. This is only used
+# when you ask it to - the automatic pass stays on PlayStation's own API.
+PAGE_SEARCH = "https://psn100.net/game?search={}"
+PAGE_LINK = re.compile(r'href="(/game/\d+-[^"]+)"[^>]*>\s*([^<]{2,80})')
+
+
+def find_pages(name: str, limit: int = 4) -> list:
+    """Pages that might list this game's trophies, closest name first: [(url, title)]."""
+    site = PAGE_SEARCH.split("/game")[0]
+    try:
+        page = fetch_page(PAGE_SEARCH.format(urllib.parse.quote(name)))
+    except OSError as e:
+        log.info("page search for %s failed: %s", name, e)
+        return []
+    seen: dict = {}
+    for href, label in PAGE_LINK.findall(page):
+        label = re.sub(r"\s+", " ", html.unescape(label)).strip()
+        if label and href not in seen:
+            seen[href] = label
+    ranked = sorted(seen.items(),
+                    key=lambda kv: -difflib.SequenceMatcher(None, key(name), key(kv[1])).ratio())
+    return [(site + href, label) for href, label in ranked[:limit]]

@@ -77,7 +77,12 @@ class Config:
     export_auto: bool = True               # rebuild after each session and with the daily backup
     vercel_token: str = ""
     vercel_project: str = "achtrack"
-    vercel_team: str = ""
+    vercel_team: str = ""                  # team id (team_...) or slug; empty = personal account
+    # Instead of Vercel: any command that publishes the folder, e.g.
+    #   wrangler pages deploy {dir} --project-name achtrack
+    #   netlify deploy --dir {dir} --prod
+    #   rsync -a --delete {dir}/ me@server:/var/www/achtrack/
+    publish_command: str = ""
     sync_command: str = ""                 # optional, e.g. rclone copy {dir} gdrive:AchTrack
     force_x11: bool = True
     poll_interval: float = 1.5

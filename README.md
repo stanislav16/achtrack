@@ -127,8 +127,13 @@ behaves like a small app (search, sorting, per-game lists), with no PC needed on
   with AES-GCM before it goes into the file; the browser decrypts it after you type the passphrase
   once. A public URL is then safe, since without the passphrase it's an unreadable blob.
 - **Published to Vercel** if you add a token (vercel.com → Account Settings → Tokens). You get a
-  free `something.vercel.app` address, no domain needed. Without a token the file is simply written
-  to `~/.local/share/achtrack/phone/`, ready for any cloud folder or host.
+  free `something.vercel.app` address, no domain needed. A Vercel team holds many projects, so it
+  can live beside your other sites; put the team's id or slug in the field under the token, or leave
+  it empty for your personal account.
+- **Or any other host**: set a publish command instead, e.g.
+  `wrangler pages deploy {dir} --project-name achtrack`, `netlify deploy --dir {dir} --prod` or
+  `rsync -a --delete {dir}/ me@server:/var/www/achtrack/`. Without either, the file is simply
+  written to `~/.local/share/achtrack/phone/`, ready for any cloud folder.
 - Rebuilt after each play session and with the daily backup, or on demand with
   **Library → Build phone page** / `achtrack export --deploy`.
 

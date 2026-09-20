@@ -1159,6 +1159,14 @@ class SettingsDialog(QDialog):
         self.export_status.setOpenExternalLinks(True)
         form.addRow("", self.export_status)
 
+        self.vercel_team = QLineEdit(cfg.vercel_team)
+        self.vercel_team.setPlaceholderText("Vercel team id or slug (empty = your personal account)")
+        form.addRow("", self.vercel_team)
+        self.publish_command = QLineEdit(cfg.publish_command)
+        self.publish_command.setPlaceholderText("Or publish with your own command, e.g. "
+                                                "netlify deploy --dir {dir} --prod")
+        form.addRow("", self.publish_command)
+
         self.sync_command = QLineEdit(cfg.sync_command)
         self.sync_command.setPlaceholderText("Optional command after backups, e.g. rclone copy {dir} gdrive:AchTrack")
         form.addRow("Sync command", self.sync_command)
@@ -1233,8 +1241,9 @@ class SettingsDialog(QDialog):
         cfg = self.win.cfg
         cfg.export_passphrase = self.passphrase.text()
         cfg.vercel_token = self.vercel.text().strip()
-        cfg.export_dir = getattr(self, "export_dir", None) and self.export_dir.text().strip() or cfg.export_dir
-        self.win.worker.request("export", bool(cfg.vercel_token))
+        cfg.vercel_team = self.vercel_team.text().strip()
+        cfg.publish_command = self.publish_command.text().strip()
+        self.win.worker.request("export", bool(cfg.vercel_token or cfg.publish_command))
         self.export_status.setText("Building the phone page…")
         QTimer.singleShot(6000, lambda: self.export_status.setText(export_text(self.win.db.get_meta("export"))))
 
@@ -1279,6 +1288,8 @@ class SettingsDialog(QDialog):
         cfg.export_passphrase = self.passphrase.text()
         cfg.vercel_token = self.vercel.text().strip()
         cfg.sync_command = self.sync_command.text().strip()
+        cfg.vercel_team = self.vercel_team.text().strip()
+        cfg.publish_command = self.publish_command.text().strip()
         cfg.theme = self.theme.currentData()
         cfg.font_family = self.font.text().strip()
         cfg.save_detection = self.saves.isChecked()

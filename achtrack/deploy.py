@@ -23,6 +23,15 @@ class DeployError(Exception):
     pass
 
 
+def scope(team: str | None) -> str:
+    """Vercel wants ?teamId= for an id and ?slug= for a team's short name; personal accounts neither."""
+    team = (team or "").strip()
+    if not team:
+        return ""
+    key = "teamId" if team.startswith("team_") else "slug"
+    return f"?{key}={urllib.parse.quote(team)}"
+
+
 def _call(url: str, token: str, payload: dict | None = None, raw: bytes | None = None, extra: dict | None = None):
     headers = {"Authorization": f"Bearer {token}", "User-Agent": UA, **(extra or {})}
     data = raw
@@ -56,7 +65,7 @@ def deploy(folder: Path, token: str, project: str = "achtrack", team: str | None
     files = [p for p in sorted(folder.rglob("*")) if p.is_file()]
     if not files:
         raise DeployError(f"nothing to deploy in {folder}")
-    query = f"?teamId={urllib.parse.quote(team)}" if team else ""
+    query = scope(team)
 
     entries = []
     for path in files:
@@ -81,7 +90,7 @@ def deploy(folder: Path, token: str, project: str = "achtrack", team: str | None
 
 def inline_deploy(page: Path, token: str, project: str = "achtrack", team: str | None = None) -> str:
     """Fallback: send the file's contents with the deployment instead of uploading it first."""
-    query = f"?teamId={urllib.parse.quote(team)}" if team else ""
+    query = scope(team)
     body = page.read_bytes()
     result = _call(f"{API}/v13/deployments{query}", token, {
         "name": project, "target": "production",

@@ -737,7 +737,11 @@ class Engine:
             self._error(f"Phone page failed: {e}")
             return ""
         status = {"time": int(time.time()), "page": str(page), "url": "", "error": ""}
-        if deploy or (self.cfg.vercel_token.strip() and self.cfg.export_auto):
+        if self.cfg.publish_command.strip():
+            ok = self._run_command(self.cfg.publish_command, str(folder), "Publishing the phone page")
+            status["url"] = "" if not ok else status["url"]
+            status["error"] = "" if ok else "see the log"
+        elif deploy or (self.cfg.vercel_token.strip() and self.cfg.export_auto):
             from .deploy import DeployError, publish
             try:
                 status["url"] = publish(folder, self.cfg.vercel_token, self.cfg.vercel_project,
@@ -753,15 +757,20 @@ class Engine:
 
     def _run_sync_command(self, folder: str) -> None:
         """Optional command after a backup/export, e.g. rclone copy {dir} gdrive:AchTrack."""
-        template = self.cfg.sync_command.strip()
-        if not template:
-            return
+        if self.cfg.sync_command.strip():
+            self._run_command(self.cfg.sync_command, folder, "Sync command")
+
+    def _run_command(self, template: str, folder: str, what: str) -> bool:
         try:
-            proc = subprocess.run(template.replace("{dir}", folder), shell=True, capture_output=True, timeout=600)
-            if proc.returncode:
-                self._error(f"Sync command failed: {proc.stderr.decode('utf-8', 'replace')[:200]}")
+            proc = subprocess.run(template.replace("{dir}", folder), shell=True, capture_output=True, timeout=900)
         except (OSError, subprocess.SubprocessError) as e:
-            self._error(f"Sync command failed: {e}")
+            self._error(f"{what} failed: {e}")
+            return False
+        if proc.returncode:
+            self._error(f"{what} failed: {proc.stderr.decode('utf-8', 'replace')[:200]}")
+            return False
+        log.info("%s ok: %s", what, proc.stdout.decode('utf-8', 'replace')[:200].strip())
+        return True
 
     # PlayStation ---------------------------------------------------------
 

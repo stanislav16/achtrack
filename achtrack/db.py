@@ -121,6 +121,7 @@ MIGRATIONS = {
 }
 
 GAME_FIELDS = {"name", "header_url", "exe_name", "game_dir", "last_played", "schema_fetched_at", "hidden",
+               "playtime",   # normally grown by add_playtime, but set directly when merging devices
                "steam_playtime", "steam_last_played", "steam_owned", "review", "genre",
                "platform", "psn_id", "psn_playtime", "psn_last_played", "edited_at"}
 

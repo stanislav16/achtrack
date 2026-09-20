@@ -115,6 +115,24 @@ def cmd_export(deploy_it: bool) -> int:
     return 0
 
 
+def cmd_device_sync() -> int:
+    from .config import Config
+    from .db import Database
+    from .sync import run_sync
+
+    cfg = Config.load()
+    if not cfg.sync_dir.strip():
+        print("No shared folder set (Settings → Devices).")
+        return 1
+    status = run_sync(Database(), cfg.sync_dir)
+    if status["error"]:
+        print(f"Device sync failed: {status['error']}")
+        return 1
+    print(f"Merged {status['devices']} other machine(s): {status['games']} new games, "
+          f"{status['unlocks']} new unlocks, {status['removed']} removals, {status['updated']} games updated.")
+    return 0
+
+
 def cmd_psn_sync() -> int:
     from .config import Config
     from .db import Database
@@ -249,6 +267,7 @@ def main(argv=None) -> int:
     sub.add_parser("list", help="print the library with playtime and achievement counts")
     sub.add_parser("sync-steam", help="copy your Steam games, playtime and achievements into the library now")
     sub.add_parser("sync-psn", help="copy your PlayStation games, play time and trophies into the library now")
+    sub.add_parser("sync-devices", help="merge libraries with your other machines through the shared folder")
     backup = sub.add_parser("backup", help="save a database snapshot and a JSON export")
     backup.add_argument("--restore", metavar="FILE", help="put a snapshot back instead")
     export = sub.add_parser("export", help="build the phone page from your library")
@@ -274,6 +293,8 @@ def main(argv=None) -> int:
         return cmd_sync_steam()
     if args.command == "sync-psn":
         return cmd_psn_sync()
+    if args.command == "sync-devices":
+        return cmd_device_sync()
     if args.command == "backup":
         return cmd_backup(args.restore)
     if args.command == "export":

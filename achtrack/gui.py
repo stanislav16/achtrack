@@ -111,6 +111,18 @@ def sync_text(status: dict | None, what: str, unit: str) -> str:
             f"{status.get('games', 0)} games, {status.get(what, 0)} {unit}.")
 
 
+def device_sync_text(status: dict | None) -> str:
+    if not status:
+        return "Not syncing with other machines yet."
+    if status.get("error"):
+        return f"<span style='color:#e5735c'>Last sync failed: {status['error']}</span>"
+    parts = [f"{status.get('devices', 0)} other machine(s)"]
+    for field, label in (("games", "new games"), ("unlocks", "new unlocks"), ("removed", "removals")):
+        if status.get(field):
+            parts.append(f"{status[field]} {label}")
+    return f"Last sync {fmt_day(status.get('time')).lower()}: " + ", ".join(parts) + "."
+
+
 def backup_text(status: dict | None) -> str:
     if not status:
         return "No backup yet."
@@ -1179,6 +1191,22 @@ class SettingsDialog(QDialog):
         self.sync_command = QLineEdit(cfg.sync_command)
         self.sync_command.setPlaceholderText("After backups, e.g. rclone copy {dir} gdrive:AchTrack")
         backup.addRow("Sync command", self.sync_command)
+
+        devices = self._page(tabs, "Devices")
+        sync_row = QHBoxLayout()
+        self.sync_dir = QLineEdit(cfg.sync_dir)
+        self.sync_dir.setPlaceholderText("A folder both machines see (Dropbox, Drive, Syncthing…)")
+        pick_sync = QPushButton("Browse…")
+        pick_sync.clicked.connect(lambda: self._pick_dir(self.sync_dir))
+        sync_now_btn = QPushButton("Sync now")
+        sync_now_btn.clicked.connect(self._devices_now)
+        sync_row.addWidget(self.sync_dir, 1)
+        sync_row.addWidget(pick_sync)
+        sync_row.addWidget(sync_now_btn)
+        devices.addRow("Shared folder", sync_row)
+        self.device_status = self._status(devices, device_sync_text(parent.db.get_meta("sync")))
+        self._status(devices, "Point every machine at the same folder. Unlocks from all of them are combined, "
+                              "play time takes the highest per source, and anything you undo stays undone.")
         self.export_status = self._status(backup, export_text(parent.db.get_meta("export")), links=True)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
@@ -1261,6 +1289,12 @@ class SettingsDialog(QDialog):
         QTimer.singleShot(5000, lambda: self.psn_status.setText(
             sync_text(self.win.db.get_meta("psn_sync"), "trophies", "trophies")))
 
+    def _devices_now(self) -> None:
+        self.win.cfg.sync_dir = self.sync_dir.text().strip()
+        self.win.worker.request("sync")
+        self.device_status.setText("Syncing with your other machines…")
+        QTimer.singleShot(4000, lambda: self.device_status.setText(device_sync_text(self.win.db.get_meta("sync"))))
+
     def _publish_now(self) -> None:
         cfg = self.win.cfg
         cfg.export_passphrase = self.passphrase.text()
@@ -1313,6 +1347,7 @@ class SettingsDialog(QDialog):
         cfg.vercel_team = self.vercel_team.text().strip()
         cfg.publish_command = self.publish_command.text().strip()
         cfg.sync_command = self.sync_command.text().strip()
+        cfg.sync_dir = self.sync_dir.text().strip()
         cfg.scan_dirs = [line.strip() for line in self.dirs.toPlainText().splitlines() if line.strip()]
         cfg.save()
         try:
@@ -1466,6 +1501,7 @@ class MainWindow(QMainWindow):
         lib.addAction("Sync PlayStation now", self._sync_psn)
         lib.addSeparator()
         lib.addAction("Back up now", lambda: self.worker.request("backup"))
+        lib.addAction("Sync with my other machines", lambda: self.worker.request("sync"))
         lib.addAction("Build phone page", lambda: self.worker.request("export", bool(self.cfg.vercel_token)))
         lib.addSeparator()
         icons_action = QAction("Show game icons", self, checkable=True)

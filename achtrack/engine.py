@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import backup, export, matcher, psn, savefiles, steam_api
+from . import backup, export, matcher, psn, savefiles, steam_api, sync
 from .config import BACKUP_DIR, CACHE_DIR, EXPORT_DIR, Config
 from .db import PSN, SAVE, SCREEN, STEAM, Database
 from .emulators import parse_file
@@ -120,6 +120,7 @@ class Engine:
         self._psn_thread: threading.Thread | None = None
         self._force_psn = False
         self._next_backup = time.time() + 300      # first automatic backup shortly after startup
+        self._next_sync = 0.0
         self._icons = ThreadPoolExecutor(max_workers=4, thread_name_prefix="achtrack-icons")
         self.screen = None          # ScreenWatcher of the game being played
         self._screen_status_at = 0.0
@@ -171,6 +172,9 @@ class Engine:
                 if self.cfg.backup_daily and time.time() >= self._next_backup:
                     self._next_backup = time.time() + 86400
                     self.run_backup()
+                if self.cfg.sync_dir.strip() and time.time() >= self._next_sync:
+                    self._next_sync = time.time() + max(60.0, self.cfg.sync_interval)
+                    self.run_device_sync()
             except Exception:
                 log.exception("engine tick failed")
             stop.wait(0.25)
@@ -208,6 +212,8 @@ class Engine:
                 self._force_psn = True
             elif kind == "backup":
                 self.run_backup()
+            elif kind == "sync":
+                self._next_sync = 0.0
             elif kind == "export":
                 self.build_export(deploy=len(req) > 1 and bool(req[1]))
             elif kind == "icons" and self.db.game(req[1]) is not None:
@@ -727,6 +733,16 @@ class Engine:
         self._run_sync_command(result["dir"])
         self.listener.on_changed()
         return result
+
+    def run_device_sync(self) -> dict:
+        """Exchanges libraries with your other machines through the shared folder."""
+        status = sync.run_sync(self.db, self.cfg.sync_dir)
+        if status["error"]:
+            self._error(f"Device sync failed: {status['error']}")
+        elif status["unlocks"] or status["games"] or status["removed"] or status["updated"]:
+            log.info("device sync: %s", status)
+            self.listener.on_changed()
+        return status
 
     def build_export(self, deploy: bool = False) -> str:
         """Writes the phone page; publishes it too when a Vercel token is set."""

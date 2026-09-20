@@ -78,6 +78,12 @@ CREATE TABLE IF NOT EXISTS save_rejections(
     key TEXT NOT NULL,
     PRIMARY KEY(appid, name, key)
 );
+CREATE TABLE IF NOT EXISTS unlock_deletions(
+    appid INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    deleted_at INTEGER NOT NULL,
+    PRIMARY KEY(appid, name)
+);
 CREATE TABLE IF NOT EXISTS meta(
     key TEXT PRIMARY KEY,
     value TEXT
@@ -103,9 +109,11 @@ MIGRATIONS = {
         "psn_id": "TEXT",     # npCommunicationId of the trophy set
         "psn_playtime": "INTEGER NOT NULL DEFAULT 0",
         "psn_last_played": "INTEGER",
+        "edited_at": "INTEGER",   # last time you changed something about this game here
     },
     "unlocks": {
         "note": "TEXT",       # why it unlocked, e.g. the save field that matched
+        "added_at": "INTEGER",  # when this device recorded it (for merging between devices)
     },
     "achievements": {
         "kind": "TEXT",       # PlayStation trophy type: bronze | silver | gold | platinum
@@ -114,7 +122,7 @@ MIGRATIONS = {
 
 GAME_FIELDS = {"name", "header_url", "exe_name", "game_dir", "last_played", "schema_fetched_at", "hidden",
                "steam_playtime", "steam_last_played", "steam_owned", "review", "genre",
-               "platform", "psn_id", "psn_playtime", "psn_last_played"}
+               "platform", "psn_id", "psn_playtime", "psn_last_played", "edited_at"}
 
 # Unlock sources that don't come from an emulator file.
 PSN = "PlayStation"
@@ -169,10 +177,14 @@ class Database:
         cur = self.x("INSERT OR IGNORE INTO games(appid, added_at) VALUES(?, ?)", (appid, int(time.time())))
         return cur.rowcount == 1
 
+    USER_FIELDS = {"hidden", "review", "exe_name", "game_dir"}
+
     def update_game(self, appid: int, **values) -> None:
         values = {k: v for k, v in values.items() if k in GAME_FIELDS}
         if not values:
             return
+        if self.USER_FIELDS & values.keys():
+            values.setdefault("edited_at", int(time.time()))
         cols = ", ".join(f"{k} = ?" for k in values)
         self.x(f"UPDATE games SET {cols} WHERE appid = ?", (*values.values(), appid))
 
@@ -263,9 +275,20 @@ class Database:
                          "unlocked_at": r["unlocked_at"], "source": r["source"], "cur": None, "max": None})
         return rows
 
-    def remove_unlock(self, appid: int, name: str, source: str) -> bool:
-        cur = self.x("DELETE FROM unlocks WHERE appid = ? AND name = ? AND source = ?", (appid, name, source))
+    def remove_unlock(self, appid: int, name: str, source: str | None = None) -> bool:
+        if source is None:
+            cur = self.x("DELETE FROM unlocks WHERE appid = ? AND name = ?", (appid, name))
+        else:
+            cur = self.x("DELETE FROM unlocks WHERE appid = ? AND name = ? AND source = ?", (appid, name, source))
+        if cur.rowcount == 1:
+            # Remember the removal, so a sync from another device doesn't bring it back.
+            self.x("INSERT OR REPLACE INTO unlock_deletions VALUES(?,?,?)", (appid, name, int(time.time())))
         return cur.rowcount == 1
+
+    def deletions(self, appid: int | None = None) -> list:
+        if appid is None:
+            return self.q("SELECT * FROM unlock_deletions")
+        return self.q("SELECT * FROM unlock_deletions WHERE appid = ?", (appid,))
 
     def emulator_unlock_count(self, appid: int) -> int:
         return self.q("SELECT COUNT(*) FROM unlocks WHERE appid = ? AND COALESCE(source, '') "
@@ -321,11 +344,14 @@ class Database:
     def unlocked_names(self, appid: int) -> set:
         return {r[0] for r in self.q("SELECT name FROM unlocks WHERE appid = ?", (appid,))}
 
-    def add_unlock(self, appid: int, name: str, ts: int, source: str, note: str | None = None) -> bool:
-        cur = self.x("INSERT OR IGNORE INTO unlocks(appid, name, unlocked_at, source, note) VALUES(?,?,?,?,?)",
-                     (appid, name, ts, source, note))
+    def add_unlock(self, appid: int, name: str, ts: int, source: str, note: str | None = None,
+                   added_at: int | None = None) -> bool:
+        cur = self.x("""INSERT OR IGNORE INTO unlocks(appid, name, unlocked_at, source, note, added_at)
+                        VALUES(?,?,?,?,?,?)""",
+                     (appid, name, ts, source, note, added_at or int(time.time())))
         if cur.rowcount == 1:
             self.x("DELETE FROM save_suggestions WHERE appid = ? AND name = ?", (appid, name))
+            self.x("DELETE FROM unlock_deletions WHERE appid = ? AND name = ?", (appid, name))
         return cur.rowcount == 1
 
     def set_progress(self, appid: int, name: str, cur, maximum) -> None:

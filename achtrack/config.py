@@ -84,6 +84,9 @@ class Config:
     #   rsync -a --delete {dir}/ me@server:/var/www/achtrack/
     publish_command: str = ""
     sync_command: str = ""                 # optional, e.g. rclone copy {dir} gdrive:AchTrack
+    # Shared folder where your machines exchange libraries (Dropbox, Drive, Syncthing, ...).
+    sync_dir: str = ""
+    sync_interval: float = 300.0
     force_x11: bool = True
     poll_interval: float = 1.5
     process_interval: float = 5.0

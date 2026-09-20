@@ -137,6 +137,23 @@ behaves like a small app (search, sorting, per-game lists), with no PC needed on
 - Rebuilt after each play session and with the daily backup, or on demand with
   **Library → Build phone page** / `achtrack export --deploy`.
 
+## Using more than one machine
+
+Point every machine at the same shared folder (**Settings → Devices**, any folder your cloud app or
+Syncthing keeps in step) and they merge their libraries every few minutes:
+
+- **Unlocks combine** from all machines; the earliest unlock time wins.
+- **Undo stays undone.** Removing an unlock is remembered, so another machine can't bring it back -
+  but earning it again later does stick.
+- **Play time takes the highest per source** (AchTrack's own tracking, Steam, PlayStation), so
+  nothing is counted twice.
+- **What you edit** (hidden, review setting, executable, game folder) follows whichever machine
+  edited it last.
+- PlayStation games are matched by their trophy set, so the same game isn't duplicated.
+
+Each machine writes one small `achtrack-sync-<id>.json.gz`; there's no server and no account.
+`achtrack sync-devices` does it from the terminal.
+
 ## When a crack doesn't record achievements
 
 Some cracks never save achievements. For example, some RUNE releases leave `achievements.ini` at
@@ -216,6 +233,7 @@ achtrack scan             list detected prefixes, achievement files and running 
 achtrack list             print the library with playtime and achievement counts
 achtrack sync-steam       copy your Steam games, playtime and achievements in now
 achtrack sync-psn         copy your PlayStation games, play time and trophies in now
+achtrack sync-devices     merge libraries with your other machines
 achtrack saves [appid]    show the save files AchTrack reads and what it matched (--fields for all values)
 achtrack screen-test      read the screen like the screen watcher does and print what it sees
 achtrack backup           snapshot the database + JSON export (--restore FILE to put one back)

@@ -64,6 +64,7 @@ class Config:
     font_family: str = ""                  # empty = the desktop's own UI font
     sort: str = "recent"                   # recent | name | playtime | progress | genre | platform
     platform_filter: str = "all"           # all | pc | psn
+    show_icons: bool = True                # game artwork thumbnails in the library list
     force_x11: bool = True
     poll_interval: float = 1.5
     process_interval: float = 5.0

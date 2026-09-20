@@ -120,6 +120,20 @@ def palette(choice: str = "auto") -> dict:
     return dict(PORCELAIN if scheme == "light" else GRAPHITE)
 
 
+def qt_palette(p: dict, QPalette, QColor):
+    """App-wide colours so anything the stylesheet misses (popup frames, scroll areas) still fits."""
+    role = QPalette.ColorRole
+    pal = QPalette()
+    for r, key in ((role.Window, "bg"), (role.Base, "field"), (role.AlternateBase, "card"), (role.Button, "card"),
+                   (role.ToolTipBase, "card"), (role.WindowText, "text"), (role.Text, "text"),
+                   (role.ButtonText, "text"), (role.ToolTipText, "text"), (role.PlaceholderText, "muted"),
+                   (role.Highlight, "accent"), (role.HighlightedText, "on_accent")):
+        pal.setColor(r, QColor(p[key]))
+    pal.setColor(QPalette.ColorGroup.Disabled, role.Text, QColor(p["muted"]))
+    pal.setColor(QPalette.ColorGroup.Disabled, role.ButtonText, QColor(p["muted"]))
+    return pal
+
+
 def stylesheet(p: dict, font: str = "") -> str:
     return font_rule(font) + f"""
 QWidget {{ color: {p['text2']}; font-size: 13px; }}
@@ -151,6 +165,7 @@ QPushButton {{ background: {p['card']}; border: 1px solid {p['hair']}; border-ra
 QPushButton:hover {{ background: {p['card_hover']}; }}
 QPushButton:pressed {{ background: {p['sel']}; }}
 QPushButton:disabled {{ color: {p['muted']}; }}
+QPushButton::menu-indicator {{ width: 0; height: 0; image: none; }}
 QPushButton#Primary {{ background: {p['accent']}; border: none; color: {p['on_accent']}; font-weight: 600; }}
 QPushButton#Primary:hover {{ background: {p['accent_soft']}; }}
 QProgressBar {{ background: {p['track']}; border: none; border-radius: 2px; max-height: 4px; min-height: 4px; }}

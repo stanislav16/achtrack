@@ -7,12 +7,13 @@ import time
 from datetime import datetime
 
 from PySide6.QtCore import QDateTime, QRectF, QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import (QAction, QActionGroup, QBrush, QColor, QDesktopServices, QGuiApplication, QIcon, QImage,
-                           QLinearGradient, QPainter, QPainterPath, QPixmap)
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDateTimeEdit, QDialog, QDialogButtonBox,
-                               QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit,
-                               QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
-                               QProgressBar, QPushButton, QSplitter, QStackedWidget, QVBoxLayout, QWidget)
+from PySide6.QtGui import (QAction, QActionGroup, QBrush, QColor, QDesktopServices, QFont, QGuiApplication, QIcon,
+                           QImage, QLinearGradient, QPainter, QPainterPath, QPalette, QPixmap)
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateTimeEdit, QDialog,
+                               QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout,
+                               QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
+                               QPlainTextEdit, QProgressBar, QPushButton, QSplitter, QStackedWidget, QVBoxLayout,
+                               QWidget)
 
 from . import __version__, desktop, theme
 from .config import APP_ICON, APP_NAME, POPUP_CORNERS, Config
@@ -135,6 +136,71 @@ def parse_appid(text: str) -> int | None:
 
 # widgets -----------------------------------------------------------------
 
+class MenuButton(QPushButton):
+    """A pop-up button: the current choice plus a menu. Qt's combo popups misbehave on Wayland,
+    and menus don't."""
+
+    def __init__(self, options: list, current, on_change, width: int = 0):
+        super().__init__()
+        self.options = options              # [(label, value)]
+        self.on_change = on_change
+        self.value = current if current in [v for _l, v in options] else options[0][1]
+        self._menu = QMenu(self)
+        group = QActionGroup(self._menu)
+        self.actions_by_value = {}
+        for label, value in options:
+            action = self._menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(value == self.value)
+            action.triggered.connect(lambda _=False, v=value: self._choose(v))
+            group.addAction(action)
+            self.actions_by_value[value] = action
+        self.setMenu(self._menu)
+        if width:
+            self.setMinimumWidth(width)
+        self._sync_text()
+
+    def _sync_text(self) -> None:
+        label = next(l for l, v in self.options if v == self.value)
+        self.setText(f"{label}  ⌄")
+
+    def _choose(self, value) -> None:
+        self.value = value
+        for v, action in self.actions_by_value.items():
+            action.setChecked(v == value)
+        self._sync_text()
+        self.on_change(value)
+
+
+def letter_pixmap(name: str, size: int) -> QPixmap:
+    """Stand-in artwork: the game's initial on a plain tile."""
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(P["sel"]))
+    p.drawRoundedRect(QRectF(0, 0, size, size), size * 0.26, size * 0.26)
+    font = p.font()
+    font.setPixelSize(int(size * 0.5))
+    font.setWeight(QFont.Weight.DemiBold)
+    p.setFont(font)
+    p.setPen(QColor(P["muted"]))
+    p.drawText(QRectF(0, 0, size, size), Qt.AlignmentFlag.AlignCenter, (name or "?").strip()[:1].upper())
+    p.end()
+    return pm
+
+
+def game_thumbnail(appid: int, row, size: int = 40) -> QPixmap:
+    art = QPixmap(cached_icon(appid, row["header_url"] or "") or "")
+    if art.isNull():
+        return letter_pixmap(row["name"] or "", size)
+    scaled = art.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                        Qt.TransformationMode.SmoothTransformation)
+    crop = scaled.copy((scaled.width() - size) // 2, (scaled.height() - size) // 2, size, size)
+    return rounded(crop, int(size * 0.26))
+
+
 class Dot(QWidget):
     """Small accent dot marking the game you're playing."""
 
@@ -151,12 +217,17 @@ class Dot(QWidget):
 
 
 class GameRow(QWidget):
-    def __init__(self, row, running: bool):
+    def __init__(self, row, running: bool, icon: bool = True):
         super().__init__()
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         outer = QHBoxLayout(self)
-        outer.setContentsMargins(14, 8, 12, 8)
-        outer.setSpacing(8)
+        outer.setContentsMargins(10 if icon else 14, 8, 12, 8)
+        outer.setSpacing(10)
+        if icon:
+            thumb = QLabel()
+            thumb.setFixedSize(40, 40)
+            thumb.setPixmap(game_thumbnail(row["appid"], row))
+            outer.addWidget(thumb, 0, Qt.AlignmentFlag.AlignVCenter)
         lay = QVBoxLayout()
         lay.setSpacing(3)
         name = QLabel(row["name"] or f"App {row['appid']}")
@@ -385,9 +456,8 @@ class DetailView(QWidget):
         root.addLayout(header)
 
         bar = QHBoxLayout()
-        self.filter = QComboBox()
-        self.filter.addItems(["All achievements", "Unlocked", "Locked"])
-        self.filter.currentIndexChanged.connect(lambda _: self.refresh(force=True))
+        self.filter = MenuButton([("All achievements", 0), ("Unlocked", 1), ("Locked", 2)], 0,
+                                 lambda _v: self.refresh(force=True))
         bar.addWidget(self.filter)
         self.reveal = QCheckBox("Reveal hidden achievements")
         self.reveal.toggled.connect(lambda _: self.refresh(force=True))
@@ -569,7 +639,7 @@ class DetailView(QWidget):
 
         icons = tuple(bool(cached_icon(self.appid, r.get("icon") or "")) for r in rows)
         query = self.search.text().strip().lower()
-        sig = (repr(rows), icons, self.filter.currentIndex(), self.reveal.isChecked(), bool(banner_path), query)
+        sig = (repr(rows), icons, self.filter.value, self.reveal.isChecked(), bool(banner_path), query)
         if sig == self._sig and not force:
             return
         self._sig = sig
@@ -581,7 +651,7 @@ class DetailView(QWidget):
         locked = [r for r in rows if not r.get("unlocked_at")]
         if any(r.get("global_pct") is not None for r in locked):
             locked.sort(key=lambda r: -(r.get("global_pct") or 0))
-        mode = self.filter.currentIndex()
+        mode = self.filter.value
         shown = (done if mode != 2 else []) + (locked if mode != 1 else [])
         reveal = self.reveal.isChecked()
         hidden_left = 0
@@ -1199,17 +1269,11 @@ class MainWindow(QMainWindow):
         search_wrap.setContentsMargins(10, 0, 10, 0)
         search_wrap.addWidget(self.search)
         side_lay.addLayout(search_wrap)
-        self.sort = QComboBox()
-        for label, key in (("Recently played", "recent"), ("Name (A-Z)", "name"), ("Play time", "playtime"),
-                           ("Completion", "progress"), ("Genre", "genre"), ("Platform", "platform")):
-            self.sort.addItem(label, key)
-        self.sort.setCurrentIndex(max(0, self.sort.findData(cfg.sort)))
-        self.sort.currentIndexChanged.connect(self._sort_changed)
-        self.platform = QComboBox()
-        for label, key in (("All platforms", "all"), ("PC", "pc"), ("PlayStation", "psn")):
-            self.platform.addItem(label, key)
-        self.platform.setCurrentIndex(max(0, self.platform.findData(cfg.platform_filter)))
-        self.platform.currentIndexChanged.connect(self._platform_changed)
+        self.sort = MenuButton([("Recently played", "recent"), ("Name (A-Z)", "name"), ("Play time", "playtime"),
+                                ("Completion", "progress"), ("Genre", "genre"), ("Platform", "platform")],
+                               cfg.sort, self._sort_changed)
+        self.platform = MenuButton([("All platforms", "all"), ("PC", "pc"), ("PlayStation", "psn")],
+                                   cfg.platform_filter, self._platform_changed)
         sort_wrap = QHBoxLayout()
         sort_wrap.setContentsMargins(10, 0, 10, 0)
         sort_wrap.setSpacing(6)
@@ -1270,6 +1334,9 @@ class MainWindow(QMainWindow):
     def apply_theme(self) -> None:
         global P
         P.update(theme.palette(self.cfg.theme))
+        app = QApplication.instance()
+        if app is not None:
+            app.setPalette(theme.qt_palette(P, QPalette, QColor))
         self.setStyleSheet(theme.stylesheet(P, self.cfg.font_family))
         self.notifier.palette_changed(P)
         self._list_sig = None
@@ -1289,6 +1356,10 @@ class MainWindow(QMainWindow):
         lib.addAction("Sync Steam library now", self._sync_steam)
         lib.addAction("Sync PlayStation now", self._sync_psn)
         lib.addSeparator()
+        icons_action = QAction("Show game icons", self, checkable=True)
+        icons_action.setChecked(self.cfg.show_icons)
+        icons_action.toggled.connect(self._icons_toggled)
+        lib.addAction(icons_action)
         self.show_hidden = QAction("Show removed games", self, checkable=True)
         self.show_hidden.toggled.connect(lambda _: self.reload(force=True))
         lib.addAction(self.show_hidden)
@@ -1316,13 +1387,18 @@ class MainWindow(QMainWindow):
             self._dirty = False
             self.reload(force=True)
 
-    def _sort_changed(self) -> None:
-        self.cfg.sort = self.sort.currentData()
+    def _sort_changed(self, value: str) -> None:
+        self.cfg.sort = value
         self.cfg.save()
         self.reload(force=True)
 
-    def _platform_changed(self) -> None:
-        self.cfg.platform_filter = self.platform.currentData()
+    def _platform_changed(self, value: str) -> None:
+        self.cfg.platform_filter = value
+        self.cfg.save()
+        self.reload(force=True)
+
+    def _icons_toggled(self, checked: bool) -> None:
+        self.cfg.show_icons = checked
         self.cfg.save()
         self.reload(force=True)
 
@@ -1356,7 +1432,8 @@ class MainWindow(QMainWindow):
         elif chosen == "psn":
             rows = [r for r in rows if (r["platform"] or "pc") != "pc"]
         rows = sorted(rows, key=self._sort_key(self.cfg.sort))
-        sig = tuple((r["appid"], r["name"], self.cfg.sort, self.cfg.platform_filter, r["total_playtime"] // 60, r["unlocked"], r["total"], r["hidden"],
+        sig = tuple((r["appid"], r["name"], self.cfg.sort, self.cfg.platform_filter, self.cfg.show_icons,
+                     r["total_playtime"] // 60, r["unlocked"], r["total"], r["hidden"],
                      r["appid"] in self.running) for r in rows)
         if force or sig != self._list_sig:
             self._list_sig = sig
@@ -1367,10 +1444,10 @@ class MainWindow(QMainWindow):
             for r in rows:
                 item = QListWidgetItem()
                 item.setData(Qt.ItemDataRole.UserRole, r["appid"])
-                widget = GameRow(r, r["appid"] in self.running)
+                widget = GameRow(r, r["appid"] in self.running, self.cfg.show_icons)
                 if r["hidden"]:
                     widget.setEnabled(False)
-                item.setSizeHint(QSize(0, 52))
+                item.setSizeHint(QSize(0, 56 if self.cfg.show_icons else 52))
                 self.games.addItem(item)
                 self.games.setItemWidget(item, widget)
                 if r["appid"] == current:
@@ -1565,7 +1642,6 @@ class MainWindow(QMainWindow):
             self.on_hidden_without_tray()
 
     def quit_app(self) -> None:
-        from PySide6.QtWidgets import QApplication
         QApplication.instance().quit()
 
     def bring_up(self) -> None:

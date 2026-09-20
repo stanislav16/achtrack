@@ -28,13 +28,6 @@ if [ "$OS" = "Linux" ]; then
     fi
 fi
 
-# The screen watcher reads on-screen text with tesseract; everything else works without it.
-if ! command -v tesseract >/dev/null 2>&1; then
-    echo "Note: tesseract isn't installed, so the screen watcher will stay off. To enable it run:"
-    [ "$OS" = "Darwin" ] && echo "    brew install tesseract" || echo "    sudo apt install tesseract-ocr"
-    echo
-fi
-
 echo "Creating virtualenv in $VENV"
 python3 -m venv "$VENV"
 "$VENV/bin/pip" install --quiet --upgrade pip

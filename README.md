@@ -13,7 +13,8 @@ emulator (Goldberg / GBE, CODEX, RUNE, EMPRESS, OnlineFix, SKIDROW, 3DM) under W
 - **Two themes**: Graphite (dark) and Porcelain (light), following your desktop's light/dark setting
   automatically. Each game page is tinted by its own artwork. Override it in Settings → Appearance,
   where you can also set a font (it uses your desktop's UI font by default).
-- **Sorting**: recently played, name, play time, completion or genre (genres come from Steam).
+- **Sorting**: games by recently played, name, play time, completion, genre or platform;
+  achievements by unlocked first, rarest, most common, recently unlocked or name (on the phone too).
 
 ## Your Steam library, too
 
@@ -55,116 +56,6 @@ This runs locally with no AI, and only reads saves when they change on disk.
 - **Checking what it sees:** `achtrack saves` lists the save files it reads and what matched.
   `achtrack saves <appid> --fields` also prints every value it read.
 
-## Screen watcher (for games with unreadable saves)
-
-Some games encrypt their saves or use a custom format without names (FF7 Rebirth, for example).
-For those, AchTrack can read on-screen text while you play. It runs locally with tesseract OCR,
-with no AI and nothing uploaded:
-
-- It captures the screen about twice a second and runs a cheap check (a few ms) that notices text
-  appearing in five areas (top banner, center, bottom boss-bar area, left and right notifications).
-  OCR (one low-priority tesseract call) runs only when that check fires, plus a full read every
-  3 s for text that stays up. OCR is capped at 40% of one CPU core, and `screen-test` reports the
-  actual cost on your machine. Banners that flash for under a second, like "STAGGERED", are caught.
-- **Direct text:** "STAGGERED" → "Stagger an enemy", "CHAPTER 6" → "Complete Chapter 5",
-  "Moonstones 50/50" → "Collect 50 moonstones". A one-word banner that is exactly the
-  achievement's key word counts right away; other text has to be seen twice.
-  Quest-log lines that just repeat the objective ("Defeat Iudex Gundyr") are ignored.
-- **Bosses:** a named target on screen, then a victory banner with no death screen in between,
-  counts as a defeat.
-- **Battles:** battle vocabulary (Attack, Abilities, ATB…) together with combat evidence (floating
-  damage numbers, "Staggered", "Critical"…) means a fight is on; vocabulary alone is usually just
-  the pause menu. When the combat text goes away with no death or game-over screen, the battle
-  was won. That unlocks "Win a battle", and counts toward "Win 50 battles"-style achievements with
-  a progress bar (only battles AchTrack has watched are counted). Words that keep appearing in
-  fights are learned per game, so detection improves as you play.
-- **Learning:** when you confirm an achievement (review or right-click), it looks back at what was
-  on screen and learns that game's victory banner. From then on, that game's boss kills unlock
-  automatically instead of being suggested.
-- Clear hits unlock with a popup, and uncertain ones are pre-ticked in the review. Right-click →
-  *Not earned* undoes a hit and stops that text from matching again.
-
-Setup: `sudo apt install tesseract-ocr`. To check what it reads on your screen, start a game and
-run `achtrack screen-test`. It lists every capture method on your desktop and whether it works.
-On X11 it captures directly. On Wayland it uses the desktop's screenshot tool, whichever is present:
-`grim` (wlroots), `cosmic-screenshot` (COSMIC), `gnome-screenshot` (GNOME) or `spectacle` (KDE).
-
-## Your PlayStation games
-
-AchTrack can also pull in your PlayStation library: **trophies with their unlock dates and rarity,
-plus PlayStation's own play time** per game. PS5, PS4, PS3 and Vita titles all come through, and they
-sit in the same library with a platform badge. Filter with the **PC / PlayStation** dropdown in the
-sidebar, or sort by platform.
-
-Sony has no public API, so this uses the endpoints the PlayStation mobile app uses, the way community
-trophy trackers do. It is read-only and nothing is written back to your account.
-
-Setup: sign in at playstation.com, open <https://ca.account.sony.com/api/v1/ssocookie>, copy the
-64-character `npsso` value and paste it into **Settings → PlayStation login**. It lasts about two
-months; AchTrack refreshes its session by itself until then and tells you when it needs a new one.
-`achtrack sync-psn` runs a sync from the terminal and prints what it found.
-
-## Backups
-
-Everything lives in one SQLite file, and AchTrack keeps copies of it:
-
-- A **database snapshot** plus a **plain JSON export** of every game, session and unlock, written
-  daily and on demand (**Library → Back up now**, or `achtrack backup`). The JSON stays readable
-  without AchTrack, so the record of what you unlocked and when outlives the app.
-- The newest 10 of each are kept (Settings → Backup folder).
-- `achtrack backup --restore <file>` puts a snapshot back, keeping the current database beside it
-  as `achtrack.db.replaced`.
-- **Settings → Sync command** runs anything you like afterwards, e.g.
-  `rclone copy {dir} gdrive:AchTrack`, so backups land off-machine automatically.
-
-## Your library on your phone
-
-AchTrack exports your whole library as **one self-contained HTML file**: games, play time, genres,
-platforms and every achievement with its unlock date, source and rarity. Open it on a phone and it
-behaves like a small app (search, sorting, per-game lists), with no PC needed once it's published.
-
-- **Encrypted.** With a passphrase set (Settings → Phone page), the data is gzipped and encrypted
-  with AES-GCM before it goes into the file; the browser decrypts it after you type the passphrase
-  once. A public URL is then safe, since without the passphrase it's an unreadable blob.
-- **Published to Vercel** if you add a token (vercel.com → Account Settings → Tokens). You get a
-  free `something.vercel.app` address, no domain needed. A Vercel team holds many projects, so it
-  can live beside your other sites; put the team's id or slug in the field under the token, or leave
-  it empty for your personal account.
-- **Or any other host**: set a publish command instead, e.g.
-  `wrangler pages deploy {dir} --project-name achtrack`, `netlify deploy --dir {dir} --prod` or
-  `rsync -a --delete {dir}/ me@server:/var/www/achtrack/`. Without either, the file is simply
-  written to `~/.local/share/achtrack/phone/`, ready for any cloud folder.
-- Rebuilt after each play session and with the daily backup, or on demand with
-  **Library → Build phone page** / `achtrack export --deploy`.
-
-## Using more than one machine
-
-Point every machine at the same shared folder (**Settings → Devices**, any folder your cloud app or
-Syncthing keeps in step) and they merge their libraries every few minutes:
-
-- **Unlocks combine** from all machines; the earliest unlock time wins.
-- **Undo stays undone.** Removing an unlock is remembered, so another machine can't bring it back -
-  but earning it again later does stick.
-- **Play time takes the highest per source** (AchTrack's own tracking, Steam, PlayStation), so
-  nothing is counted twice.
-- **What you edit** (hidden, review setting, executable, game folder) follows whichever machine
-  edited it last.
-- PlayStation games are matched by their trophy set, so the same game isn't duplicated.
-
-Each machine writes one small `achtrack-sync-<id>.json.gz`; there's no server and no account.
-`achtrack sync-devices` does it from the terminal.
-
-If the folder isn't synced by the system itself (iCloud on Linux, for example), set a **fetch** and
-an **upload** command in the same tab and AchTrack runs them around each sync:
-
-```text
-rclone copy icloud:AchTrack {dir}     # fetch, before merging
-rclone copy {dir} icloud:AchTrack     # upload, after writing
-```
-
-Because each machine only ever writes its own file, plain copies in both directions are enough -
-no two-way merge tool is needed.
-
 ## When a crack doesn't record achievements
 
 Some cracks never save achievements. For example, some RUNE releases leave `achievements.ini` at
@@ -183,7 +74,7 @@ Some cracks never save achievements. For example, some RUNE releases leave `achi
 ## Install (Linux)
 
 ```bash
-sudo apt install python3-venv libxcb-cursor0 tesseract-ocr
+sudo apt install python3-venv libxcb-cursor0
 ./install.sh --autostart
 ```
 
@@ -194,7 +85,6 @@ entry and (with `--autostart`) starts it in the background at login. Run `./inst
 ## Install (macOS)
 
 ```bash
-brew install python tesseract     # tesseract only if you want the screen watcher
 ./install.sh --autostart
 ```
 
@@ -262,7 +152,6 @@ achtrack sync-steam       copy your Steam games, playtime and achievements in no
 achtrack sync-psn         copy your PlayStation games, play time and trophies in now
 achtrack sync-devices     merge libraries with your other machines
 achtrack saves [appid]    show the save files AchTrack reads and what it matched (--fields for all values)
-achtrack screen-test      read the screen like the screen watcher does and print what it sees
 achtrack backup           snapshot the database + JSON export (--restore FILE to put one back)
 achtrack export           build the phone page (--deploy to publish it to Vercel)
 achtrack test-popup [--rare]

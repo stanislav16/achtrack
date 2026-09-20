@@ -22,7 +22,6 @@ from .db import MANUAL, PSN, SAVE, SCREEN, STEAM, Database
 from .engine import build_unlock_event, needs_review
 from .notifier import ToastData, trophy_pixmap
 from .scanner import detect_appid_in_tree, detect_steam_id
-from .screenwatch import available as screen_available
 from .steam_api import cached_icon
 
 REVIEW_MIN_SECONDS = 120   # don't ask after a game was only opened for a moment
@@ -90,8 +89,8 @@ def detection_key(reason: str) -> str:
     """The field or screen text a detected unlock came from, used to stop matching it again."""
     quoted = re.search(r'"(.+)"\s*$', reason or "")
     if (reason or "").startswith("Seen on screen") and quoted:
-        from .screenwatch import normalize
-        return f"screen:{normalize(quoted.group(1))}"
+        text = re.sub(r"\s+", " ", re.sub(r"[^0-9a-z' ]+", " ", quoted.group(1).lower())).strip()
+        return f"screen:{text}"
     return (reason or "").split(" = ")[0]
 
 
@@ -491,6 +490,11 @@ class DetailView(QWidget):
         self.filter = MenuButton([("All achievements", 0), ("Unlocked", 1), ("Locked", 2)], 0,
                                  lambda _v: self.refresh(force=True))
         bar.addWidget(self.filter)
+        self.ach_sort = MenuButton([("Unlocked first", "default"), ("Rarest first", "rarest"),
+                                    ("Most common first", "common"), ("Recently unlocked", "recent"),
+                                    ("Name (A-Z)", "name")],
+                                   window.cfg.achievement_sort, self._ach_sort_changed)
+        bar.addWidget(self.ach_sort)
         self.reveal = QCheckBox("Reveal hidden achievements")
         self.reveal.toggled.connect(lambda _: self.refresh(force=True))
         bar.addWidget(self.reveal)
@@ -530,6 +534,11 @@ class DetailView(QWidget):
         self.list.customContextMenuRequested.connect(self._row_menu)
         root.addWidget(self.list, 1)
 
+    def _ach_sort_changed(self, value: str) -> None:
+        self.win.cfg.achievement_sort = value
+        self.win.cfg.save()
+        self.refresh(force=True)
+
     def paintEvent(self, event) -> None:
         if self._wash is not None:
             QPainter(self).drawPixmap(0, 0, self._wash)
@@ -566,11 +575,6 @@ class DetailView(QWidget):
             lines.append("💾 Only the game's registry settings are readable - no save file found yet" + extra)
         elif extra:
             lines.append(extra.strip(" ·"))
-        screen = db.get_meta("screen_status") or {}
-        if self.win.cfg.screen_watcher and screen.get("appid") == self.appid and self.appid in self.win.running:
-            status = screen.get("status", "")
-            lines.append("👁 Watching the screen for achievements" if status == "watching"
-                         else f"👁 Screen watcher: {status}")
         return "\n".join(lines)
 
     def _row_menu(self, pos) -> None:
@@ -671,7 +675,8 @@ class DetailView(QWidget):
 
         icons = tuple(bool(cached_icon(self.appid, r.get("icon") or "")) for r in rows)
         query = self.search.text().strip().lower()
-        sig = (repr(rows), icons, self.filter.value, self.reveal.isChecked(), bool(banner_path), query)
+        sig = (repr(rows), icons, self.filter.value, self.win.cfg.achievement_sort, self.reveal.isChecked(),
+               bool(banner_path), query)
         if sig == self._sig and not force:
             return
         self._sig = sig
@@ -679,12 +684,27 @@ class DetailView(QWidget):
         self.list.setUpdatesEnabled(False)
         self.list.clear()
 
-        done = sorted((r for r in rows if r.get("unlocked_at")), key=lambda r: -r["unlocked_at"])
+        done = [r for r in rows if r.get("unlocked_at")]
         locked = [r for r in rows if not r.get("unlocked_at")]
-        if any(r.get("global_pct") is not None for r in locked):
+        order = self.win.cfg.achievement_sort
+        if order == "rarest":
+            key = lambda r: (r.get("global_pct") is None, r.get("global_pct") or 0)          # noqa: E731
+            done, locked = sorted(done, key=key), sorted(locked, key=key)
+        elif order == "common":
+            key = lambda r: (r.get("global_pct") is None, -(r.get("global_pct") or 0))       # noqa: E731
+            done, locked = sorted(done, key=key), sorted(locked, key=key)
+        elif order == "name":
+            key = lambda r: (r.get("display_name") or r["name"]).lower()                     # noqa: E731
+            done, locked = sorted(done, key=key), sorted(locked, key=key)
+        else:
+            done.sort(key=lambda r: -r["unlocked_at"])
             locked.sort(key=lambda r: -(r.get("global_pct") or 0))
         mode = self.filter.value
-        shown = (done if mode != 2 else []) + (locked if mode != 1 else [])
+        if order == "recent":
+            shown = sorted(done, key=lambda r: -r["unlocked_at"]) if mode != 2 else []
+            shown += locked if mode != 1 else []
+        else:
+            shown = (done if mode != 2 else []) + (locked if mode != 1 else [])
         reveal = self.reveal.isChecked()
         hidden_left = 0
         for r in shown:
@@ -1124,13 +1144,6 @@ class SettingsDialog(QDialog):
         self.saves = QCheckBox("Detect achievements from games' save files")
         self.saves.setChecked(cfg.save_detection)
         detect.addRow("", self.saves)
-        ok, reason = screen_available()
-        self.screen = QCheckBox("Watch on-screen text while playing (local OCR, for unreadable saves)")
-        self.screen.setChecked(cfg.screen_watcher)
-        self.screen.setEnabled(ok)
-        detect.addRow("", self.screen)
-        if not ok:
-            self._status(detect, f"Screen watching unavailable: {reason}")
         self.dirs = QPlainTextEdit("\n".join(cfg.scan_dirs))
         self.dirs.setPlaceholderText("One folder per line - Wine prefixes, or folders that contain them")
         self.dirs.setFixedHeight(90)
@@ -1350,7 +1363,6 @@ class SettingsDialog(QDialog):
         cfg.psn_npsso = self.psn.text().strip()
         cfg.session_review = self.review.isChecked()
         cfg.save_detection = self.saves.isChecked()
-        cfg.screen_watcher = self.screen.isChecked()
         cfg.theme = self.theme.currentData()
         cfg.font_family = self.font.text().strip()
         cfg.backup_dir = self.backup_dir.text().strip()
@@ -1665,9 +1677,6 @@ class MainWindow(QMainWindow):
     def manual_unlock(self, appid: int, names: list, ts: int, popup: bool = True, notes: dict | None = None) -> None:
         notes = notes or {}
         added = [n for n in names if self.db.add_unlock(appid, n, ts, MANUAL, notes.get(n))]
-        if added:
-            # Let the screen watcher learn what this game showed around these unlocks.
-            self.worker.request("learn", appid, added, time.time())
         if popup and added:
             for name in added[:POPUP_BURST]:
                 self.notifier.achievement(build_unlock_event(self.db, appid, name, download=False))

@@ -209,15 +209,34 @@ function library() {
   }
 }
 
+let achSort = localStorage.getItem("achSort") || "default";
+
+function orderAchievements(list) {
+  const pct = a => a[3] === null ? 999 : a[3];
+  const copy = [...list];
+  if (achSort === "rarest") copy.sort((a, b) => pct(a) - pct(b));
+  else if (achSort === "common") copy.sort((a, b) => pct(b) - pct(a));
+  else if (achSort === "name") copy.sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+  return copy;
+}
+
 function detail(g) {
-  const done = g.a.filter(a => a[4]), locked = g.a.filter(a => !a[4]);
+  const done = orderAchievements(g.a.filter(a => a[4])), locked = orderAchievements(g.a.filter(a => !a[4]));
   app.innerHTML = `<main><button class="back">‹ Library</button>
     <div class="hero"><img src="${g.h}" alt=""><div><h2>${esc(g.n)}</h2>
       <div class="meta">${g.p !== "pc" ? PLAT[g.p] + " · " : ""}${fmtH(g.t)}${g.l ? " · " + fmtDate(g.l) : ""}
       ${g.g ? "<br>" + esc(g.g) : ""}</div></div></div>
     ${g.c ? `<div class="bar" style="margin-bottom:14px"><i style="width:${Math.round(g.u/g.c*100)}%"></i></div>` : ""}
-    <div class="meta" style="margin-bottom:8px">${g.u} of ${g.c || g.a.length} unlocked</div>
+    <div class="row" style="margin-bottom:10px">
+      <div class="meta" style="flex:1">${g.u} of ${g.c || g.a.length} unlocked</div>
+      <select id="as">
+        <option value="default">Unlocked first</option><option value="rarest">Rarest first</option>
+        <option value="common">Most common</option><option value="name">Name</option>
+      </select></div>
     ${[...done, ...locked].map(a => ach(a)).join("")}</main>`;
+  const sel = document.getElementById("as");
+  sel.value = achSort;
+  sel.onchange = () => { achSort = sel.value; localStorage.setItem("achSort", achSort); detail(g); };
   app.querySelector(".back").onclick = library;
   window.scrollTo(0,0);
 }

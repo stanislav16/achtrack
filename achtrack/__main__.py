@@ -226,48 +226,6 @@ def cmd_saves(appid: int | None, file: str | None, fields: bool) -> int:
     return 0
 
 
-def cmd_screen_test(seconds: float) -> int:
-    """Runs the screen watcher's loop without a game attached and prints what it reads."""
-    import os
-    import time
-    from .config import Config
-    from .screenwatch import ScreenWatcher, available, probe_backends
-
-    ok, reason = available()
-    if not ok:
-        print(f"Screen watcher unavailable: {reason}")
-        return 1
-    cfg = Config.load()
-    print(f"Session type: {os.environ.get('XDG_SESSION_TYPE', 'unknown')}")
-    print("Capture methods on this desktop:")
-    for name, _ok, detail in probe_backends(cfg.screen_monitor):
-        print(f"   {name:18} {detail}")
-    print(f"\nWatching for {seconds:.0f} s - switch to your game now.\n")
-
-    def show(kind: str, lines: list, took: float) -> None:
-        stamp = time.strftime("%H:%M:%S")
-        print(f"-- {stamp} {kind} read, OCR {took:.2f} s" + ("" if lines else "  (no text)"))
-        for region, text in lines:
-            print(f"   [{region:6}] {text}")
-
-    watcher = ScreenWatcher(0, None, cfg.screen_capture_interval, cfg.screen_monitor, on_read=show)
-    watcher.start()
-    time.sleep(seconds)
-    watcher.stop()
-    watcher.join(10)
-    st = watcher.stats
-    if not st["captures"]:
-        print(f"No captures: {watcher.status}")
-        return 1
-    print(f"\n{st['captures']} captures in {seconds:.0f} s ({st['captures'] / seconds:.1f} per second, "
-          f"{st['grab_seconds'] / st['captures'] * 1000:.0f} ms each)")
-    print(f"{st['ocr_runs']} OCR runs ({st['flash_runs']} triggered by text appearing), "
-          f"{st['ocr_seconds']:.1f} s of OCR = {st['ocr_seconds'] / seconds * 100:.0f}% of one CPU core")
-    if "black" in watcher.status:
-        print(f"Warning: {watcher.status}")
-    return 0
-
-
 def cmd_sync_steam() -> int:
     from .config import Config
     from .db import Database
@@ -301,8 +259,6 @@ def main(argv=None) -> int:
     backup.add_argument("--restore", metavar="FILE", help="put a snapshot back instead")
     export = sub.add_parser("export", help="build the phone page from your library")
     export.add_argument("--deploy", action="store_true", help="also publish it to Vercel")
-    screen = sub.add_parser("screen-test", help="read the screen like the watcher does and print what it sees")
-    screen.add_argument("--seconds", type=float, default=20, help="how long to keep reading (default 20)")
     saves = sub.add_parser("saves", help="show the save files AchTrack reads and what it matches in them")
     saves.add_argument("appid", nargs="?", type=int, help="only this game")
     saves.add_argument("--file", help="test any save file (with --appid)")
@@ -330,8 +286,6 @@ def main(argv=None) -> int:
         return cmd_backup(args.restore)
     if args.command == "export":
         return cmd_export(args.deploy)
-    if args.command == "screen-test":
-        return cmd_screen_test(args.seconds)
     if args.command == "saves":
         return cmd_saves(args.appid or args.appid_opt, args.file, args.fields)
 

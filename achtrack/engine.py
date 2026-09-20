@@ -122,8 +122,6 @@ class Engine:
         self._next_backup = time.time() + 300      # first automatic backup shortly after startup
         self._next_sync = 0.0
         self._icons = ThreadPoolExecutor(max_workers=4, thread_name_prefix="achtrack-icons")
-        self.screen = None          # ScreenWatcher of the game being played
-        self._screen_status_at = 0.0
         self.saves = {}
         for r in self.db.save_files():
             if savefiles.is_candidate(r["path"]):
@@ -168,7 +166,6 @@ class Engine:
                     next_psn = now + max(300.0, self.cfg.psn_sync_interval)
                 if self.meta_queue:
                     self.ensure_meta(self.meta_queue.popleft(), force=True)
-                self._drain_screen()
                 if self.cfg.backup_daily and time.time() >= self._next_backup:
                     self._next_backup = time.time() + 86400
                     self.run_backup()
@@ -181,7 +178,6 @@ class Engine:
         self.shutdown()
 
     def shutdown(self) -> None:
-        self._stop_screen()
         now = time.time()
         for appid, run in list(self.running.items()):
             self._flush_playtime(appid, run, now)
@@ -218,8 +214,6 @@ class Engine:
                 self.build_export(deploy=len(req) > 1 and bool(req[1]))
             elif kind == "icons" and self.db.game(req[1]) is not None:
                 self._prefetch_game_icons(req[1])
-            elif kind == "learn":
-                self._learn(req[1], req[2], req[3])
 
     def _error(self, message: str) -> None:
         log.warning(message)
@@ -552,79 +546,6 @@ class Engine:
             log.info("unlocked %s / %s from save (%s)", appid, name, best[name].reason)
             self.listener.on_unlock(self.unlock_event(appid, name))
 
-    # screen watcher ------------------------------------------------------
-
-    def _start_screen(self, appid: int) -> None:
-        from . import screenwatch
-        if not self.cfg.screen_watcher:
-            return
-        ok, reason = screenwatch.available()
-        if not ok:
-            self.db.set_meta("screen_status", {"appid": appid, "status": reason, "time": int(time.time())})
-            return
-        models = self._achievement_models(appid)
-        if not models:
-            return
-        self._stop_screen()
-        screen_matcher = screenwatch.ScreenMatcher(models, screenwatch.load_profile(appid), self.db.rejections(appid))
-        screen_matcher.done |= self.db.unlocked_names(appid)
-        self.screen = screenwatch.ScreenWatcher(appid, screen_matcher, self.cfg.screen_capture_interval,
-                                                self.cfg.screen_monitor)
-        self.screen.start()
-        log.info("watching the screen for %s", appid)
-
-    def _stop_screen(self) -> None:
-        if self.screen is not None:
-            self.screen.stop()
-            self.db.set_meta("screen_status", {"appid": self.screen.appid, "status": "stopped", "time": int(time.time())})
-            self.screen = None
-
-    def _drain_screen(self) -> None:
-        watcher = self.screen
-        if watcher is None:
-            return
-        appid = watcher.appid
-        if time.time() - self._screen_status_at > 10:
-            self._screen_status_at = time.time()
-            self.db.set_meta("screen_status", {"appid": appid, "status": watcher.status, "time": int(time.time()),
-                                               "ocr_seconds": round(watcher.last_ocr_seconds, 2)})
-        fresh = []
-        while True:
-            try:
-                hit = watcher.events.get_nowait()
-            except queue.Empty:
-                break
-            if hit.name in self.db.unlocked_names(appid):
-                continue
-            if hit.progress:
-                self.db.set_progress(appid, hit.name, hit.progress[0], hit.progress[1])
-                self.listener.on_changed()
-            if not hit.satisfied:
-                continue
-            if hit.confidence == "high":
-                if self.db.add_unlock(appid, hit.name, int(time.time()), SCREEN, hit.reason):
-                    fresh.append(hit)
-            elif hit.name not in self.db.suggestions(appid):
-                self.db.add_suggestion(appid, hit.name, hit.reason)
-                self.listener.on_changed()
-        for hit in fresh:
-            log.info("unlocked %s / %s from screen (%s)", appid, hit.name, hit.reason)
-            self.listener.on_changed()
-            self.listener.on_unlock(self.unlock_event(appid, hit.name))
-
-    def _learn(self, appid: int, names: list, confirmed_at: float) -> None:
-        """You confirmed these achievements: remember what the screen showed around them."""
-        from . import screenwatch
-        models = {m.name: m for m in self._achievement_models(appid)}
-        profile = None
-        for name in names:
-            if name in models:
-                profile = screenwatch.learn(appid, models[name], confirmed_at)
-        if profile is not None and self.screen is not None and self.screen.appid == appid:
-            fresh = screenwatch.ScreenMatcher(self.screen.matcher.models, profile, self.db.rejections(appid))
-            fresh.done = self.screen.matcher.done | set(names)
-            self.screen.matcher = fresh
-
     # Steam library -------------------------------------------------------
 
     def _start_steam_sync(self) -> None:
@@ -925,7 +846,6 @@ class Engine:
             run.next_save_scan = now + SAVE_SCAN_EVERY
             if self.cfg.save_detection:
                 run.snapshots = self._snapshot_candidates(appid, run)
-            self._start_screen(appid)
             self.db.update_game(appid, last_played=int(now))
             self.ensure_meta(appid, force=created)
             game = self.db.game(appid)
@@ -945,8 +865,7 @@ class Engine:
                 if self.cfg.save_detection:
                     self.discover_saves(appid, run)   # games often write the final save on exit
                 if self.screen is not None and self.screen.appid == appid:
-                    self._drain_screen()
-                    self._stop_screen()
+                        self._stop_screen()
                 self.db.update_session(run.session, int(run.seconds), int(now))
                 del self.running[appid]
                 log.info("game stopped: %s after %ds", appid, run.seconds)

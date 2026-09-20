@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Monochrome version for system trays, which tint icons themselves. -->
+  <g fill="none" stroke="#FFFFFF" stroke-width="58" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M340 236h344v138c0 134-77 210-172 210s-172-76-172-210z"/>
+    <path d="M340 280h-74c0 98 44 149 110 165"/>
+    <path d="M684 280h74c0 98-44 149-110 165"/>
+    <path d="M512 584v134"/>
+    <path d="M386 788h252"/>
+  </g>
+</svg>

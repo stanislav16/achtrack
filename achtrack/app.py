@@ -7,12 +7,12 @@ import queue
 import sys
 import threading
 
-from PySide6.QtCore import QThread, QTimer, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from .config import APP_ICON, APP_ID, APP_NAME, Config
+from .config import APP_ICON, APP_ID, APP_NAME, TRAY_ICON, Config
 from .db import Database
 from .engine import Engine
 
@@ -118,6 +118,16 @@ def make_app() -> QApplication:
     return app
 
 
+def _make_tray():
+    """A tray icon where it works. Not on macOS: Qt's status-item handling crashes there (an
+    NSEvent assertion), and the Dock already gives you the app."""
+    if sys.platform == "darwin" or not QSystemTrayIcon.isSystemTrayAvailable():
+        return None
+    icon = QIcon(str(TRAY_ICON))       # monochrome, so the panel can tint it like its own icons
+    icon.setIsMask(True)
+    return QSystemTrayIcon(icon)
+
+
 def run_gui(background: bool = False) -> int:
     cfg = Config.load()
     prepare_environment(cfg)
@@ -129,7 +139,7 @@ def run_gui(background: bool = False) -> int:
     from .gui import MainWindow
     from .notifier import Notifier, ToastData
 
-    tray = QSystemTrayIcon(QIcon(str(APP_ICON))) if QSystemTrayIcon.isSystemTrayAvailable() else None
+    tray = _make_tray()
     notifier = Notifier(cfg, tray)
     worker = Worker(cfg)
     win = MainWindow(cfg, worker, notifier, has_tray=tray is not None)
@@ -192,6 +202,11 @@ def run_gui(background: bool = False) -> int:
     else:
         win.show()
         QTimer.singleShot(0, lambda: win.reload(force=True))
+
+    if sys.platform == "darwin":
+        # No tray there, so activating the app (Dock click, cmd-tab) reopens the library.
+        app.applicationStateChanged.connect(
+            lambda state: win.bring_up() if state == Qt.ApplicationState.ApplicationActive and win.isHidden() else None)
 
     app.aboutToQuit.connect(worker.stop)
     code = app.exec()

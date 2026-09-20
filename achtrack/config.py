@@ -25,6 +25,7 @@ EXPORT_DIR = DATA_DIR / "phone"
 AUTOSTART_FILE = _xdg("XDG_CONFIG_HOME", ".config") / "autostart" / f"{APP_ID}.desktop"
 ASSET_DIR = Path(__file__).resolve().parent / "assets"
 APP_ICON = ASSET_DIR / "achtrack.svg"
+TRAY_ICON = ASSET_DIR / "achtrack-symbolic.svg"   # monochrome, for system trays
 
 POPUP_STYLES = ("steam", "system", "both", "none")
 POPUP_CORNERS = ("bottom-right", "bottom-left", "top-right", "top-left")
@@ -47,10 +48,6 @@ class Config:
     session_review: bool = True
     # Read games' save files (Unreal, Unity, JSON, XML...) to detect achievements the crack doesn't record.
     save_detection: bool = True
-    # Read on-screen text (locally, with tesseract) while a game runs, as a fallback for unreadable saves.
-    screen_watcher: bool = True
-    screen_capture_interval: float = 0.5   # capture as often as this (slower if capturing itself takes longer)
-    screen_monitor: int = 1
     language: str = "english"
     # Extra folders to search for Wine prefixes (Lutris, Bottles, custom locations...).
     scan_dirs: list = field(default_factory=list)
@@ -67,6 +64,7 @@ class Config:
     sort: str = "recent"                   # recent | name | playtime | progress | genre | platform
     platform_filter: str = "all"           # all | pc | psn
     show_icons: bool = True                # game artwork thumbnails in the library list
+    achievement_sort: str = "default"      # default | rarest | common | recent | name
     # Backups: dated database snapshots + a readable JSON export.
     backup_dir: str = ""                   # empty = ~/.local/share/achtrack/backups
     backup_keep: int = 10

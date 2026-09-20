@@ -1140,7 +1140,7 @@ class SettingsDialog(QDialog):
         look.addRow("", self.autostart)
 
         # --- Backup & phone --------------------------------------------------
-        backup = self._page(tabs, "Backup & phone")
+        backup = self._page(tabs, "Backup && phone")
         backup_row = QHBoxLayout()
         self.backup_dir = QLineEdit(cfg.backup_dir)
         self.backup_dir.setPlaceholderText(str(BACKUP_DIR))

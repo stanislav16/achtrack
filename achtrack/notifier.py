@@ -1,31 +1,36 @@
 """Steam-style achievement popups."""
 from __future__ import annotations
 
-import math
 import shutil
 import subprocess
 from collections import deque
 from dataclasses import dataclass
 
-from PySide6.QtCore import (QEasingCurve, QObject, QParallelAnimationGroup, QPoint, QPointF, QPropertyAnimation,
-                            QRectF, Qt, QTimer, QVariantAnimation, Signal)
-from PySide6.QtGui import (QColor, QCursor, QFont, QFontMetrics, QGuiApplication, QLinearGradient, QPainter,
-                           QPainterPath, QPen, QPixmap, QRadialGradient)
+from PySide6.QtCore import (QEasingCurve, QObject, QParallelAnimationGroup, QPoint, QPropertyAnimation, QRectF, Qt,
+                            QTimer, Signal)
+from PySide6.QtGui import QColor, QCursor, QFont, QFontMetrics, QGuiApplication, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 
-from . import sound
+from . import sound, theme
 from .config import APP_ICON, APP_NAME, Config
 
-CARD_W, CARD_H = 372, 102
-SHADOW = 16
-RADIUS = 6
-ICON = 64
+CARD_W, CARD_H = 360, 88
+SHADOW = 18
+RADIUS = 18
+ICON = 60
 MAX_VISIBLE = 3
-EDGE_MARGIN = 14
-SPACING = 8
+EDGE_MARGIN = 18
+SPACING = 10
 
-BLUE = QColor("#66c0f4")
-GOLD = QColor("#f0c75e")
+P = theme.palette()
+
+
+def set_palette(palette: dict) -> None:
+    P.update(palette)
+
+
+def _c(key: str) -> QColor:
+    return QColor(P[key])
 
 
 @dataclass
@@ -68,10 +73,11 @@ def wrap_text(text: str, fm: QFontMetrics, width: int, max_lines: int) -> list:
     return [fm.elidedText(line, Qt.TextElideMode.ElideRight, width) for line in lines]
 
 
-def trophy_pixmap(size: int, color: QColor = GOLD) -> QPixmap:
+def trophy_pixmap(size: int, color: QColor | None = None) -> QPixmap:
     """Fallback artwork when an achievement has no icon."""
+    color = color or _c("accent")
     pm = QPixmap(size, size)
-    pm.fill(QColor("#3b4452"))
+    pm.fill(_c("icon_off"))
     p = QPainter(pm)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
     s = size / 64
@@ -94,14 +100,6 @@ def trophy_pixmap(size: int, color: QColor = GOLD) -> QPixmap:
     return pm
 
 
-def _sparkle(p: QPainter, center: QPointF, size: float, color: QColor) -> None:
-    path = QPainterPath()
-    path.moveTo(center.x(), center.y() - size)
-    for dx, dy in ((0.22, -0.22), (1, 0), (0.22, 0.22), (0, 1), (-0.22, 0.22), (-1, 0), (-0.22, -0.22), (0, -1)):
-        path.lineTo(center.x() + dx * size, center.y() + dy * size)
-    p.fillPath(path, color)
-
-
 class Toast(QWidget):
     finished = Signal(object)
 
@@ -117,7 +115,6 @@ class Toast(QWidget):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.data = data
         self.seconds = max(1.5, seconds)
-        self.phase = 0.0
         self.closing = False
         self.icon = self._load_icon()
         self._anims: list = []
@@ -129,7 +126,7 @@ class Toast(QWidget):
         dpr = self.devicePixelRatioF() or 1.0
         pm = QPixmap(self.data.icon) if self.data.icon else QPixmap()
         if pm.isNull():
-            pm = trophy_pixmap(ICON * 2, GOLD if self.data.rare else BLUE)
+            pm = trophy_pixmap(ICON * 2)
         elif self.data.square_crop:
             side = min(pm.width(), pm.height())
             pm = pm.copy((pm.width() - side) // 2, (pm.height() - side) // 2, side, side)
@@ -166,19 +163,7 @@ class Toast(QWidget):
             group.addAnimation(fade)
         group.start()
         self._anims.append(group)
-        if self.data.rare:
-            glow = QVariantAnimation(self)
-            glow.setStartValue(0.0)
-            glow.setEndValue(float(self.seconds))
-            glow.setDuration(int(self.seconds * 1000))
-            glow.valueChanged.connect(self._tick)
-            glow.start()
-            self._anims.append(glow)
         self._timer.start(int(self.seconds * 1000))
-
-    def _tick(self, value) -> None:
-        self.phase = float(value)
-        self.update()
 
     def move_to(self, end: QPoint) -> None:
         anim = QPropertyAnimation(self, b"pos", self)
@@ -228,107 +213,57 @@ class Toast(QWidget):
         rare = self.data.rare
         card = QRectF(SHADOW, SHADOW, CARD_W, CARD_H)
 
+        # one soft shadow, nothing else
         p.setPen(Qt.PenStyle.NoPen)
         for i in range(SHADOW, 0, -2):
-            alpha = int(46 * (1 - i / SHADOW) ** 2) + 2
+            alpha = int(P["shadow"] / SHADOW * (1 - i / SHADOW) ** 2 * 2.2) + 1
             p.setBrush(QColor(0, 0, 0, alpha))
-            p.drawRoundedRect(card.adjusted(-i, -i + 4, i, i + 4), RADIUS + i, RADIUS + i)
+            p.drawRoundedRect(card.adjusted(-i, -i + 3, i, i + 3), RADIUS + i * 0.6, RADIUS + i * 0.6)
 
         body = QPainterPath()
         body.addRoundedRect(card, RADIUS, RADIUS)
-        bg = QLinearGradient(card.topLeft(), card.bottomRight())
-        if rare:
-            bg.setColorAt(0.0, QColor("#3b3324"))
-            bg.setColorAt(0.55, QColor("#252019"))
-            bg.setColorAt(1.0, QColor("#1b1812"))
-        else:
-            bg.setColorAt(0.0, QColor("#2d3441"))
-            bg.setColorAt(0.55, QColor("#222833"))
-            bg.setColorAt(1.0, QColor("#1a1e26"))
-        p.fillPath(body, bg)
+        p.fillPath(body, QColor(P["toast"]))
+        p.strokePath(body, QPen(_c("accent") if rare else _c("hair"), 1))
 
-        # Rare achievements get Steam's golden sweep.
-        if rare and 0.25 <= self.phase <= 1.65:
-            t = (self.phase - 0.25) / 1.4
-            cx = card.left() - 120 + (card.width() + 240) * t
-            sweep = QLinearGradient(cx - 70, card.top(), cx + 70, card.bottom())
-            sweep.setColorAt(0.0, QColor(255, 220, 140, 0))
-            sweep.setColorAt(0.5, QColor(255, 225, 150, 60))
-            sweep.setColorAt(1.0, QColor(255, 220, 140, 0))
-            p.save()
-            p.setClipPath(body)
-            p.fillRect(card, sweep)
-            p.restore()
-
-        border = QPen()
-        border.setWidthF(1.2)
-        if rare:
-            edge = QLinearGradient(card.topLeft(), card.topRight())
-            edge.setColorAt(0.0, QColor("#f7dc8b"))
-            edge.setColorAt(0.5, QColor("#a8792a"))
-            edge.setColorAt(1.0, QColor("#f7dc8b"))
-            border.setBrush(edge)
-        else:
-            border.setColor(QColor(255, 255, 255, 30))
-        p.strokePath(body, border)
-        p.setPen(QPen(QColor(255, 255, 255, 22 if not rare else 40), 1))
-        p.drawLine(QPointF(card.left() + RADIUS, card.top() + 1.2), QPointF(card.right() - RADIUS, card.top() + 1.2))
-
-        icon_rect = QRectF(card.left() + 16, card.top() + (CARD_H - ICON) / 2, ICON, ICON)
-        if rare:
-            glow = QRadialGradient(icon_rect.center(), ICON * 0.95)
-            pulse = 0.75 + 0.25 * math.sin(self.phase * 3.2)
-            glow.setColorAt(0.0, QColor(255, 196, 80, int(120 * pulse)))
-            glow.setColorAt(1.0, QColor(255, 196, 80, 0))
-            p.fillRect(icon_rect.adjusted(-22, -22, 22, 22), glow)
+        icon_rect = QRectF(card.left() + 14, card.top() + (CARD_H - ICON) / 2, ICON, ICON)
         clip = QPainterPath()
-        clip.addRoundedRect(icon_rect, 3, 3)
+        clip.addRoundedRect(icon_rect, 13, 13)
         p.save()
         p.setClipPath(clip)
         p.drawPixmap(icon_rect.topLeft(), self.icon)
         p.restore()
-        p.setPen(QPen(GOLD if rare else QColor(0, 0, 0, 110), 1.4 if rare else 1))
+        p.setPen(QPen(_c("accent") if rare else _c("hair"), 1))
         p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRoundedRect(icon_rect, 3, 3)
-        if rare:
-            for i, (dx, dy, size) in enumerate(((-6, 4, 5), (ICON + 5, 10, 4), (ICON - 2, ICON + 4, 6), (8, ICON + 6, 3.5))):
-                alpha = max(0.0, math.sin(self.phase * 4.0 + i * 1.7))
-                _sparkle(p, QPointF(icon_rect.left() + dx, icon_rect.top() + dy), size,
-                         QColor(255, 236, 170, int(230 * alpha)))
+        p.drawRoundedRect(icon_rect, 13, 13)
 
-        x = icon_rect.right() + 14
-        width = int(card.right() - 14 - x)
-        top = card.top() + 12
-
-        kicker = _font(10.5, QFont.Weight.Bold, 0.9)
+        x = icon_rect.right() + 16
+        width = int(card.right() - 16 - x)
+        kicker = _font(9.5, QFont.Weight.DemiBold, 0.6)
         p.setFont(kicker)
-        right_w = 0
-        if self.data.footer_right:
-            right_w = QFontMetrics(kicker).horizontalAdvance(self.data.footer_right) + 8
-            p.setPen(GOLD if rare else QColor("#8b98a5"))
-            p.drawText(QRectF(x, top, width, 14), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                       self.data.footer_right)
-        p.setPen(GOLD if rare else BLUE)
-        p.drawText(QRectF(x, top, width - right_w, 14), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                   QFontMetrics(kicker).elidedText(self.data.kicker, Qt.TextElideMode.ElideRight, width - right_w))
+        p.setPen(_c("accent"))
+        p.drawText(QRectF(x, card.top() + 13, width, 13), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   QFontMetrics(kicker).elidedText(self.data.kicker, Qt.TextElideMode.ElideRight, width))
 
-        title = _font(15.5, QFont.Weight.DemiBold)
+        title = _font(14.5, QFont.Weight.DemiBold)
         p.setFont(title)
-        p.setPen(QColor("#ffffff"))
-        p.drawText(QRectF(x, top + 16, width, 21), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+        p.setPen(_c("text"))
+        p.drawText(QRectF(x, card.top() + 30, width, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                    QFontMetrics(title).elidedText(self.data.title, Qt.TextElideMode.ElideRight, width))
 
-        desc = _font(12.5)
-        p.setFont(desc)
-        p.setPen(QColor("#b4bcc6"))
-        for i, line in enumerate(wrap_text(self.data.body, QFontMetrics(desc), width, 2)):
-            p.drawText(QRectF(x, top + 38 + i * 16, width, 16), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, line)
-
+        line = self.data.body
+        if self.data.footer_right:
+            line = f"{line}    {self.data.footer_right}" if line else self.data.footer_right
+        body_font = _font(11.5)
+        p.setFont(body_font)
+        p.setPen(_c("muted"))
+        p.drawText(QRectF(x, card.top() + 52, width, 16), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   QFontMetrics(body_font).elidedText(line, Qt.TextElideMode.ElideRight, width))
         if self.data.footer:
-            foot = _font(10.5, QFont.Weight.Medium)
+            foot = _font(10.5)
             p.setFont(foot)
-            p.setPen(QColor("#77818c"))
-            p.drawText(QRectF(x, card.bottom() - 20, width, 14), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            p.setPen(_c("muted"))
+            p.drawText(QRectF(x, card.bottom() - 21, width, 13),
+                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                        QFontMetrics(foot).elidedText(self.data.footer, Qt.TextElideMode.ElideRight, width))
         p.end()
 
@@ -395,9 +330,13 @@ def system_notify(title: str, body: str, icon: str | None, tray=None) -> None:
 class Notifier(QObject):
     def __init__(self, cfg: Config, tray=None):
         super().__init__()
+        set_palette(theme.palette(cfg.theme))
         self.cfg = cfg
         self.tray = tray
         self.toasts = ToastManager(cfg)
+
+    def palette_changed(self, palette: dict) -> None:
+        set_palette(palette)
 
     def achievement(self, ev: dict) -> None:
         style = self.cfg.popup_style
@@ -407,7 +346,7 @@ class Notifier(QObject):
         if ev.get("total"):
             footer += f"  ·  {ev['unlocked']} of {ev['total']}"
         data = ToastData(
-            kicker="Rare achievement unlocked".upper() if rare else "Achievement unlocked".upper(),
+            kicker="Rare achievement" if rare else "Achievement unlocked",
             title=ev.get("title") or ev.get("name") or "Achievement",
             body=ev.get("description") or "",
             icon=ev.get("icon"),
@@ -422,7 +361,7 @@ class Notifier(QObject):
     def game_started(self, appid: int, name: str, header: str) -> None:
         if not self.cfg.session_toast:
             return
-        data = ToastData(kicker="NOW PLAYING", title=name, body="Achievements and playtime are being tracked",
+        data = ToastData(kicker="Now playing", title=name, body="Achievements and playtime are being tracked",
                          icon=header or None, square_crop=True, sound="session")
         self._deliver(data, f"Now playing: {name}", data.body)
 

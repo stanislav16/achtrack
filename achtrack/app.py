@@ -109,7 +109,7 @@ def run_gui(background: bool = False) -> int:
     win = MainWindow(cfg, worker, notifier, has_tray=tray is not None)
 
     def on_close_without_tray():
-        notifier.toasts.show(ToastData(kicker=APP_NAME.upper(), title="Still running in the background",
+        notifier.toasts.show(ToastData(kicker=APP_NAME, title="Still running in the background",
                                        body=f"Run “{APP_ID}” again to open the library. Quit from Library → Quit.",
                                        sound=None))
 

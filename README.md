@@ -10,6 +10,8 @@ emulator (Goldberg / GBE, CODEX, RUNE, EMPRESS, OnlineFix, SKIDROW, 3DM) under W
 - **Playtime**: sessions are counted while the game process runs, shown in hours like Steam.
 - **Library window**: every game shows playtime, last played, a progress bar and the full achievement
   list (unlock dates, rarity, progress bars, hidden achievements collapsed).
+- **Two themes**: Graphite (dark) and Porcelain (light), following your desktop's light/dark setting
+  automatically. Each game page is tinted by its own artwork. Override it in Settings → Appearance.
 
 ## Your Steam library, too
 

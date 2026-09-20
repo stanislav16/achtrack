@@ -6,14 +6,15 @@ import re
 import time
 from datetime import datetime
 
-from PySide6.QtCore import QDateTime, QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QIcon, QImage, QPixmap
+from PySide6.QtCore import QDateTime, QRectF, QSize, Qt, QTimer, QUrl
+from PySide6.QtGui import (QAction, QActionGroup, QBrush, QColor, QDesktopServices, QGuiApplication, QIcon, QImage,
+                           QLinearGradient, QPainter, QPainterPath, QPixmap)
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDateTimeEdit, QDialog, QDialogButtonBox,
                                QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit,
                                QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
                                QProgressBar, QPushButton, QSplitter, QStackedWidget, QVBoxLayout, QWidget)
 
-from . import __version__, desktop
+from . import __version__, desktop, theme
 from .config import APP_ICON, APP_NAME, POPUP_CORNERS, Config
 from .db import MANUAL, SAVE, SCREEN, STEAM, Database
 from .engine import build_unlock_event, needs_review
@@ -30,72 +31,11 @@ LANGUAGES = ["english", "german", "french", "italian", "spanish", "latam", "port
              "swedish", "danish", "norwegian", "finnish", "japanese", "koreana", "schinese", "tchinese", "thai",
              "vietnamese", "indonesian", "arabic"]
 
-STYLE = """
-* { font-family: "Motiva Sans", "Inter", "Noto Sans", "Cantarell", "Ubuntu", sans-serif; }
-QMainWindow, QDialog { background: #1b2028; }
-QWidget { color: #c6d4df; font-size: 13px; }
-QMenuBar { background: #171a21; color: #b8c4cf; padding: 2px; }
-QMenuBar::item { padding: 5px 10px; border-radius: 3px; }
-QMenuBar::item:selected { background: #2a3140; }
-QMenu { background: #252b36; border: 1px solid #343c4a; padding: 4px; }
-QMenu::item { padding: 6px 22px 6px 14px; border-radius: 3px; }
-QMenu::item:selected { background: #3d4a5d; color: white; }
-QMenu::separator { height: 1px; background: #343c4a; margin: 4px 8px; }
-QSplitter::handle { background: #11151b; }
-#Sidebar { background: #171d25; }
-#SidebarList { background: transparent; border: none; outline: 0; }
-#SidebarList::item { border-radius: 4px; margin: 1px 6px; }
-#SidebarList::item:selected { background: #3e4a5c; }
-#SidebarList::item:hover:!selected { background: #232b37; }
-QLineEdit, QPlainTextEdit, QDoubleSpinBox, QComboBox {
-    background: #0f1319; border: 1px solid #2c3441; border-radius: 4px; padding: 6px 8px; color: #dfe7ee;
-    selection-background-color: #2f6ea3; }
-QLineEdit:focus, QPlainTextEdit:focus, QDoubleSpinBox:focus, QComboBox:focus { border-color: #66c0f4; }
-QComboBox::drop-down { border: none; width: 22px; }
-QComboBox QAbstractItemView { background: #252b36; border: 1px solid #343c4a; selection-background-color: #3d4a5d; }
-QPushButton { background: #2f3a4a; border: none; border-radius: 4px; padding: 7px 14px; color: #dfe7ee; }
-QPushButton:hover { background: #3b4a5f; }
-QPushButton:pressed { background: #26303d; }
-QPushButton#Primary { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #47bfff, stop:1 #1a8fd8);
-    color: white; font-weight: 600; }
-QPushButton#Primary:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #5fc9ff, stop:1 #2a9ce3); }
-QProgressBar { background: #0e1218; border: none; border-radius: 4px; max-height: 8px; min-height: 8px; }
-QProgressBar::chunk { border-radius: 4px;
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1a9fff, stop:1 #66c0f4); }
-QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
-QScrollBar::handle:vertical { background: #3a4452; border-radius: 4px; min-height: 30px; }
-QScrollBar::handle:vertical:hover { background: #4a5668; }
-QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
-QScrollBar::add-page, QScrollBar::sub-page { background: none; }
-#AchList { background: transparent; border: none; outline: 0; }
-#AchList::item, #AchList::item:selected, #AchList::item:hover { background: transparent; }
-#Muted { color: #7f8b98; }
-#StatLabel { color: #7f8b98; font-size: 11px; font-weight: 600; letter-spacing: 1px; }
-#StatValue { color: #e4ecf2; font-size: 15px; }
-#GameTitle { color: white; font-size: 26px; font-weight: 700; }
-#Banner { background: #10141a; border-radius: 4px; }
-#AchRow { background: #1f2630; border-radius: 4px; }
-#AchRow[unlocked="true"] { background: #273241; }
-#AchName { color: #ffffff; font-size: 14px; font-weight: 600; }
-#AchDesc { color: #95a3b0; font-size: 12.5px; }
-#AchDate { color: #8fa3b6; font-size: 12px; }
-#AchPct { color: #7f8b98; font-size: 12px; }
-#AchPct[rare="true"] { color: #f0c75e; }
-#Empty { color: #7f8b98; font-size: 15px; }
-#Hint { color: #7f8b98; font-size: 12px; }
-#Running { color: #a4d007; font-size: 11px; font-weight: 700; letter-spacing: 1px; }
-#Tag { color: #0e1116; background: #7f8b98; border-radius: 3px; padding: 1px 5px; font-size: 10px; font-weight: 700; }
-#Tag[kind="hidden"] { background: #b58cf0; }
-#Tag[kind="rare"] { background: #f0c75e; }
-#ReviewRow { background: #1f2630; border-radius: 4px; }
-#ReviewRow[checked="true"] { background: #2a3b52; }
-#Found { color: #a4d007; font-size: 12px; }
-#SaveStatus { color: #7f8b98; font-size: 12px; }
-QCheckBox { spacing: 8px; }
-QCheckBox::indicator { width: 16px; height: 16px; border-radius: 3px; background: #0f1319; border: 1px solid #3a4452; }
-QCheckBox::indicator:checked { background: #1a9fff; border-color: #1a9fff; }
-QToolTip { background: #252b36; color: #dfe7ee; border: 1px solid #343c4a; padding: 4px; }
-"""
+P = theme.palette()          # current palette; swapped when the system switches light/dark
+
+
+def accent() -> QColor:
+    return QColor(P["accent"])
 
 
 # formatting --------------------------------------------------------------
@@ -178,27 +118,45 @@ def parse_appid(text: str) -> int | None:
 
 # widgets -----------------------------------------------------------------
 
+class Dot(QWidget):
+    """Small accent dot marking the game you're playing."""
+
+    def __init__(self, size: int = 8):
+        super().__init__()
+        self.setFixedSize(size, size)
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(accent())
+        p.drawEllipse(self.rect())
+
+
 class GameRow(QWidget):
     def __init__(self, row, running: bool):
         super().__init__()
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(10, 7, 10, 7)
-        lay.setSpacing(2)
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(14, 8, 12, 8)
+        outer.setSpacing(8)
+        lay = QVBoxLayout()
+        lay.setSpacing(3)
         name = QLabel(row["name"] or f"App {row['appid']}")
-        name.setStyleSheet("color: #e7eef4; font-size: 13.5px; font-weight: 600; background: transparent;")
+        name.setStyleSheet(f"color: {P['text'] if running else P['text2']}; font-size: 13.5px; font-weight: 500;"
+                           " background: transparent;")
         lay.addWidget(name)
-        parts = []
-        if running:
-            parts.append("<span style='color:#a4d007;font-weight:700'>PLAYING</span>")
-        parts.append(fmt_short_playtime(row["total_playtime"]))
+        parts = [fmt_short_playtime(row["total_playtime"])]
         if row["total"]:
-            parts.append(f"{min(row['unlocked'], row['total'])}/{row['total']} 🏆")
+            parts.append(f"{min(row['unlocked'], row['total'])}/{row['total']}")
         elif row["unlocked"]:
-            parts.append(f"{row['unlocked']} 🏆")
-        sub = QLabel("  ·  ".join(parts))
-        sub.setStyleSheet("color: #7f8b98; font-size: 11.5px; background: transparent;")
+            parts.append(str(row["unlocked"]))
+        sub = QLabel("     ".join(parts))
+        sub.setStyleSheet(f"color: {P['muted']}; font-size: 11.5px; background: transparent;")
         lay.addWidget(sub)
+        outer.addLayout(lay, 1)
+        if running:
+            outer.addWidget(Dot(), 0, Qt.AlignmentFlag.AlignVCenter)
 
 
 class AchievementRow(QFrame):
@@ -219,8 +177,8 @@ class AchievementRow(QFrame):
             gray_path = cached_icon(appid, a.get("icon_gray") or "")
             icon.setPixmap(load_pixmap(gray_path or cached_icon(appid, a.get("icon") or ""), 64, gray=not gray_path))
         pct = a.get("global_pct")
-        if unlocked and pct is not None and pct < RARE_PCT:
-            icon.setStyleSheet("border: 2px solid #f0c75e; border-radius: 3px;")
+        if pct is not None and pct < RARE_PCT:
+            icon.setStyleSheet(f"border: 1px solid {P['accent']}; border-radius: 12px;")
         lay.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
 
         texts = QVBoxLayout()
@@ -263,7 +221,7 @@ class AchievementRow(QFrame):
             date.setAlignment(Qt.AlignmentFlag.AlignRight)
             right.addWidget(date)
         if pct is not None:
-            label = QLabel(f"{pct:.1f}% of players" + ("  ·  Rare" if pct < RARE_PCT else ""))
+            label = QLabel(f"{pct:.0f}%" if pct >= 10 else f"{pct:.1f}%")
             label.setObjectName("AchPct")
             label.setProperty("rare", pct < RARE_PCT)
             label.setAlignment(Qt.AlignmentFlag.AlignRight)
@@ -284,17 +242,54 @@ class HiddenSummaryRow(QFrame):
 
 
 class Stat(QWidget):
+    """One "LABEL      value" line, the way a settings row reads."""
+
     def __init__(self, label: str):
         super().__init__()
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 24, 0)
-        lay.setSpacing(2)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(12)
         cap = QLabel(label.upper())
         cap.setObjectName("StatLabel")
+        cap.setFixedWidth(116)
         self.value = QLabel("-")
         self.value.setObjectName("StatValue")
-        lay.addWidget(cap)
-        lay.addWidget(self.value)
+        lay.addWidget(cap, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(self.value, 1, Qt.AlignmentFlag.AlignVCenter)
+
+
+BANNER_W, BANNER_H = 300, 140
+WASH_H = 300
+
+
+def rounded(pm: QPixmap, radius: int) -> QPixmap:
+    out = QPixmap(pm.size())
+    out.fill(Qt.GlobalColor.transparent)
+    p = QPainter(out)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    path = QPainterPath()
+    path.addRoundedRect(QRectF(0, 0, pm.width(), pm.height()), radius, radius)
+    p.setClipPath(path)
+    p.drawPixmap(0, 0, pm)
+    p.end()
+    return out
+
+
+def blurred_wash(pm: QPixmap, width: int, height: int) -> QPixmap:
+    """The game's art, blurred to a soft colour field, fading out downwards - the page's tint."""
+    small = pm.scaled(20, 12, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+    wash = small.scaled(width, height, Qt.AspectRatioMode.IgnoreAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation).toImage().convertToFormat(
+        QImage.Format.Format_ARGB32_Premultiplied)
+    p = QPainter(wash)
+    p.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+    fade = QLinearGradient(0, 0, 0, height)
+    fade.setColorAt(0.0, QColor(0, 0, 0, 150))
+    fade.setColorAt(0.45, QColor(0, 0, 0, 90))
+    fade.setColorAt(1.0, QColor(0, 0, 0, 0))
+    p.fillRect(0, 0, width, height, QBrush(fade))
+    p.end()
+    return QPixmap.fromImage(wash)
 
 
 class DetailView(QWidget):
@@ -303,6 +298,7 @@ class DetailView(QWidget):
         self.win = window
         self.appid: int | None = None
         self._sig = None
+        self._wash: QPixmap | None = None
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 20, 24, 12)
         root.setSpacing(14)
@@ -310,33 +306,40 @@ class DetailView(QWidget):
         header = QHBoxLayout()
         header.setSpacing(20)
         self.banner = QLabel()
-        self.banner.setObjectName("Banner")
-        self.banner.setFixedSize(276, 129)
+        self.banner.setFixedSize(BANNER_W, BANNER_H)
         self.banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header.addWidget(self.banner, 0, Qt.AlignmentFlag.AlignTop)
 
         info = QVBoxLayout()
-        info.setSpacing(8)
-        self.running = QLabel("● NOW PLAYING")
-        self.running.setObjectName("Running")
-        info.addWidget(self.running)
+        info.setSpacing(6)
         self.title = QLabel()
         self.title.setObjectName("GameTitle")
         self.title.setWordWrap(True)
         info.addWidget(self.title)
-        stats = QHBoxLayout()
-        stats.setSpacing(0)
+        playing = QHBoxLayout()
+        playing.setSpacing(7)
+        self.running_dot = Dot(7)
+        self.running = QLabel("Playing now")
+        self.running.setObjectName("Running")
+        playing.addWidget(self.running_dot, 0, Qt.AlignmentFlag.AlignVCenter)
+        playing.addWidget(self.running, 0, Qt.AlignmentFlag.AlignVCenter)
+        playing.addStretch(1)
+        info.addLayout(playing)
+        info.addSpacing(10)
+        stats = QVBoxLayout()
+        stats.setSpacing(7)
         self.stat_time = Stat("Play time")
         self.stat_last = Stat("Last played")
-        self.stat_ach = Stat("Achievements")
+        self.stat_ach = Stat("Unlocked")
         for s in (self.stat_time, self.stat_last, self.stat_ach):
             stats.addWidget(s)
-        stats.addStretch(1)
         info.addLayout(stats)
+        info.addSpacing(6)
         prog = QHBoxLayout()
+        prog.setSpacing(12)
         self.progress = QProgressBar()
         self.progress.setTextVisible(False)
-        self.progress.setMaximumWidth(420)
+        self.progress.setMaximumWidth(460)
         prog.addWidget(self.progress)
         self.progress_label = QLabel()
         self.progress_label.setObjectName("Muted")
@@ -381,6 +384,10 @@ class DetailView(QWidget):
         self.notice.linkActivated.connect(lambda _: self.win.open_settings())
         root.addWidget(self.notice)
 
+        section = QLabel("ACHIEVEMENTS")
+        section.setObjectName("SectionLabel")
+        root.addWidget(section)
+
         self.list = QListWidget()
         self.list.setObjectName("AchList")
         self.list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
@@ -390,6 +397,11 @@ class DetailView(QWidget):
         self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._row_menu)
         root.addWidget(self.list, 1)
+
+    def paintEvent(self, event) -> None:
+        if self._wash is not None:
+            QPainter(self).drawPixmap(0, 0, self._wash)
+        super().paintEvent(event)
 
     def show_game(self, appid: int | None) -> None:
         if appid != self.appid:
@@ -468,7 +480,8 @@ class DetailView(QWidget):
         total = max(schema_total, unlocked)
 
         self.title.setText(game["name"] or f"App {self.appid}")
-        self.running.setVisible(self.appid in self.win.running)
+        for widget in (self.running, self.running_dot):
+            widget.setVisible(self.appid in self.win.running)
         total_time = game["playtime"] + game["steam_playtime"]
         self.stat_time.value.setText(fmt_playtime(total_time))
         self.stat_time.setToolTip(f"Steam: {fmt_playtime(game['steam_playtime'])}\n"
@@ -482,13 +495,17 @@ class DetailView(QWidget):
         self.progress_label.setText(f"{unlocked * 100 // total}%" if total else "")
         self.save_status.setText(self._save_status(db))
         banner_path = cached_icon(self.appid, game["header_url"] or "")
-        if banner_path:
-            pm = QPixmap(banner_path).scaled(self.banner.size(), Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                                             Qt.TransformationMode.SmoothTransformation)
-            self.banner.setPixmap(pm)
+        art = QPixmap(banner_path) if banner_path else QPixmap()
+        if not art.isNull():
+            pm = art.scaled(self.banner.size(), Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                            Qt.TransformationMode.SmoothTransformation)
+            crop = pm.copy((pm.width() - BANNER_W) // 2, (pm.height() - BANNER_H) // 2, BANNER_W, BANNER_H)
+            self.banner.setPixmap(rounded(crop, 14))
+            self._wash = blurred_wash(art, max(self.width(), 600), WASH_H)
         else:
             self.banner.setPixmap(QPixmap())
-            self.banner.setText("")
+            self._wash = None
+        self.update()
 
         sync = db.get_meta("steam_sync") or {}
         if game["steam_owned"] and sync.get("error"):
@@ -913,7 +930,7 @@ class SettingsDialog(QDialog):
         form.addRow("Achievement language", self.language)
 
         self.style = QComboBox()
-        self.style.addItem("Steam-style popup", "steam")
+        self.style.addItem("AchTrack popup", "steam")
         self.style.addItem("Desktop notification", "system")
         self.style.addItem("Both", "both")
         self.style.addItem("Off", "none")
@@ -944,6 +961,13 @@ class SettingsDialog(QDialog):
         self.session = QCheckBox("Show a “Now playing” popup when a game starts")
         self.session.setChecked(cfg.session_toast)
         form.addRow("", self.session)
+        self.theme = QComboBox()
+        self.theme.addItem("Match the system", "auto")
+        self.theme.addItem("Graphite (dark)", "dark")
+        self.theme.addItem("Porcelain (light)", "light")
+        self.theme.setCurrentIndex(max(0, self.theme.findData(cfg.theme)))
+        form.addRow("Appearance", self.theme)
+
         self.x11 = QCheckBox("Use XWayland on Wayland so popups stay on top (restart to apply)")
         self.x11.setChecked(cfg.force_x11)
         form.addRow("", self.x11)
@@ -1039,6 +1063,7 @@ class SettingsDialog(QDialog):
         cfg.steam_id = self.steam_id.text().strip()
         cfg.steam_sync = self.steam_sync.isChecked()
         cfg.session_review = self.review.isChecked()
+        cfg.theme = self.theme.currentData()
         cfg.save_detection = self.saves.isChecked()
         cfg.screen_watcher = self.screen.isChecked()
         cfg.scan_dirs = [line.strip() for line in self.dirs.toPlainText().splitlines() if line.strip()]
@@ -1053,6 +1078,7 @@ class SettingsDialog(QDialog):
             self.win.worker.request("rescan")
         if cfg.steam_sync and (cfg.steam_api_key != old_key or (cfg.steam_id, cfg.steam_sync) != old_steam):
             self.win.worker.request("steam_sync")
+        self.win.apply_theme()
         self.win.schedule_reload()
         self.accept()
 
@@ -1076,7 +1102,15 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(APP_NAME)
         self.setWindowIcon(QIcon(str(APP_ICON)))
         self.resize(1200, 780)
-        self.setStyleSheet(STYLE)
+        self.apply_theme()
+        # Follow the desktop switching between light and dark while the app is open.
+        hints = QGuiApplication.styleHints()
+        if hasattr(hints, "colorSchemeChanged"):
+            hints.colorSchemeChanged.connect(lambda _scheme: self.apply_theme())
+        self._theme_timer = QTimer(self)
+        self._theme_timer.setInterval(20000)
+        self._theme_timer.timeout.connect(self._check_theme)
+        self._theme_timer.start()
 
         self._reload_timer = QTimer(self)
         self._reload_timer.setSingleShot(True)
@@ -1147,6 +1181,19 @@ class MainWindow(QMainWindow):
         splitter.setSizes([280, 920])
         self.setCentralWidget(splitter)
         self._build_menu()
+
+    def apply_theme(self) -> None:
+        global P
+        P.update(theme.palette(self.cfg.theme))
+        self.setStyleSheet(theme.stylesheet(P))
+        self.notifier.palette_changed(P)
+        self._list_sig = None
+        if self.isVisible():
+            self.reload(force=True)
+
+    def _check_theme(self) -> None:
+        if theme.palette(self.cfg.theme)["scheme"] != P["scheme"]:
+            self.apply_theme()
 
     def _build_menu(self) -> None:
         bar = self.menuBar()
@@ -1268,7 +1315,7 @@ class MainWindow(QMainWindow):
             if len(added) > POPUP_BURST:
                 game = self.db.game(appid)
                 self.notifier.toasts.show(ToastData(
-                    kicker="ACHIEVEMENTS UNLOCKED", title=f"+{len(added) - POPUP_BURST} more",
+                    kicker="Achievements unlocked", title=f"+{len(added) - POPUP_BURST} more",
                     body=game["name"] or f"App {appid}", sound=None))
         self.reload(force=True)
 

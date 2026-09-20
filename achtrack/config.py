@@ -56,6 +56,7 @@ class Config:
     rare_sound_file: str = ""
     session_toast: bool = True
     # Qt on native Wayland can't place or raise popups, so run through XWayland by default.
+    theme: str = "auto"                    # auto | dark | light
     force_x11: bool = True
     poll_interval: float = 1.5
     process_interval: float = 5.0

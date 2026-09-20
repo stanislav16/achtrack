@@ -133,6 +133,34 @@ def cmd_device_sync() -> int:
     return 0
 
 
+def cmd_devices() -> int:
+    import time
+    from .config import Config
+    from .db import Database
+    from .sync import device_id, device_name, devices
+
+    cfg = Config.load()
+    db = Database()
+    print(f"This machine: {device_name(db)} ({device_id(db)})")
+    if not cfg.sync_dir.strip():
+        print("No shared folder set (Settings → Devices).")
+        return 1
+    rows = devices(db, cfg.sync_dir)
+    if not rows:
+        print(f"Nothing in {cfg.sync_dir} yet.")
+        return 0
+    print(f"\nIn {cfg.sync_dir}:")
+    for row in rows:
+        if row.get("error"):
+            print(f"  {row['file']}  unreadable: {row['error']}")
+            continue
+        when = time.strftime("%d %b %H:%M", time.localtime(row["written"]))
+        mark = "  <- this machine" if row["this_machine"] else ""
+        print(f"  {row['name']:<20} {row['games']:>4} games, {row['unlocks']:>5} unlocks, written {when}"
+              f", {row['size'] / 1024:.0f} KB{mark}")
+    return 0
+
+
 def cmd_psn_sync() -> int:
     from .config import Config
     from .db import Database
@@ -268,6 +296,7 @@ def main(argv=None) -> int:
     sub.add_parser("sync-steam", help="copy your Steam games, playtime and achievements into the library now")
     sub.add_parser("sync-psn", help="copy your PlayStation games, play time and trophies into the library now")
     sub.add_parser("sync-devices", help="merge libraries with your other machines through the shared folder")
+    sub.add_parser("devices", help="list the machines sharing the sync folder")
     backup = sub.add_parser("backup", help="save a database snapshot and a JSON export")
     backup.add_argument("--restore", metavar="FILE", help="put a snapshot back instead")
     export = sub.add_parser("export", help="build the phone page from your library")
@@ -295,6 +324,8 @@ def main(argv=None) -> int:
         return cmd_psn_sync()
     if args.command == "sync-devices":
         return cmd_device_sync()
+    if args.command == "devices":
+        return cmd_devices()
     if args.command == "backup":
         return cmd_backup(args.restore)
     if args.command == "export":

@@ -171,6 +171,25 @@ def merge(db: Database, remote: dict) -> dict:
     return counts
 
 
+def devices(db: Database, folder: str) -> list:
+    """What every machine has left in the shared folder, newest first."""
+    mine = device_id(db)
+    out = []
+    for path in sorted(Path(folder).expanduser().glob(f"{PREFIX}*.json.gz")):
+        try:
+            data = json.loads(gzip.decompress(path.read_bytes()))
+        except (OSError, ValueError) as e:
+            out.append({"file": path.name, "error": str(e)})
+            continue
+        games = data.get("games") or []
+        out.append({"file": path.name, "device": data.get("device", "?"), "name": data.get("name", "?"),
+                    "written": data.get("written", 0), "games": len(games),
+                    "unlocks": sum(len(g.get("unlocks") or []) for g in games),
+                    "this_machine": data.get("device") == mine,
+                    "size": path.stat().st_size})
+    return sorted(out, key=lambda d: -d.get("written", 0))
+
+
 def run_sync(db: Database, folder: str) -> dict:
     """Writes this device's file and merges everyone else's."""
     status = {"time": int(time.time()), "ok": False, "error": "", "devices": 0,

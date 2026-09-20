@@ -84,7 +84,32 @@ def prepare_environment(cfg: Config) -> None:
         os.environ["QT_QPA_PLATFORM"] = "xcb"
 
 
+def _name_process_macos() -> None:
+    """The Python binary carries its own Info.plist saying "Python", which macOS uses for the menu
+    bar. Setting the process name before Qt starts makes the menus say AchTrack instead."""
+    if sys.platform != "darwin":
+        return
+    try:
+        from ctypes import c_char_p, c_void_p, cdll
+        objc = cdll.LoadLibrary("/usr/lib/libobjc.dylib")
+        cdll.LoadLibrary("/System/Library/Frameworks/Foundation.framework/Foundation")
+        objc.objc_getClass.restype = c_void_p
+        objc.sel_registerName.restype = c_void_p
+        objc.objc_msgSend.restype = c_void_p
+        objc.objc_msgSend.argtypes = [c_void_p, c_void_p, c_void_p]
+
+        def send(target, selector, arg=None):
+            return objc.objc_msgSend(c_void_p(target), objc.sel_registerName(selector.encode()), arg)
+
+        string = send(objc.objc_getClass(b"NSString"), "stringWithUTF8String:", c_char_p(APP_NAME.encode()))
+        info = send(objc.objc_getClass(b"NSProcessInfo"), "processInfo")
+        send(info, "setProcessName:", c_void_p(string))
+    except Exception as e:      # cosmetic only - never stop the app over a name
+        log.debug("couldn't rename the process: %s", e)
+
+
 def make_app() -> QApplication:
+    _name_process_macos()
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setDesktopFileName(APP_ID)

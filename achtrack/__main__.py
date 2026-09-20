@@ -177,6 +177,44 @@ def cmd_psn_sync() -> int:
     return 0
 
 
+def cmd_describe(target: str | None, force: bool, trophy_list: str) -> int:
+    """Looks up hidden achievement descriptions in PlayStation's trophy lists."""
+    from .config import Config
+    from .db import Database
+    from .engine import Engine, Listener
+
+    cfg = Config.load()
+    db = Database()
+    engine = Engine(cfg, db, Listener())
+    games = [r for r in db.q("SELECT appid, name FROM games WHERE appid > 0 ORDER BY name")
+             if db.blank_descriptions(r["appid"])]
+    if target:
+        wanted = target.strip().lower()
+        games = [g for g in games if wanted in (g["name"] or "").lower() or str(g["appid"]) == wanted]
+        if not games:
+            print(f"No game with blank hidden descriptions matches {target!r}.")
+            return 1
+    if not games:
+        print("Every achievement already has a description.")
+        return 0
+
+    total = 0
+    for game in games:
+        blanks = db.blank_descriptions(game["appid"])
+        print(f"\n{game['name'] or game['appid']} - {blanks} without a description")
+        status = engine.describe_hidden(game["appid"], note=lambda t: print(f"  {t}"), force=force,
+                                        trophy_list=trophy_list)
+        if status["error"]:
+            print(f"  {status['error']}")
+        elif status["filled"]:
+            print(f"  filled {status['filled']} from \"{status['title']}\" ({status['source']})")
+            total += status["filled"]
+        else:
+            print("  nothing to fill")
+    print(f"\n{total} description{'s' if total != 1 else ''} filled in.")
+    return 0
+
+
 def cmd_saves(appid: int | None, file: str | None, fields: bool) -> int:
     """Shows which save files AchTrack reads and what it matches in them."""
     from .db import Database
@@ -259,6 +297,11 @@ def main(argv=None) -> int:
     backup.add_argument("--restore", metavar="FILE", help="put a snapshot back instead")
     export = sub.add_parser("export", help="build the phone page from your library")
     export.add_argument("--deploy", action="store_true", help="also publish it to Vercel")
+    describe = sub.add_parser("describe", help="fill in hidden achievement descriptions from PlayStation trophy lists")
+    describe.add_argument("game", nargs="?", help="appid or part of a name; default every game with blanks")
+    describe.add_argument("--force", action="store_true", help="search again for games that found nothing before")
+    describe.add_argument("--trophy-list", default="", metavar="NPWR12345_00",
+                          help="use this PlayStation trophy list for the game (an id or a link containing one)")
     saves = sub.add_parser("saves", help="show the save files AchTrack reads and what it matches in them")
     saves.add_argument("appid", nargs="?", type=int, help="only this game")
     saves.add_argument("--file", help="test any save file (with --appid)")
@@ -286,6 +329,8 @@ def main(argv=None) -> int:
         return cmd_backup(args.restore)
     if args.command == "export":
         return cmd_export(args.deploy)
+    if args.command == "describe":
+        return cmd_describe(args.game, args.force, args.trophy_list)
     if args.command == "saves":
         return cmd_saves(args.appid or args.appid_opt, args.file, args.fields)
 

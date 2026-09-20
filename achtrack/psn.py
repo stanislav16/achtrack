@@ -122,6 +122,27 @@ def _get(path: str, token: str, params: dict | None = None):
     return _call(f"{API}/{path}{query}", {"Authorization": f"Bearer {token}"})
 
 
+def _post(path: str, token: str, body: dict):
+    return _call(f"{API}/{path}", {"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                 json.dumps(body).encode())
+
+
+def _walk(data, key: str):
+    """Every value stored under `key`, however deep. The shapes of these endpoints change; the
+    keys don't."""
+    found = []
+    stack = [data]
+    while stack:
+        node = stack.pop(0)
+        if isinstance(node, dict):
+            if key in node:
+                found.append(node[key])
+            stack += list(node.values())
+        elif isinstance(node, list):
+            stack += node
+    return found
+
+
 # --- trophies and play time ---------------------------------------------------------------------
 
 def trophy_titles(token: str, limit: int = 800) -> list:
@@ -159,6 +180,61 @@ def title_trophies(token: str, np_comm_id: str, service: str) -> list:
             "rate": float(rate) if rate not in (None, "") else None,
         })
     return out
+
+
+# --- trophy lists for games you don't own --------------------------------------------------------
+# PlayStation spells out every hidden trophy; Steam hides them. For a game you own on both, the
+# PlayStation list is the same list, so it can describe the blanks.
+
+TITLE_ID_RE = re.compile(r"\b(?:PPSA|CUSA|PLJM|PCJS)\d{5}_\d{2}\b")
+SERVICES = ("trophy2", "trophy")      # PS5 lists, then PS4/PS3
+
+
+def search_titles(token: str, term: str, limit: int = 5) -> list:
+    """Store title ids matching a name, best first."""
+    data = _post("search/v1/universalSearch", token,
+                 {"searchTerm": term, "domainRequests": [{"domain": "MobileGames"}]})
+    ids = [v for v in _walk(data, "npTitleId") if isinstance(v, str)]
+    ids += TITLE_ID_RE.findall(json.dumps(data))      # ids also travel inside product ids
+    out = []
+    for title_id in ids:
+        match = TITLE_ID_RE.search(title_id)
+        if match and match.group(0) not in out:
+            out.append(match.group(0))
+    return out[:limit]
+
+
+def trophy_sets(token: str, np_title_id: str) -> list:
+    """The trophy lists a store title has - [{id, service, name, count}]. Ownership isn't needed."""
+    data = _get("trophy/v1/users/me/titles/trophyTitles", token, {"npTitleIds": np_title_id})
+    out = []
+    for entry in _walk(data, "trophyTitles"):
+        for t in entry if isinstance(entry, list) else []:
+            if not t.get("npCommunicationId"):
+                continue
+            defined = t.get("definedTrophies") or {}
+            out.append({"id": t["npCommunicationId"], "service": t.get("npServiceName") or "trophy2",
+                        "name": t.get("trophyTitleName") or "",
+                        "count": sum(int(defined.get(k) or 0) for k in TROPHY_KINDS)})
+    return out
+
+
+def trophy_definitions(token: str, np_comm_id: str, service: str = "") -> list:
+    """Every trophy in a list, including the hidden ones' descriptions. No ownership needed."""
+    last = None
+    for attempt in ([service] if service else []) + [s for s in SERVICES if s != service]:
+        try:
+            data = _get(f"trophy/v1/npCommunicationIds/{np_comm_id}/trophyGroups/all/trophies", token,
+                        {"npServiceName": attempt})
+        except PSNError as e:
+            last = e
+            continue
+        return [{"name": t.get("trophyName") or "", "detail": t.get("trophyDetail") or "",
+                 "hidden": bool(t.get("trophyHidden")), "kind": (t.get("trophyType") or "").lower()}
+                for t in data.get("trophies") or []]
+    if last:
+        raise last
+    return []
 
 
 def play_times(token: str, limit: int = 500) -> list:

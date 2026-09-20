@@ -63,13 +63,35 @@ Some cracks never save achievements. For example, some RUNE releases leave `achi
 
 - **Post-session review:** when you quit such a game, AchTrack asks *"Did you earn any of these?"*.
   It lists the locked achievements, most likely first (based on how many Steam players have each one
-  and how long you've played). Hidden achievements are included, with their real description where
-  Steam's public achievement page has it. Tick what you did and they unlock with the normal popup.
+  and how long you've played). Hidden achievements are included, with their real description
+  wherever one can be found (see below). Tick what you did and they unlock with the normal popup.
   Once the crack records an achievement itself, the question stops. You can change this per game by
   right-clicking the game → **After a session**.
 - **Mark as unlocked:** right-click any achievement → *Mark as unlocked* (now or on a date you pick).
   Manual unlocks are labelled *Added by you* and can be undone.
 - **Search** the achievement list from the game page.
+
+## Hidden achievements
+
+Steam blanks out a hidden achievement's description and never reveals it - not through the Web API
+and not on the public achievement page. PlayStation is the opposite: every trophy is spelled out,
+because Sony requires a description. For a game you have on both, the two lists are the same list,
+so the trophy list can describe Steam's blanks.
+
+Right-click a game → **Describe hidden achievements…**, or run `achtrack describe`. A trophy list is
+only used once its trophy names line up with the achievement names that are already readable, so a
+wrong match fills nothing. Filled-in descriptions are kept separately, survive an achievement
+refresh, and travel to your other devices and the phone page.
+
+What can be looked up automatically is limited by Sony, not by the matching: PlayStation only tells
+you a game's trophy list id for games your own account has played. For anything else, find the
+id (it looks like `NPWR12345_00`) and hand it over once:
+
+```text
+achtrack describe "Baldur's Gate 3" --trophy-list NPWR12345_00
+```
+
+Turn the whole thing off in **Settings → Accounts** if you'd rather not have it look things up.
 
 ## Install (Linux)
 
@@ -151,6 +173,7 @@ achtrack list             print the library with playtime and achievement counts
 achtrack sync-steam       copy your Steam games, playtime and achievements in now
 achtrack sync-psn         copy your PlayStation games, play time and trophies in now
 achtrack sync-devices     merge libraries with your other machines
+achtrack describe [game]  fill hidden achievement descriptions from PlayStation trophy lists
 achtrack saves [appid]    show the save files AchTrack reads and what it matched (--fields for all values)
 achtrack backup           snapshot the database + JSON export (--restore FILE to put one back)
 achtrack export           build the phone page (--deploy to publish it to Vercel)

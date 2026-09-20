@@ -84,6 +84,14 @@ CREATE TABLE IF NOT EXISTS unlock_deletions(
     deleted_at INTEGER NOT NULL,
     PRIMARY KEY(appid, name)
 );
+CREATE TABLE IF NOT EXISTS learned_descriptions(
+    appid INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    source TEXT,
+    added_at INTEGER NOT NULL,
+    PRIMARY KEY(appid, name)
+);
 CREATE TABLE IF NOT EXISTS meta(
     key TEXT PRIMARY KEY,
     value TEXT
@@ -110,6 +118,7 @@ MIGRATIONS = {
         "psn_playtime": "INTEGER NOT NULL DEFAULT 0",
         "psn_last_played": "INTEGER",
         "edited_at": "INTEGER",   # last time you changed something about this game here
+        "trophy_src": "TEXT",  # PlayStation trophy list describing this game's hidden ones, "-" = none found
     },
     "unlocks": {
         "note": "TEXT",       # why it unlocked, e.g. the save field that matched
@@ -123,7 +132,7 @@ MIGRATIONS = {
 GAME_FIELDS = {"name", "header_url", "exe_name", "game_dir", "last_played", "schema_fetched_at", "hidden",
                "playtime",   # normally grown by add_playtime, but set directly when merging devices
                "steam_playtime", "steam_last_played", "steam_owned", "review", "genre",
-               "platform", "psn_id", "psn_playtime", "psn_last_played", "edited_at"}
+               "platform", "psn_id", "psn_playtime", "psn_last_played", "edited_at", "trophy_src"}
 
 # Unlock sources that don't come from an emulator file.
 PSN = "PlayStation"
@@ -240,6 +249,31 @@ class Database:
                         f"UPDATE OR IGNORE {table} SET name = ? WHERE appid = ? AND name != ? AND lower(name) = lower(?)",
                         (a["name"], appid, a["name"], a["name"]),
                     )
+        self.apply_learned(appid)
+
+    def learn_descriptions(self, appid: int, found: dict, source: str) -> int:
+        """Remembers descriptions worked out elsewhere; they survive a schema refresh."""
+        now = int(time.time())
+        with self.tx():
+            for name, description in found.items():
+                self.x("""INSERT OR REPLACE INTO learned_descriptions(appid, name, description, source, added_at)
+                          VALUES(?,?,?,?,?)""", (appid, name, description, source, now))
+        return self.apply_learned(appid)
+
+    def apply_learned(self, appid: int) -> int:
+        """Fills blank descriptions from what we've learned. Returns how many were filled."""
+        cursor = self.conn.execute(
+            """UPDATE achievements SET description = (
+                   SELECT description FROM learned_descriptions l
+                   WHERE l.appid = achievements.appid AND l.name = achievements.name)
+               WHERE appid = ? AND trim(coalesce(description, '')) = '' AND EXISTS (
+                   SELECT 1 FROM learned_descriptions l
+                   WHERE l.appid = achievements.appid AND l.name = achievements.name)""", (appid,))
+        return cursor.rowcount
+
+    def blank_descriptions(self, appid: int) -> int:
+        return self.q("""SELECT COUNT(*) FROM achievements
+                         WHERE appid = ? AND trim(coalesce(description, '')) = ''""", (appid,))[0][0]
 
     def set_global_pct(self, appid: int, pct: dict) -> None:
         with self.tx():

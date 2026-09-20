@@ -29,7 +29,7 @@ log = logging.getLogger(__name__)
 
 PREFIX = "achtrack-sync-"
 VERSION = 1
-GAME_COPY = ("name", "header_url", "genre", "platform", "psn_id", "steam_owned")
+GAME_COPY = ("name", "header_url", "genre", "platform", "psn_id", "steam_owned", "trophy_src")
 PLAYTIME_MAX = ("playtime", "steam_playtime", "psn_playtime", "last_played", "steam_last_played", "psn_last_played")
 EDITED = ("hidden", "review", "exe_name", "game_dir")
 

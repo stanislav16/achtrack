@@ -44,6 +44,9 @@ class Config:
     psn_npsso: str = ""
     psn_sync: bool = True
     psn_sync_interval: float = 1800.0
+    # Steam never reveals a hidden achievement's description; PlayStation always does. Look the
+    # blanks up in the game's trophy list (needs the PlayStation login above).
+    psn_describe_hidden: bool = True
     # After a session of a game whose crack doesn't record achievements, ask what was earned.
     session_review: bool = True
     # Read games' save files (Unreal, Unity, JSON, XML...) to detect achievements the crack doesn't record.

@@ -13,7 +13,8 @@ from PySide6.QtGui import (QAction, QActionGroup, QBrush, QColor, QDesktopServic
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateTimeEdit, QDialog,
                                QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsScene,
                                QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout,
-                               QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
+                               QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
+                               QMenu, QMessageBox,
                                QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSplitter, QStackedWidget,
                                QTabWidget, QVBoxLayout, QWidget)
 
@@ -1105,6 +1106,12 @@ class SettingsDialog(QDialog):
         psn_row.addWidget(psn_now)
         accounts.addRow("PlayStation login", psn_row)
         self.psn_status = self._status(accounts, sync_text(parent.db.get_meta("psn_sync"), "trophies", "trophies"))
+        self.psn_describe = QCheckBox("Describe hidden achievements from PlayStation trophy lists")
+        self.psn_describe.setChecked(cfg.psn_describe_hidden)
+        self.psn_describe.setToolTip("Steam never reveals what a hidden achievement asks for. PlayStation "
+                                     "spells every trophy out, so the same game's trophy list can fill in "
+                                     "the blanks.")
+        accounts.addRow("", self.psn_describe)
 
         self.language = QComboBox()
         self.language.setEditable(True)
@@ -1327,6 +1334,7 @@ class SettingsDialog(QDialog):
 
     def _psn_now(self) -> None:
         self.win.cfg.psn_npsso = self.psn.text().strip()
+        self.win.cfg.psn_describe_hidden = self.psn_describe.isChecked()
         self.win.cfg.psn_sync = True
         self.win.worker.request("psn_sync")
         self.psn_status.setText("Syncing your PlayStation library…")
@@ -1381,6 +1389,7 @@ class SettingsDialog(QDialog):
         cfg.steam_id = self.steam_id.text().strip()
         cfg.steam_sync = self.steam_sync.isChecked()
         cfg.psn_npsso = self.psn.text().strip()
+        cfg.psn_describe_hidden = self.psn_describe.isChecked()
         cfg.session_review = self.review.isChecked()
         cfg.save_detection = self.saves.isChecked()
         cfg.theme = self.theme.currentData()
@@ -1754,6 +1763,41 @@ class MainWindow(QMainWindow):
     def request_refresh(self, appid: int) -> None:
         self.worker.request("refresh", appid)
 
+    def describe_hidden(self, appid: int, trophy_list: str = "") -> None:
+        """Looks a game's hidden achievements up in its PlayStation trophy list."""
+        if not self.cfg.psn_npsso:
+            QMessageBox.information(self, APP_NAME, "Add your PlayStation login (NPSSO token) in Settings "
+                                                    "first - the descriptions come from its trophy lists.")
+            return
+        blanks = self.db.blank_descriptions(appid)
+        self.statusBar().showMessage(f"Looking up {blanks} hidden achievement"
+                                     f"{'s' if blanks != 1 else ''} on PlayStation…", 30000)
+        self.worker.request("describe", appid, trophy_list)
+
+    def described(self, appid: int, status: dict) -> None:
+        """What came back from a trophy-list lookup."""
+        game = self.db.game(appid)
+        name = (game["name"] if game is not None else "") or f"App {appid}"
+        if status["filled"]:
+            self.statusBar().showMessage(f"Described {status['filled']} hidden achievement"
+                                         f"{'s' if status['filled'] != 1 else ''} of {name} "
+                                         f"from its PlayStation trophy list.", 15000)
+            self.reload(force=True)
+            return
+        self.statusBar().clearMessage()
+        if status["error"]:
+            QMessageBox.information(self, APP_NAME, f"Couldn't describe {name}: {status['error']}")
+            return
+        # Sony only hands out a game's trophy list by its id, and only publishes that id for games
+        # your own account has played - so for everything else, ask for the list.
+        text, ok = QInputDialog.getText(
+            self, APP_NAME,
+            f"No trophy list of PlayStation's matched {name}.\n\n"
+            f"If you can find its trophy list id (NPWR12345_00), paste it here and AchTrack will "
+            f"take the descriptions from there:", text="")
+        if ok and text.strip():
+            self.describe_hidden(appid, text.strip())
+
     # actions ---------------------------------------------------------------
 
     def add_game(self) -> None:
@@ -1803,6 +1847,8 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda _=False, v=value: self.db.update_game(appid, review=v))
             group.addAction(action)
         menu.addSeparator()
+        if self.db.blank_descriptions(appid):
+            menu.addAction("Describe hidden achievements…", lambda: self.describe_hidden(appid))
         menu.addAction("Refresh achievement data", lambda: self.request_refresh(appid))
         menu.addAction("Edit game…", lambda: self.edit_game(appid))
         sources = self.db.sources_for(appid)

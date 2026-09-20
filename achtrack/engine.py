@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import backup, export, matcher, psn, savefiles, steam_api, sync
+from . import backup, descriptions, export, matcher, psn, savefiles, steam_api, sync
 from .config import BACKUP_DIR, CACHE_DIR, EXPORT_DIR, Config
 from .db import PSN, SAVE, SCREEN, STEAM, Database
 from .emulators import parse_file
@@ -41,6 +41,7 @@ class Listener:
     def on_game_stopped(self, appid: int, seconds: int) -> None: ...
     def on_changed(self) -> None: ...
     def on_error(self, message: str) -> None: ...
+    def on_described(self, appid: int, status: dict) -> None: ...
 
 
 @dataclass
@@ -212,6 +213,9 @@ class Engine:
                 self._next_sync = 0.0
             elif kind == "export":
                 self.build_export(deploy=len(req) > 1 and bool(req[1]))
+            elif kind == "describe" and self.db.game(req[1]) is not None:
+                status = self.describe_hidden(req[1], force=True, trophy_list=req[2] if len(req) > 2 else "")
+                self.listener.on_described(req[1], status)
             elif kind == "icons" and self.db.game(req[1]) is not None:
                 self._prefetch_game_icons(req[1])
 
@@ -342,6 +346,7 @@ class Engine:
             self.db.set_schema(appid, achievements, pct)
             if not self._steam_only(appid):
                 self._prefetch_game_icons(appid)
+                self.describe_hidden(appid)
         elif pct:
             self.db.set_global_pct(appid, pct)
 
@@ -728,6 +733,78 @@ class Engine:
 
         self._psn_thread = threading.Thread(target=work, name="achtrack-psn", daemon=True)
         self._psn_thread.start()
+
+    def _known_trophy_lists(self, appid: int, name: str) -> list:
+        """Trophy lists worth trying for a PC game: the same game in your PlayStation library,
+        and anything you've linked by hand."""
+        game = self.db.game(appid)
+        known = [game["trophy_src"]] if game["trophy_src"] and game["trophy_src"] != "-" else []
+        wanted = psn.normalize_name(name)
+        for row in self.db.q("SELECT name, psn_id FROM games WHERE psn_id IS NOT NULL AND psn_id != ''"):
+            if psn.normalize_name(row["name"] or "") == wanted and row["psn_id"] not in known:
+                known.append(row["psn_id"])
+        return known
+
+    def describe_hidden(self, appid: int, note=None, force: bool = False, trophy_list: str = "") -> dict:
+        """Describes a game's hidden achievements from its PlayStation trophy list.
+
+        Steam blanks them out for good; PlayStation spells them out. Only used once the trophy
+        names line up with the achievement names we can already read - see descriptions.py.
+        """
+        status = {"filled": 0, "blanks": 0, "source": "", "title": "", "error": "", "searched": False}
+        game = self.db.game(appid)
+        if game is None:
+            return {**status, "error": "no such game"}
+        if appid < 0:
+            return {**status, "error": "PlayStation games already carry their descriptions"}
+        status["blanks"] = self.db.blank_descriptions(appid)
+        if not status["blanks"]:
+            return status
+        if not force and not self.cfg.psn_describe_hidden:
+            return {**status, "error": "turned off in Settings"}
+        npsso = self.cfg.psn_npsso.strip()
+        if not npsso:
+            return {**status, "error": "no PlayStation login in Settings"}
+        linked = descriptions.trophy_id(trophy_list)
+        if trophy_list and not linked:
+            return {**status, "error": f"{trophy_list!r} has no trophy list id in it (looks like NPWR12345_00)"}
+        known = game["trophy_src"] or ""
+        if known == "-" and not force and not linked:
+            return {**status, "error": "no matching trophy list (searched before)"}
+
+        name = game["name"] or ""
+        if not name:
+            return {**status, "error": "this game has no name yet"}
+        achievements = self.db.achievements(appid)
+        try:
+            tokens = psn.valid_token(self.db.get_meta("psn_tokens"), npsso)
+            self.db.set_meta("psn_tokens", tokens)
+            token = tokens["access_token"]
+            if linked:
+                found, source, title = descriptions.lookup(token, name, achievements, note,
+                                                           known=[linked], search=False)
+            elif known and known != "-" and not force:
+                comm_id, _, service = known.partition("/")
+                trophies = psn.trophy_definitions(token, comm_id, service)
+                found, agreement, matched = descriptions.match(achievements, trophies)
+                source, title = (known, name) if found else ("", "")
+                if note:
+                    note(f"{comm_id}: {matched} names in common ({agreement:.0%}), "
+                         f"{len(found)} descriptions to fill")
+            else:
+                status["searched"] = True
+                found, source, title = descriptions.lookup(
+                    token, name, achievements, note, known=self._known_trophy_lists(appid, name))
+        except psn.PSNError as e:
+            return {**status, "error": str(e)}
+
+        if found:
+            status["filled"] = self.db.learn_descriptions(appid, found, source)
+        if found or not linked:
+            self.db.update_game(appid, trophy_src=source or "-")
+        status["source"], status["title"] = source, title
+        self.listener.on_changed()
+        return status
 
     def psn_sync(self, db: Database, report=None) -> dict:
         """Copies your PlayStation games, play time and trophies into the library."""

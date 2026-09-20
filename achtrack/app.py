@@ -28,6 +28,7 @@ class Worker(QThread):
     game_stopped = Signal(int, int)
     changed = Signal()
     error = Signal(str)
+    described = Signal(int, object)
 
     def __init__(self, cfg: Config):
         super().__init__()
@@ -62,6 +63,9 @@ class Worker(QThread):
 
     def on_error(self, message: str) -> None:
         self.error.emit(message)
+
+    def on_described(self, appid: int, status: dict) -> None:
+        self.described.emit(appid, status)
 
 
 def send_to_running(message: str) -> bool:
@@ -196,6 +200,7 @@ def run_gui(background: bool = False) -> int:
     worker.game_stopped.connect(win.game_stopped)
     worker.changed.connect(win.schedule_reload)
     worker.error.connect(lambda msg: win.statusBar().showMessage(msg, 15000))
+    worker.described.connect(win.described)
     worker.start()
 
     if background:

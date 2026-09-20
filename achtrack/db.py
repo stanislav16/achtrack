@@ -98,6 +98,7 @@ MIGRATIONS = {
         "steam_last_played": "INTEGER",
         "steam_owned": "INTEGER NOT NULL DEFAULT 0",
         "review": "INTEGER",  # NULL = decide automatically, 0 = never ask, 1 = always ask
+        "genre": "TEXT",      # from the Steam store, e.g. "Action, RPG"
     },
     "unlocks": {
         "note": "TEXT",       # why it unlocked, e.g. the save field that matched
@@ -105,7 +106,7 @@ MIGRATIONS = {
 }
 
 GAME_FIELDS = {"name", "header_url", "exe_name", "game_dir", "last_played", "schema_fetched_at", "hidden",
-               "steam_playtime", "steam_last_played", "steam_owned", "review"}
+               "steam_playtime", "steam_last_played", "steam_owned", "review", "genre"}
 
 # Unlock sources that don't come from an emulator file.
 MANUAL = "Manual"

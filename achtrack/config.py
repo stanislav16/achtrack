@@ -57,6 +57,8 @@ class Config:
     session_toast: bool = True
     # Qt on native Wayland can't place or raise popups, so run through XWayland by default.
     theme: str = "auto"                    # auto | dark | light
+    font_family: str = ""                  # empty = the desktop's own UI font
+    sort: str = "recent"                   # recent | name | playtime | progress | genre
     force_x11: bool = True
     poll_interval: float = 1.5
     process_interval: float = 5.0

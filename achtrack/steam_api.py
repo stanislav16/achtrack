@@ -85,13 +85,14 @@ def fetch_global_pct(appid: int) -> dict:
 
 
 def fetch_app_info(appid: int) -> tuple:
-    """(name, header image url) from the store. Delisted games may return nothing."""
-    data = _json(f"https://store.steampowered.com/api/appdetails?appids={appid}&filters=basic")
+    """(name, header image url, genres) from the store. Delisted games may return nothing."""
+    data = _json(f"https://store.steampowered.com/api/appdetails?appids={appid}&filters=basic,genres")
     entry = data.get(str(appid)) or {}
     if not entry.get("success"):
-        return "", HEADER_URL.format(appid=appid)
+        return "", HEADER_URL.format(appid=appid), ""
     info = entry.get("data") or {}
-    return info.get("name") or "", info.get("header_image") or HEADER_URL.format(appid=appid)
+    genres = ", ".join(g["description"] for g in info.get("genres") or [] if g.get("description"))
+    return info.get("name") or "", info.get("header_image") or HEADER_URL.format(appid=appid), genres
 
 
 STEAMID64_BASE = 76561197960265728

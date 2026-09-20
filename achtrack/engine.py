@@ -273,25 +273,26 @@ class Engine:
     def queue_stale_meta(self) -> None:
         cutoff = time.time() - META_MAX_AGE
         for row in self.db.games(include_hidden=True):
-            if not row["schema_fetched_at"] or row["schema_fetched_at"] < cutoff or not row["name"]:
+            if (not row["schema_fetched_at"] or row["schema_fetched_at"] < cutoff or not row["name"]
+                    or not row["genre"]):
                 self.meta_queue.append(row["appid"])
 
     def ensure_meta(self, appid: int, force: bool = False) -> None:
         game = self.db.game(appid)
         if game is None:
             return
-        if not force and game["schema_fetched_at"] and game["name"]:
+        if not force and game["schema_fetched_at"] and game["name"] and game["genre"]:
             return
         if not force and time.time() - self._meta_attempts.get(appid, 0) < META_RETRY:
             return
         self._meta_attempts[appid] = time.time()
 
-        name, header = game["name"], game["header_url"]
-        if not name or not header:
+        name, header, genre = game["name"], game["header_url"], game["genre"]
+        if not name or not header or not genre:
             # The store API is rate limited, so only ask it for what we don't already know.
             try:
-                store_name, store_header = steam_api.fetch_app_info(appid)
-                name, header = store_name or name, store_header or header
+                store_name, store_header, store_genre = steam_api.fetch_app_info(appid)
+                name, header, genre = store_name or name, store_header or header, store_genre or genre
             except steam_api.SteamError as e:
                 log.info("store lookup for %s failed: %s", appid, e)
 
@@ -326,7 +327,7 @@ class Engine:
         elif pct:
             self.db.set_global_pct(appid, pct)
 
-        values = {"name": name, "header_url": header}
+        values = {"name": name, "header_url": header, "genre": genre}
         if answered:
             values["schema_fetched_at"] = int(time.time())
         self.db.update_game(appid, **{k: v for k, v in values.items() if v})

@@ -277,15 +277,17 @@ def rounded(pm: QPixmap, radius: int) -> QPixmap:
 
 def blurred_wash(pm: QPixmap, width: int, height: int) -> QPixmap:
     """The game's art, blurred to a soft colour field, fading out downwards - the page's tint."""
-    small = pm.scaled(20, 12, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+    # Two passes: a small one for smooth colour, a larger one so it doesn't turn into blobs.
+    small = pm.scaled(64, 36, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+    small = small.scaled(12, 7, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
     wash = small.scaled(width, height, Qt.AspectRatioMode.IgnoreAspectRatio,
                         Qt.TransformationMode.SmoothTransformation).toImage().convertToFormat(
         QImage.Format.Format_ARGB32_Premultiplied)
     p = QPainter(wash)
     p.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
     fade = QLinearGradient(0, 0, 0, height)
-    fade.setColorAt(0.0, QColor(0, 0, 0, 150))
-    fade.setColorAt(0.45, QColor(0, 0, 0, 90))
+    fade.setColorAt(0.0, QColor(0, 0, 0, 90))
+    fade.setColorAt(0.35, QColor(0, 0, 0, 48))
     fade.setColorAt(1.0, QColor(0, 0, 0, 0))
     p.fillRect(0, 0, width, height, QBrush(fade))
     p.end()
@@ -331,7 +333,8 @@ class DetailView(QWidget):
         self.stat_time = Stat("Play time")
         self.stat_last = Stat("Last played")
         self.stat_ach = Stat("Unlocked")
-        for s in (self.stat_time, self.stat_last, self.stat_ach):
+        self.stat_genre = Stat("Genre")
+        for s in (self.stat_time, self.stat_last, self.stat_ach, self.stat_genre):
             stats.addWidget(s)
         info.addLayout(stats)
         info.addSpacing(6)
@@ -490,6 +493,8 @@ class DetailView(QWidget):
         last = max(game["last_played"] or 0, game["steam_last_played"] or 0)
         self.stat_last.value.setText("Now" if self.appid in self.win.running else fmt_day(last))
         self.stat_ach.value.setText(f"{unlocked} / {total}" if total else "-")
+        self.stat_genre.value.setText(game["genre"] or "")
+        self.stat_genre.setVisible(bool(game["genre"]))
         self.progress.setRange(0, max(total, 1))
         self.progress.setValue(unlocked)
         self.progress_label.setText(f"{unlocked * 100 // total}%" if total else "")
@@ -961,6 +966,10 @@ class SettingsDialog(QDialog):
         self.session = QCheckBox("Show a “Now playing” popup when a game starts")
         self.session.setChecked(cfg.session_toast)
         form.addRow("", self.session)
+        self.font = QLineEdit(cfg.font_family)
+        self.font.setPlaceholderText("Your desktop's font (e.g. Inter, Fira Sans, Noto Sans)")
+        form.addRow("Font", self.font)
+
         self.theme = QComboBox()
         self.theme.addItem("Match the system", "auto")
         self.theme.addItem("Graphite (dark)", "dark")
@@ -1064,6 +1073,7 @@ class SettingsDialog(QDialog):
         cfg.steam_sync = self.steam_sync.isChecked()
         cfg.session_review = self.review.isChecked()
         cfg.theme = self.theme.currentData()
+        cfg.font_family = self.font.text().strip()
         cfg.save_detection = self.saves.isChecked()
         cfg.screen_watcher = self.screen.isChecked()
         cfg.scan_dirs = [line.strip() for line in self.dirs.toPlainText().splitlines() if line.strip()]
@@ -1131,6 +1141,16 @@ class MainWindow(QMainWindow):
         search_wrap.setContentsMargins(10, 0, 10, 0)
         search_wrap.addWidget(self.search)
         side_lay.addLayout(search_wrap)
+        self.sort = QComboBox()
+        for label, key in (("Recently played", "recent"), ("Name (A-Z)", "name"), ("Play time", "playtime"),
+                           ("Completion", "progress"), ("Genre", "genre")):
+            self.sort.addItem(label, key)
+        self.sort.setCurrentIndex(max(0, self.sort.findData(cfg.sort)))
+        self.sort.currentIndexChanged.connect(self._sort_changed)
+        sort_wrap = QHBoxLayout()
+        sort_wrap.setContentsMargins(10, 0, 10, 0)
+        sort_wrap.addWidget(self.sort)
+        side_lay.addLayout(sort_wrap)
         self.games = QListWidget()
         self.games.setObjectName("SidebarList")
         self.games.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
@@ -1185,7 +1205,7 @@ class MainWindow(QMainWindow):
     def apply_theme(self) -> None:
         global P
         P.update(theme.palette(self.cfg.theme))
-        self.setStyleSheet(theme.stylesheet(P))
+        self.setStyleSheet(theme.stylesheet(P, self.cfg.font_family))
         self.notifier.palette_changed(P)
         self._list_sig = None
         if self.isVisible():
@@ -1197,7 +1217,7 @@ class MainWindow(QMainWindow):
 
     def _build_menu(self) -> None:
         bar = self.menuBar()
-        lib = bar.addMenu("&Library")
+        lib = bar.addMenu("Library")
         lib.addAction("Add a game…", self.add_game)
         lib.addAction("Rescan for achievement files", lambda: self.worker.request("rescan"))
         lib.addAction("Refresh all achievement data", lambda: self.worker.request("refresh_all"))
@@ -1210,7 +1230,7 @@ class MainWindow(QMainWindow):
         lib.addAction("Settings…", self.open_settings)
         lib.addSeparator()
         lib.addAction("Quit", self.quit_app)
-        helpm = bar.addMenu("&Help")
+        helpm = bar.addMenu("Help")
         helpm.addAction("Test achievement popup", lambda: self.notifier.test(False))
         helpm.addAction("Test rare achievement popup", lambda: self.notifier.test(True))
         helpm.addSeparator()
@@ -1230,6 +1250,23 @@ class MainWindow(QMainWindow):
             self._dirty = False
             self.reload(force=True)
 
+    def _sort_changed(self) -> None:
+        self.cfg.sort = self.sort.currentData()
+        self.cfg.save()
+        self.reload(force=True)
+
+    @staticmethod
+    def _sort_key(mode: str):
+        if mode == "name":
+            return lambda r: ((r["name"] or "").lower(), )
+        if mode == "playtime":
+            return lambda r: (-r["total_playtime"], (r["name"] or "").lower())
+        if mode == "progress":
+            return lambda r: (-(r["unlocked"] / r["total"] if r["total"] else -1), (r["name"] or "").lower())
+        if mode == "genre":
+            return lambda r: ((r["genre"] or "zzz").lower(), (r["name"] or "").lower())
+        return lambda r: (-(r["last_any"] or 0), (r["name"] or "").lower())
+
     def current_appid(self) -> int | None:
         item = self.games.currentItem()
         return item.data(Qt.ItemDataRole.UserRole) if item else None
@@ -1238,8 +1275,10 @@ class MainWindow(QMainWindow):
         rows = self.db.games(include_hidden=self.show_hidden.isChecked())
         query = self.search.text().strip().lower()
         if query:
-            rows = [r for r in rows if query in (r["name"] or "").lower() or query in str(r["appid"])]
-        sig = tuple((r["appid"], r["name"], r["total_playtime"] // 60, r["unlocked"], r["total"], r["hidden"],
+            rows = [r for r in rows if query in (r["name"] or "").lower() or query in (r["genre"] or "").lower()
+                    or query in str(r["appid"])]
+        rows = sorted(rows, key=self._sort_key(self.cfg.sort))
+        sig = tuple((r["appid"], r["name"], self.cfg.sort, r["total_playtime"] // 60, r["unlocked"], r["total"], r["hidden"],
                      r["appid"] in self.running) for r in rows)
         if force or sig != self._list_sig:
             self._list_sig = sig

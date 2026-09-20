@@ -11,7 +11,9 @@ emulator (Goldberg / GBE, CODEX, RUNE, EMPRESS, OnlineFix, SKIDROW, 3DM) under W
 - **Library window**: every game shows playtime, last played, a progress bar and the full achievement
   list (unlock dates, rarity, progress bars, hidden achievements collapsed).
 - **Two themes**: Graphite (dark) and Porcelain (light), following your desktop's light/dark setting
-  automatically. Each game page is tinted by its own artwork. Override it in Settings → Appearance.
+  automatically. Each game page is tinted by its own artwork. Override it in Settings → Appearance,
+  where you can also set a font (it uses your desktop's UI font by default).
+- **Sorting**: recently played, name, play time, completion or genre (genres come from Steam).
 
 ## Your Steam library, too
 

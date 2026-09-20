@@ -52,7 +52,9 @@ PORCELAIN = {
     "shadow": 45,
 }
 
-FONTS = '"SF Pro Text", "Inter", "Noto Sans", "Cantarell", "Ubuntu", "DejaVu Sans", sans-serif'
+def font_rule(family: str = "") -> str:
+    """Use the desktop's own UI font unless Settings names one."""
+    return f'* {{ font-family: "{family}"; }}\n' if family.strip() else ""
 
 
 def _portal_scheme() -> str | None:
@@ -118,9 +120,8 @@ def palette(choice: str = "auto") -> dict:
     return dict(PORCELAIN if scheme == "light" else GRAPHITE)
 
 
-def stylesheet(p: dict) -> str:
-    return f"""
-* {{ font-family: {FONTS}; }}
+def stylesheet(p: dict, font: str = "") -> str:
+    return font_rule(font) + f"""
 QWidget {{ color: {p['text2']}; font-size: 13px; }}
 QMainWindow, QDialog {{ background: {p['bg']}; }}
 QMenuBar {{ background: {p['bg']}; color: {p['text2']}; padding: 2px 6px; border-bottom: 1px solid {p['hair']}; }}

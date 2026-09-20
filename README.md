@@ -104,9 +104,21 @@ executed - it is read as text, once. Turn the automatic PlayStation lookup off i
 ## Install (Linux)
 
 ```bash
-sudo apt install python3-venv libxcb-cursor0
 ./install.sh --autostart
 ```
+
+Any distribution: the installer works out which one it's on and, if something is missing, tells you
+the exact command for *your* package manager. It doesn't guess at the Qt packages either - it asks
+Qt's own X11 plugin which libraries it can't find and names the packages that carry them.
+
+The only thing needed up front is Python 3 with `venv`, which most distributions ship by default:
+
+| | |
+|---|---|
+| Debian, Ubuntu, Pop!\_OS, Mint | `sudo apt install python3-venv` |
+| Fedora, Nobara, Bazzite, RHEL | `sudo dnf install python3` |
+| Arch, Manjaro, EndeavourOS, SteamOS | `sudo pacman -S python` |
+| openSUSE | `sudo zypper install python3` |
 
 This installs into `~/.local/share/achtrack/venv`, puts `achtrack` in `~/.local/bin`, adds a menu
 entry and (with `--autostart`) starts it in the background at login. Run `./install.sh` again to update.

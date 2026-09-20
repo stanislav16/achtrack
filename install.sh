@@ -10,28 +10,134 @@ DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
 VENV="$DATA/achtrack/venv"
 BIN="$HOME/.local/bin"
 
+# Which family of Linux this is, so the "install this" hints name real packages.
+distro_family() {
+    local id="" like="" release="${OS_RELEASE:-/etc/os-release}"
+    if [ -r "$release" ]; then
+        id="$(. "$release" 2>/dev/null && echo "${ID:-}")"
+        like="$(. "$release" 2>/dev/null && echo "${ID_LIKE:-}")"
+    fi
+    case " $id $like " in
+        *" debian "*|*" ubuntu "*)          echo debian ;;
+        *" fedora "*|*" rhel "*|*" centos "*) echo fedora ;;
+        *" arch "*|*" archlinux "*)         echo arch ;;
+        *" suse "*|*" opensuse "*)          echo suse ;;
+        *" alpine "*)                       echo alpine ;;
+        *)
+            # No usable os-release: go by whichever package manager is installed.
+            for pm in apt-get dnf pacman zypper apk; do
+                command -v "$pm" >/dev/null 2>&1 || continue
+                case "$pm" in
+                    apt-get) echo debian ;; dnf) echo fedora ;; pacman) echo arch ;;
+                    zypper)  echo suse ;;   apk) echo alpine ;;
+                esac
+                return
+            done
+            echo unknown ;;
+    esac
+}
+
+install_cmd() {
+    case "$1" in
+        debian) echo "sudo apt install" ;;
+        fedora) echo "sudo dnf install" ;;
+        arch)   echo "sudo pacman -S" ;;
+        suse)   echo "sudo zypper install" ;;
+        alpine) echo "sudo apk add" ;;
+        *)      echo "" ;;
+    esac
+}
+
+# What each thing AchTrack needs is called on each family.
+package_for() {
+    [ "$2" = "unknown" ] && { echo ""; return; }
+    case "$1:$2" in
+        venv:debian) echo python3-venv ;;
+        venv:fedora|venv:suse|venv:alpine) echo python3 ;;
+        venv:arch) echo python ;;
+        libxcb-cursor.so.0:debian|libxcb-cursor.so.0:suse) echo libxcb-cursor0 ;;
+        libxcb-cursor.so.0:*) echo xcb-util-cursor ;;
+        libxkbcommon-x11.so.0:debian) echo libxkbcommon-x11-0 ;;
+        libxkbcommon-x11.so.0:suse) echo libxkbcommon-x11-0 ;;
+        libxkbcommon-x11.so.0:*) echo libxkbcommon-x11 ;;
+        libGL.so.1:debian) echo libgl1 ;;
+        libGL.so.1:fedora) echo mesa-libGL ;;
+        libGL.so.1:suse) echo Mesa-libGL1 ;;
+        libGL.so.1:arch) echo libglvnd ;;
+        libGL.so.1:alpine) echo mesa-gl ;;
+        libEGL.so.1:debian) echo libegl1 ;;
+        libEGL.so.1:fedora) echo mesa-libEGL ;;
+        libEGL.so.1:*) echo libglvnd ;;
+        libxcb-xinerama.so.0:debian) echo libxcb-xinerama0 ;;
+        libxcb-xinerama.so.0:*) echo xcb-util ;;
+        libxcb-icccm.so.4:debian) echo libxcb-icccm4 ;;
+        libxcb-icccm.so.4:*) echo xcb-util-wm ;;
+        libxcb-image.so.0:debian) echo libxcb-image0 ;;
+        libxcb-image.so.0:*) echo xcb-util-image ;;
+        libxcb-keysyms.so.1:debian) echo libxcb-keysyms1 ;;
+        libxcb-keysyms.so.1:*) echo xcb-util-keysyms ;;
+        libxcb-render-util.so.0:debian) echo libxcb-render-util0 ;;
+        libxcb-render-util.so.0:*) echo xcb-util-renderutil ;;
+        libdbus-1.so.3:debian) echo libdbus-1-3 ;;
+        libdbus-1.so.3:fedora|libdbus-1.so.3:suse) echo dbus-libs ;;
+        libdbus-1.so.3:*) echo dbus ;;
+        libfontconfig.so.1:debian) echo libfontconfig1 ;;
+        libfontconfig.so.1:*) echo fontconfig ;;
+        *) echo "" ;;
+    esac
+}
+
+FAMILY="unknown"
+[ "$OS" = "Linux" ] && FAMILY="$(distro_family)"
+
 if ! python3 -c "import venv, ensurepip" 2>/dev/null; then
+    echo "Python 3 with venv support is missing."
     if [ "$OS" = "Darwin" ]; then
-        echo "Python 3 with venv support is missing. Install it with:  brew install python"
+        echo "Install it with:  brew install python"
+    elif [ -n "$(install_cmd "$FAMILY")" ]; then
+        echo "Install it with:  $(install_cmd "$FAMILY") $(package_for venv "$FAMILY")"
     else
-        echo "Python venv support is missing. On Pop!_OS / Ubuntu run:  sudo apt install python3-venv"
+        echo "Install your distribution's Python 3 package, including venv and ensurepip."
     fi
     exit 1
-fi
-
-if [ "$OS" = "Linux" ]; then
-    # Qt 6 needs libxcb-cursor for its X11 backend (used so popups can sit on top of games).
-    if ! ldconfig -p 2>/dev/null | grep libxcb-cursor >/dev/null; then
-        echo "Missing libxcb-cursor0 (needed by Qt). On Pop!_OS / Ubuntu run:"
-        echo "    sudo apt install libxcb-cursor0"
-        exit 1
-    fi
 fi
 
 echo "Creating virtualenv in $VENV"
 python3 -m venv "$VENV"
 "$VENV/bin/pip" install --quiet --upgrade pip
-"$VENV/bin/pip" install --quiet --upgrade .
+PIPLOG="$DATA/achtrack/install.log"
+if ! "$VENV/bin/pip" install --quiet --upgrade . >"$PIPLOG" 2>&1; then
+    tail -20 "$PIPLOG"
+    echo
+    echo "Installing the Python packages failed (full output in $PIPLOG)."
+    echo "If pip couldn't find a PySide6 wheel, your"
+    echo "system is one Qt doesn't publish one for (musl, 32-bit, older ARM). Install PySide6"
+    echo "from your distribution instead, then run this script again."
+    exit 1
+fi
+
+# Rather than guess which Qt packages a distribution splits out, ask Qt's X11 plugin what it is
+# actually missing - then name the packages that carry those libraries.
+check_qt_libs() {
+    local plugin missing pkg pkgs="" unknown=""
+    plugin="$(ls "$VENV"/lib/python*/site-packages/PySide6/Qt/plugins/platforms/libqxcb.so 2>/dev/null | head -1)"
+    [ -r "$plugin" ] || return 0
+    missing="$(ldd "$plugin" 2>/dev/null | awk '/not found/ {print $1}' | sort -u)"
+    [ -n "$missing" ] || return 0
+    for lib in $missing; do
+        pkg="$(package_for "$lib" "$FAMILY")"
+        if [ -n "$pkg" ]; then
+            case " $pkgs " in *" $pkg "*) ;; *) pkgs="$pkgs $pkg" ;; esac
+        else
+            unknown="$unknown $lib"
+        fi
+    done
+    echo
+    echo "Qt is missing some system libraries, so the window won't open yet:"
+    [ -n "$pkgs" ] && [ -n "$(install_cmd "$FAMILY")" ] && echo "    $(install_cmd "$FAMILY")$pkgs"
+    [ -n "$pkgs" ] && [ -z "$(install_cmd "$FAMILY")" ] && echo "    install:$pkgs"
+    [ -n "$unknown" ] && echo "    also needed, from whichever package provides them:$unknown"
+}
 
 mkdir -p "$BIN"
 ln -sf "$VENV/bin/achtrack" "$BIN/achtrack"
@@ -85,11 +191,17 @@ Icon=achtrack
 Categories=Game;Utility;
 StartupWMClass=achtrack
 EOF
+    command -v update-desktop-database >/dev/null 2>&1 && \
+        update-desktop-database "$DATA/applications" >/dev/null 2>&1 || true
 fi
 
 if [[ "${1:-}" == "--autostart" ]]; then
     "$VENV/bin/python" -c "from achtrack.desktop import set_autostart; set_autostart(True)"
     echo "Autostart enabled."
+fi
+
+if [ "$OS" = "Linux" ]; then
+    check_qt_libs
 fi
 
 echo

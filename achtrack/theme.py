@@ -93,6 +93,55 @@ def _cosmic_scheme() -> str | None:
         return None
 
 
+def _config_home() -> Path:
+    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+
+
+def _ini_value(path: Path, key: str) -> str | None:
+    """A key's value from a simple INI-ish file, whichever section it's in."""
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            name, sep, value = line.partition("=")
+            if sep and name.strip().lower() == key:
+                return value.strip()
+    except OSError:
+        return None
+    return None
+
+
+def _kde_scheme() -> str | None:
+    """Plasma (Kubuntu, Fedora KDE, SteamOS...) records the scheme in kdeglobals."""
+    path = _config_home() / "kdeglobals"
+    name = _ini_value(path, "colorscheme") or _ini_value(path, "lookandfeelpackage") or ""
+    if "dark" in name.lower():
+        return "dark"
+    # Custom schemes don't say "dark" in their name, so go by the window colour itself.
+    background = _ini_value(path, "backgroundnormal")
+    try:
+        red, green, blue = (int(part) for part in background.split(",")[:3])
+    except (AttributeError, ValueError):
+        return "light" if name else None
+    return "dark" if (red * 299 + green * 587 + blue * 114) / 1000 < 128 else "light"
+
+
+def _xfce_scheme() -> str | None:
+    try:
+        out = subprocess.run(["xfconf-query", "-c", "xsettings", "-p", "/Net/ThemeName"],
+                             capture_output=True, timeout=3).stdout.decode().strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return ("dark" if "dark" in out.lower() else "light") if out else None
+
+
+def _gtk_scheme() -> str | None:
+    """Anything else using GTK settings - Cinnamon, MATE, Budgie, plain window managers."""
+    path = _config_home() / "gtk-3.0" / "settings.ini"
+    if _ini_value(path, "gtk-application-prefer-dark-theme") in ("1", "true", "yes"):
+        return "dark"
+    name = _ini_value(path, "gtk-theme-name") or ""
+    return ("dark" if "dark" in name.lower() else "light") if name else None
+
+
 def system_scheme() -> str:
     """"dark" or "light", following the desktop; defaults to dark when nothing says."""
     try:
@@ -108,7 +157,7 @@ def system_scheme() -> str:
                 return "light"
     except (ImportError, AttributeError):
         pass
-    for probe in (_portal_scheme, _cosmic_scheme, _gnome_scheme):
+    for probe in (_portal_scheme, _cosmic_scheme, _kde_scheme, _xfce_scheme, _gnome_scheme, _gtk_scheme):
         found = probe()
         if found:
             return found

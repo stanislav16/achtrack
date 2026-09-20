@@ -1406,6 +1406,7 @@ class MainWindow(QMainWindow):
         self._list_sig = None
         self._dirty = True
         self._told_background = False
+        self._quitting = False
         self.on_hidden_without_tray = None
         self._reviews: dict = {}
         self.setWindowTitle(APP_NAME)
@@ -1812,6 +1813,10 @@ class MainWindow(QMainWindow):
                           "for games running on Steam emulators under Linux.</p>")
 
     def closeEvent(self, event) -> None:
+        # Quitting closes this window too - only a plain close should keep the app running.
+        if self._quitting or QApplication.instance().closingDown():
+            event.accept()
+            return
         # Tracking has to keep running while games are played, so closing only hides the library.
         event.ignore()
         self.hide()
@@ -1820,6 +1825,7 @@ class MainWindow(QMainWindow):
             self.on_hidden_without_tray()
 
     def quit_app(self) -> None:
+        self._quitting = True
         QApplication.instance().quit()
 
     def bring_up(self) -> None:

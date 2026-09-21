@@ -19,8 +19,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import backup, descriptions, export, matcher, psn, savefiles, steam_api, sync
-from .config import BACKUP_DIR, CACHE_DIR, EXPORT_DIR, Config
+from . import backup, descriptions, export, matcher, psn, savefiles, share, steam_api, sync
+from .config import BACKUP_DIR, CACHE_DIR, EXPORT_DIR, SHARE_DIR, Config
 from .db import PSN, SAVE, SCREEN, STEAM, Database
 from .emulators import parse_file
 from .playtime import ProcessMonitor
@@ -43,6 +43,7 @@ class Listener:
     def on_changed(self) -> None: ...
     def on_error(self, message: str) -> None: ...
     def on_described(self, appid: int, status: dict) -> None: ...
+    def on_shared(self, status: dict) -> None: ...
 
 
 @dataclass
@@ -122,6 +123,7 @@ class Engine:
         self._psn_thread: threading.Thread | None = None
         self._describe_queue: deque = deque()
         self._describe_thread: threading.Thread | None = None
+        self._share_thread: threading.Thread | None = None
         self._force_psn = False
         self._next_backup = time.time() + 300      # first automatic backup shortly after startup
         self._next_sync = 0.0
@@ -221,6 +223,8 @@ class Engine:
             elif kind == "describe" and self.db.game(req[1]) is not None:
                 self._describe_queue.append((req[1], req[2] if len(req) > 2 else "",
                                              req[3] if len(req) > 3 else "", True, True, True))
+            elif kind == "share":
+                self._start_share(req[1] if len(req) > 1 else "", bool(req[2]) if len(req) > 2 else False)
             elif kind == "icons" and self.db.game(req[1]) is not None:
                 self._prefetch_game_icons(req[1])
 
@@ -559,6 +563,23 @@ class Engine:
 
     # Steam library -------------------------------------------------------
 
+    def _start_share(self, name: str, publish: bool) -> None:
+        """Building the page reads the library and may upload it, so it gets its own thread too."""
+        if self._share_thread is not None and self._share_thread.is_alive():
+            return
+
+        def work():
+            try:
+                status = self.build_share(name, publish, db=Database(self.db.path))
+            except Exception:
+                log.exception("share page crashed")
+                status = {"time": int(time.time()), "page": "", "url": "",
+                          "error": "building the page failed - see the log"}
+            self.listener.on_shared(status)
+
+        self._share_thread = threading.Thread(target=work, name="achtrack-share", daemon=True)
+        self._share_thread.start()
+
     def _start_describe(self) -> None:
         """Hidden-description lookups go over the network, so they get their own thread - the main
         loop has to stay free to notice that a game has stopped."""
@@ -702,6 +723,35 @@ class Engine:
         elif status["unlocks"] or status["games"] or status["removed"] or status["updated"]:
             log.info("device sync: %s", status)
             self.listener.on_changed()
+        return status
+
+    def build_share(self, name: str = "", publish: bool = False, out_dir: str = "",
+                    db: Database | None = None) -> dict:
+        """Writes the page you send to friends, and publishes it when asked."""
+        db = db or self.db
+        folder = Path(out_dir).expanduser() if out_dir else SHARE_DIR
+        status = {"time": int(time.time()), "page": "", "url": "", "error": ""}
+        try:
+            status["page"] = str(share.write_page(db, folder, name or self.cfg.share_name))
+        except (OSError, ValueError) as e:
+            status["error"] = str(e)
+            self._error(f"Building the share page failed: {e}")
+            return status
+        if publish:
+            token = self.cfg.vercel_token.strip()
+            if not token:
+                status["error"] = "no Vercel token in Settings, so there's nothing to publish to"
+                return status
+            from .deploy import DeployError, publish as send
+            try:
+                status["url"] = send(folder, token, self.cfg.share_project or "achtrack-stats",
+                                     self.cfg.vercel_team or None)
+                log.info("share page published to %s", status["url"])
+            except DeployError as e:
+                status["error"] = str(e)
+                self._error(f"Publishing the share page failed: {e}")
+        db.set_meta("share", status)
+        self.listener.on_changed()
         return status
 
     def build_export(self, deploy: bool = False) -> str:

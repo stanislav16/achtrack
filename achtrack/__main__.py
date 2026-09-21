@@ -4,6 +4,7 @@ import argparse
 import logging
 import logging.handlers
 import sys
+from pathlib import Path
 
 from . import __version__
 from .config import APP_ID, DATA_DIR
@@ -177,6 +178,28 @@ def cmd_psn_sync() -> int:
     return 0
 
 
+def cmd_share(name: str, publish: bool, out: str) -> int:
+    """Builds the page you send to friends."""
+    from .config import Config
+    from .db import Database
+    from .engine import Engine, Listener
+
+    cfg = Config.load()
+    engine = Engine(cfg, Database(), Listener())
+    status = engine.build_share(name, publish, out)
+    if status["page"]:
+        size = Path(status["page"]).stat().st_size / 1024
+        print(f"Page: {status['page']} ({size:.0f} KB) - send it as a file, it opens on its own.")
+    if status["url"]:
+        print(f"Link: {status['url']}")
+    if status["error"]:
+        print(status["error"])
+        return 1
+    if not publish:
+        print("Add --publish to put it online and get a link.")
+    return 0
+
+
 def cmd_describe(target: str | None, force: bool, trophy_list: str, page: str, forget: bool) -> int:
     """Fills in hidden achievement descriptions, which Steam never reveals."""
     from .config import Config
@@ -309,6 +332,10 @@ def main(argv=None) -> int:
     backup.add_argument("--restore", metavar="FILE", help="put a snapshot back instead")
     export = sub.add_parser("export", help="build the phone page from your library")
     export.add_argument("--deploy", action="store_true", help="also publish it to Vercel")
+    sharing = sub.add_parser("share", help="build the statistics page you send to friends")
+    sharing.add_argument("--name", default="", help="the name shown on the page")
+    sharing.add_argument("--publish", action="store_true", help="put it online and print the link")
+    sharing.add_argument("--out", default="", metavar="DIR", help="write it somewhere else")
     describe = sub.add_parser("describe", help="fill in hidden achievement descriptions from PlayStation trophy lists")
     describe.add_argument("game", nargs="?", help="appid or part of a name; default every game with blanks")
     describe.add_argument("--force", action="store_true", help="search again for games that found nothing before")
@@ -346,6 +373,8 @@ def main(argv=None) -> int:
         return cmd_backup(args.restore)
     if args.command == "export":
         return cmd_export(args.deploy)
+    if args.command == "share":
+        return cmd_share(args.name, args.publish, args.out)
     if args.command == "describe":
         return cmd_describe(args.game, args.force, args.trophy_list, args.page, args.forget)
     if args.command == "saves":

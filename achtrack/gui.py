@@ -830,6 +830,101 @@ class ReviewRow(QFrame):
         self.check.toggle()
 
 
+class ShareDialog(QDialog):
+    """Builds the page you send to friends - as a file, or as a link."""
+
+    def __init__(self, win: "MainWindow"):
+        super().__init__(win)
+        self.win = win
+        self.setWindowTitle("Share my statistics")
+        self.resize(560, 0)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 20, 22, 16)
+        lay.setSpacing(12)
+
+        title = QLabel("Share my statistics")
+        title.setStyleSheet("font-size: 19px; font-weight: 650;")
+        lay.addWidget(title)
+        blurb = QLabel("One page with your totals, rarest finds, most played games and recent "
+                       "unlocks. Send it as a file and it opens by itself, or publish it and send "
+                       "the link. It carries no account details and no list of your achievements.")
+        blurb.setObjectName("Hint")
+        blurb.setWordWrap(True)
+        lay.addWidget(blurb)
+
+        form = QFormLayout()
+        form.setHorizontalSpacing(14)
+        self.name = QLineEdit(win.cfg.share_name)
+        self.name.setPlaceholderText("Shown on the page, e.g. your name or handle")
+        form.addRow("Name", self.name)
+        lay.addLayout(form)
+
+        self.result = QLabel("")
+        self.result.setWordWrap(True)
+        self.result.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        self.result.setOpenExternalLinks(True)
+        self.result.hide()
+        lay.addWidget(self.result)
+
+        row = QHBoxLayout()
+        self.show_file = QPushButton("Show the file")
+        self.show_file.clicked.connect(self._reveal)
+        self.show_file.hide()
+        self.copy = QPushButton("Copy the link")
+        self.copy.clicked.connect(self._copy)
+        self.copy.hide()
+        row.addWidget(self.show_file)
+        row.addWidget(self.copy)
+        row.addStretch(1)
+        self.make_file = QPushButton("Build the file")
+        self.make_file.clicked.connect(lambda: self._build(False))
+        row.addWidget(self.make_file)
+        self.make_link = QPushButton("Publish a link")
+        self.make_link.setObjectName("Primary")
+        self.make_link.clicked.connect(lambda: self._build(True))
+        self.make_link.setEnabled(bool(win.cfg.vercel_token.strip()))
+        if not win.cfg.vercel_token.strip():
+            self.make_link.setToolTip("Add a Vercel token in Settings → Backup & phone to publish")
+        row.addWidget(self.make_link)
+        lay.addLayout(row)
+        self._page = ""
+        self._url = ""
+
+    def _build(self, publish: bool) -> None:
+        self.win.cfg.share_name = self.name.text().strip()
+        self.win.cfg.save()
+        for button in (self.make_file, self.make_link):
+            button.setEnabled(False)
+        self.result.setText("Building…" if not publish else "Building and publishing…")
+        self.result.show()
+        self.win.worker.request("share", self.name.text().strip(), publish)
+
+    def finished_build(self, status: dict) -> None:
+        self.make_file.setEnabled(True)
+        self.make_link.setEnabled(bool(self.win.cfg.vercel_token.strip()))
+        self._page, self._url = status.get("page", ""), status.get("url", "")
+        lines = []
+        if self._url:
+            link = f'<a href="{self._url}" style="color:{P["accent"]};text-decoration:none">{self._url}</a>'
+            lines.append(f"Anyone with this link can see it:<br>{link}")
+        if self._page:
+            size = os.path.getsize(self._page) / 1024 if os.path.exists(self._page) else 0
+            lines.append(f"Saved as a {size:.0f} KB file you can send: {self._page}")
+        if status.get("error"):
+            lines.append(f"<b>{status['error']}</b>")
+        self.result.setText("<br><br>".join(lines) or "Nothing came back.")
+        self.result.show()
+        self.show_file.setVisible(bool(self._page))
+        self.copy.setVisible(bool(self._url))
+
+    def _reveal(self) -> None:
+        QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(self._page)))
+
+    def _copy(self) -> None:
+        QApplication.clipboard().setText(self._url)
+        self.copy.setText("Copied")
+
+
 class ReviewDialog(QDialog):
     """'Did you earn any of these?' - for games whose crack doesn't record achievements."""
 
@@ -1557,6 +1652,8 @@ class MainWindow(QMainWindow):
         lib.addAction("Sync Steam library now", self._sync_steam)
         lib.addAction("Sync PlayStation now", self._sync_psn)
         lib.addSeparator()
+        lib.addAction("Share my statistics…", self.share_stats)
+        lib.addSeparator()
         lib.addAction("Back up now", lambda: self.worker.request("backup"))
         lib.addAction("Sync with my other machines", lambda: self.worker.request("sync"))
         lib.addAction("Build phone page", lambda: self.worker.request("export", bool(self.cfg.vercel_token)))
@@ -1772,6 +1869,19 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Looking up {blanks} hidden achievement"
                                      f"{'s' if blanks != 1 else ''}…", 30000)
         self.worker.request("describe", appid, trophy_list, page_url)
+
+    def share_stats(self) -> None:
+        dialog = self._share_dialog = ShareDialog(self)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.finished.connect(lambda _c: setattr(self, "_share_dialog", None))
+        dialog.show()
+
+    def shared(self, status: dict) -> None:
+        dialog = getattr(self, "_share_dialog", None)
+        if dialog is not None:
+            dialog.finished_build(status)
+        elif status.get("url"):
+            self.statusBar().showMessage(f"Statistics published to {status['url']}", 20000)
 
     def described(self, appid: int, status: dict) -> None:
         """What came back from a trophy-list lookup."""

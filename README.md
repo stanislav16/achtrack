@@ -102,6 +102,27 @@ they travel to your other devices and the phone page. Nothing on a page you past
 executed - it is read as text, once. Turn the automatic PlayStation lookup off in
 **Settings → Accounts**.
 
+## Sharing your statistics
+
+**Library → Share my statistics…**, or `achtrack share`. It builds one self-contained HTML file -
+about 30 KB - holding your totals, rarest finds, most played games, recent unlocks and every game
+with its completion. Art comes from the usual public URLs, so the file stays small.
+
+One file, two ways to send it: attach it to a message and it opens by itself in any browser, or
+publish it and send the link.
+
+```text
+achtrack share --name "Stancho"             build the file
+achtrack share --name "Stancho" --publish   put it online and print the link
+```
+
+Publishing needs the Vercel token from **Settings → Backup & phone**, and uses a separate project
+from the private phone page so the two never overwrite each other. The page is marked `noindex`, so
+it is unlisted rather than secret - anyone with the link can read it.
+
+It deliberately carries less than the phone page: no achievement list, no notes, no record of where
+an unlock came from, and no Steam or PlayStation account details. Games you've hidden stay hidden.
+
 ## Install (Linux)
 
 ```bash
@@ -198,6 +219,7 @@ achtrack describe [game]  fill in hidden achievement descriptions (--from-page U
 achtrack saves [appid]    show the save files AchTrack reads and what it matched (--fields for all values)
 achtrack backup           snapshot the database + JSON export (--restore FILE to put one back)
 achtrack export           build the phone page (--deploy to publish it to Vercel)
+achtrack share            build the statistics page for friends (--publish for a link)
 achtrack test-popup [--rare]
 achtrack quit
 ```

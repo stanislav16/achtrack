@@ -22,6 +22,7 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 DB_FILE = DATA_DIR / "achtrack.db"
 BACKUP_DIR = DATA_DIR / "backups"
 EXPORT_DIR = DATA_DIR / "phone"
+SHARE_DIR = DATA_DIR / "share"
 AUTOSTART_FILE = _xdg("XDG_CONFIG_HOME", ".config") / "autostart" / f"{APP_ID}.desktop"
 ASSET_DIR = Path(__file__).resolve().parent / "assets"
 APP_ICON = ASSET_DIR / "achtrack.svg"
@@ -78,6 +79,10 @@ class Config:
     export_auto: bool = True               # rebuild after each session and with the daily backup
     vercel_token: str = ""
     vercel_project: str = "achtrack"
+    # The page you send friends: the name shown on it, and its own Vercel project so it never
+    # lands on top of the private phone page.
+    share_name: str = ""
+    share_project: str = "achtrack-stats"
     vercel_team: str = ""                  # team id (team_...) or slug; empty = personal account
     # Instead of Vercel: any command that publishes the folder, e.g.
     #   wrangler pages deploy {dir} --project-name achtrack

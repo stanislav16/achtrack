@@ -171,10 +171,11 @@ layered_icon() {
         return 0
     fi
     cp "$build/car/Assets.car" "$app/Contents/Resources/Assets.car"
-    /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AchTrack" \
-        "$app/Contents/Info.plist" >/dev/null 2>&1 || \
-        /usr/libexec/PlistBuddy -c "Set :CFBundleIconName AchTrack" \
-            "$app/Contents/Info.plist" >/dev/null 2>&1 || true
+    # actool also renders a flat .icns from the same document, with the system's own tile and
+    # shading - better than ours, and what gets used wherever the layered icon isn't.
+    [ -f "$build/car/AchTrack.icns" ] && cp "$build/car/AchTrack.icns" "$app/Contents/Resources/AchTrack.icns"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleIconName AchTrack" "$app/Contents/Info.plist" >/dev/null 2>&1 || \
+        /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AchTrack" "$app/Contents/Info.plist" >/dev/null 2>&1 || true
     echo "  Layered icon compiled."
 }
 

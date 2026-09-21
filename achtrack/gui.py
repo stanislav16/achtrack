@@ -1730,6 +1730,7 @@ class MainWindow(QMainWindow):
         return item.data(Qt.ItemDataRole.UserRole) if item else None
 
     def reload(self, force: bool = False) -> None:
+        self.refresh_running()
         rows = self.db.games(include_hidden=self.show_hidden.isChecked())
         query = self.search.text().strip().lower()
         if query:
@@ -1775,6 +1776,13 @@ class MainWindow(QMainWindow):
             self.detail.show_game(current.data(Qt.ItemDataRole.UserRole))
 
     # events from the engine ------------------------------------------------
+
+    def refresh_running(self) -> None:
+        """What's playing comes from the engine's own open sessions, not from remembering events.
+
+        A missed signal used to leave "playing now" stuck until the app was restarted.
+        """
+        self.running = self.db.open_sessions()
 
     def game_started(self, appid: int, *_args) -> None:
         self.running.add(appid)

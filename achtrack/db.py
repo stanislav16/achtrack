@@ -411,5 +411,9 @@ class Database:
     def update_session(self, session_id: int, seconds: int, ended=None) -> None:
         self.x("UPDATE sessions SET seconds = ?, ended = ? WHERE id = ?", (seconds, ended, session_id))
 
+    def open_sessions(self) -> set:
+        """Games the engine currently has a session open for - what "playing now" really means."""
+        return {r[0] for r in self.q("SELECT DISTINCT appid FROM sessions WHERE ended IS NULL")}
+
     def close_dangling_sessions(self) -> None:
         self.x("UPDATE sessions SET ended = started + seconds WHERE ended IS NULL")

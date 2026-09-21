@@ -125,6 +125,7 @@ class Engine:
         self._describe_thread: threading.Thread | None = None
         self._share_thread: threading.Thread | None = None
         self._export_thread: threading.Thread | None = None
+        self._next_beat = 0.0
         self._force_psn = False
         self._next_backup = time.time() + 300      # first automatic backup shortly after startup
         self._next_sync = 0.0
@@ -178,6 +179,10 @@ class Engine:
                 if self.cfg.backup_daily and time.time() >= self._next_backup:
                     self._next_backup = time.time() + 86400
                     self.run_backup()
+                if time.time() >= self._next_beat:
+                    self._next_beat = time.time() + 10
+                    self.db.set_meta("heartbeat", {"time": int(time.time()),
+                                                   "running": sorted(self.running)})
                 if self.cfg.sync_dir.strip() and time.time() >= self._next_sync:
                     self._next_sync = time.time() + max(60.0, self.cfg.sync_interval)
                     self.run_device_sync()

@@ -4,6 +4,7 @@ import argparse
 import logging
 import logging.handlers
 import sys
+import time
 from pathlib import Path
 
 from . import __version__
@@ -43,6 +44,17 @@ def cmd_scan() -> int:
         except (OSError, ValueError) as e:
             summary = f"unreadable: {e}"
         print(f"  [{sf.emulator}] app {sf.appid}: {summary}\n      {sf.path}")
+    beat = db.get_meta("heartbeat") or {}
+    open_now = db.open_sessions()
+    if beat:
+        age = int(time.time()) - int(beat.get("time") or 0)
+        state = "running normally" if age < 60 else f"NOT TICKING - last tick {age}s ago"
+        print(f"\nEngine: {state}; it thinks these are playing: {beat.get('running') or 'nothing'}")
+    else:
+        print("\nEngine: hasn't reported yet (start AchTrack, or it is an older version)")
+    if open_now:
+        print(f"Open sessions (what makes the library say \"playing now\"): {sorted(open_now)}")
+
     if ProcessMonitor.available():
         exe_map = {}
         for r in db.games(include_hidden=True):

@@ -176,6 +176,10 @@ layered_icon() {
     [ -f "$build/car/AchTrack.icns" ] && cp "$build/car/AchTrack.icns" "$app/Contents/Resources/AchTrack.icns"
     /usr/libexec/PlistBuddy -c "Set :CFBundleIconName AchTrack" "$app/Contents/Info.plist" >/dev/null 2>&1 || \
         /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AchTrack" "$app/Contents/Info.plist" >/dev/null 2>&1 || true
+    # Everything above edits a bundle PyInstaller already signed, which breaks its seal - and an
+    # app whose seal is broken is refused on Apple silicon and falls back to its legacy icon.
+    codesign --force --deep --sign - "$app" >/dev/null 2>&1 || \
+        echo "  (couldn't re-sign the app after changing its icon)"
     echo "  Layered icon compiled."
 }
 

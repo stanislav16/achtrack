@@ -79,12 +79,12 @@ PAGE = r"""<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="theme-color" content="#0E0E10">
+<meta name="theme-color" content="#0F0F0F">
 <title>AchTrack</title>
 <style>
 :root {
-  --bg:#0E0E10; --side:#141416; --card:#17171A; --hair:#2A2A2E; --text:#F5F5F7; --text2:#D6D6DA;
-  --muted:#8A8A8F; --accent:#E0913C; --track:#26262A;
+  --bg:#0F0F0F; --side:#151515; --card:#181818; --hair:#2B2B2B; --text:#F6F6F6; --text2:#D7D7D7;
+  --muted:#8C8C8C; --accent:#E0913C; --track:#272727;
 }
 @media (prefers-color-scheme: light) {
   :root { --bg:#F6F5F3; --side:#EFEEEB; --card:#FFFFFF; --hair:#DEDCD7; --text:#1C1C1E; --text2:#3A3A3C;

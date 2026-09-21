@@ -12,22 +12,22 @@ from pathlib import Path
 
 GRAPHITE = {
     "scheme": "dark",
-    "bg": "#0E0E10",          # window
-    "side": "#141416",        # sidebar
-    "card": "#17171A",        # rows, panels
-    "card_hover": "#1C1C20",
-    "sel": "#212126",         # selected row
-    "toast": "#1B1B1FF2",     # popup (last two digits = alpha)
-    "field": "#18181B",       # inputs
-    "hair": "#2A2A2E",        # hairline borders
-    "text": "#F5F5F7",
-    "text2": "#D6D6DA",
-    "muted": "#8A8A8F",
+    "bg": "#0F0F0F",          # window
+    "side": "#151515",        # sidebar
+    "card": "#181818",        # rows, panels
+    "card_hover": "#1D1D1D",
+    "sel": "#232323",         # selected row
+    "toast": "#1C1C1CF2",     # popup (last two digits = alpha)
+    "field": "#191919",       # inputs
+    "hair": "#2B2B2B",        # hairline borders
+    "text": "#F6F6F6",
+    "text2": "#D7D7D7",
+    "muted": "#8C8C8C",
     "accent": "#E0913C",      # amber
     "accent_soft": "#C67E33",
     "on_accent": "#1A1206",
-    "track": "#26262A",       # progress background
-    "icon_off": "#1E1E22",
+    "track": "#272727",       # progress background
+    "icon_off": "#1F1F1F",
     "shadow": 110,
 }
 

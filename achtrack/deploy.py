@@ -39,6 +39,26 @@ def best_url(result: dict, project: str) -> str:
     return min(plain or aliases, key=len) if aliases else (result.get("url") or "")
 
 
+def production_domain(project: str, token: str, team: str | None) -> str:
+    """The project's own production domain, straight from Vercel.
+
+    A deployment's reply lists the aliases it is getting, but not always the project domain - and
+    that is the only one without deployment protection, so it is the only one worth sending to
+    anyone. Ask for it rather than guessing from the deployment.
+    """
+    query = scope(team)
+    joiner = "&" if query else "?"
+    try:
+        data = _call(f"{API}/v9/projects/{urllib.parse.quote(project)}/domains"
+                     f"{query}{joiner}production=true&limit=50", token)
+    except DeployError:
+        return ""
+    names = [d.get("name") for d in (data.get("domains") or [])
+             if d.get("name") and not d.get("redirect") and d.get("verified", True)]
+    # A custom domain is usually shorter and nicer than <project>.vercel.app; either beats an alias.
+    return min(names, key=len) if names else ""
+
+
 def scope(team: str | None) -> str:
     """Vercel wants ?teamId= for an id and ?slug= for a team's short name; personal accounts neither."""
     team = (team or "").strip()
@@ -98,7 +118,7 @@ def deploy(folder: Path, token: str, project: str = "achtrack", team: str | None
         "projectSettings": {"framework": None, "buildCommand": None, "outputDirectory": None,
                             "installCommand": None, "devCommand": None},
     })
-    url = best_url(result, project)
+    url = production_domain(project, token, team) or best_url(result, project)
     if not url:
         raise DeployError(f"Vercel didn't return a URL: {json.dumps(result)[:200]}")
     return url if url.startswith("http") else f"https://{url}"
@@ -113,7 +133,7 @@ def inline_deploy(page: Path, token: str, project: str = "achtrack", team: str |
         "files": [{"file": page.name, "data": base64.b64encode(body).decode(), "encoding": "base64"}],
         "projectSettings": {"framework": None},
     })
-    url = best_url(result, project)
+    url = production_domain(project, token, team) or best_url(result, project)
     return url if url.startswith("http") else f"https://{url}"
 
 

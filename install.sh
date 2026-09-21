@@ -142,6 +142,42 @@ check_qt_libs() {
 mkdir -p "$BIN"
 ln -sf "$VENV/bin/achtrack" "$BIN/achtrack"
 
+# macOS 26 and later draw app icons themselves from a layered ".icon" document - the rounded
+# square, the material and the shading are the system's, so the icon matches everything else on
+# the dock. Compiling one needs actool, which comes with Xcode. Without it the .icns still works.
+find_actool() {
+    local found
+    found="$(xcrun --find actool 2>/dev/null)" && [ -x "$found" ] && { echo "$found"; return; }
+    for dir in "$(xcode-select -p 2>/dev/null)" /Applications/Xcode.app/Contents/Developer; do
+        [ -x "$dir/usr/bin/actool" ] && { echo "$dir/usr/bin/actool"; return; }
+    done
+    echo ""
+}
+
+layered_icon() {
+    local app="$1" build="$2" actool document plist
+    [ "$(sw_vers -productVersion | cut -d. -f1)" -ge 26 ] 2>/dev/null || return 0
+    actool="$(find_actool)"
+    [ -n "$actool" ] || { echo "  (install Xcode for the layered macOS icon; using the flat one)"; return 0; }
+    document="$build/AchTrack.icon"
+    [ -d "$document" ] || return 0
+    plist="$build/icon.plist"
+    mkdir -p "$build/car"
+    if ! "$actool" "$document" --compile "$build/car" --app-icon AchTrack \
+            --output-partial-info-plist "$plist" --platform macosx \
+            --minimum-deployment-target 26.0 --output-format human-readable-text \
+            >"$build/actool.log" 2>&1 || [ ! -f "$build/car/Assets.car" ]; then
+        echo "  (couldn't compile the layered icon - see $build/actool.log)"
+        return 0
+    fi
+    cp "$build/car/Assets.car" "$app/Contents/Resources/Assets.car"
+    /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AchTrack" \
+        "$app/Contents/Info.plist" >/dev/null 2>&1 || \
+        /usr/libexec/PlistBuddy -c "Set :CFBundleIconName AchTrack" \
+            "$app/Contents/Info.plist" >/dev/null 2>&1 || true
+    echo "  Layered icon compiled."
+}
+
 if [ "$OS" = "Darwin" ]; then
     APP="$HOME/Applications/AchTrack.app"
     BUILD="$DATA/achtrack/build"
@@ -160,6 +196,7 @@ if [ "$OS" = "Darwin" ]; then
         rm -rf "$APP"
         mv "$BUILD/dist/AchTrack.app" "$APP"
         rm -rf "$BUILD/work" "$BUILD/dist"
+        layered_icon "$APP" "$BUILD"
         /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
             -f "$APP" >/dev/null 2>&1 || true
         echo "Added $APP (find it in Finder → Applications)."

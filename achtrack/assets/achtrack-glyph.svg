@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- The trophy on its own, with no tile behind it: macOS draws the rounded square, the
+       material and the shading itself for a layered (Icon Composer) icon. -->
+  <defs>
+    <linearGradient id="metal" gradientUnits="userSpaceOnUse" x1="300" y1="230" x2="740" y2="820">
+      <stop offset="0" stop-color="#F6BE72"/>
+      <stop offset="0.5" stop-color="#E0913C"/>
+      <stop offset="1" stop-color="#C2762B"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(512 528) scale(1.32) translate(-512 -518)">
+    <g fill="none" stroke="url(#metal)" stroke-width="38" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M378 312h268v108c0 104-60 164-134 164s-134-60-134-164z"/>
+      <path d="M378 356c-52 0-74 34-62 74 9 30 34 48 62 54"/>
+      <path d="M646 356c52 0 74 34 62 74-9 30-34 48-62 54"/>
+      <path d="M512 584v104"/>
+      <path d="M414 724h196"/>
+    </g>
+  </g>
+</svg>

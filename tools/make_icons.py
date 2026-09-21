@@ -5,6 +5,7 @@ Run through the installed virtualenv (it uses Qt's SVG renderer):
 """
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
@@ -16,6 +17,10 @@ from PySide6.QtSvg import QSvgRenderer
 
 ROOT = Path(__file__).resolve().parent.parent
 SVG = ROOT / "achtrack" / "assets" / "achtrack.svg"
+GLYPH = ROOT / "achtrack" / "assets" / "achtrack-glyph.svg"     # the trophy with no tile behind it
+# macOS 26 and later draw the tile, the material and the shading themselves from a layered
+# ".icon" document; all we hand over is the artwork and the colour behind it.
+TILE_COLOUR = "extended-srgb:0.13725,0.13725,0.15294,1.00000"
 # macOS wants each size as 1x and 2x inside an .iconset folder.
 ICNS_SIZES = (16, 32, 128, 256, 512)
 PNG_SIZES = (16, 32, 48, 64, 128, 256, 512)
@@ -57,8 +62,20 @@ def make_pngs(out_dir: Path) -> list:
     return made
 
 
+def make_icon_document(out_dir: Path) -> Path:
+    """Writes AchTrack.icon - the source Xcode's actool compiles into a layered icon."""
+    document = out_dir / "AchTrack.icon"
+    render(GLYPH, 1024, document / "Assets" / "trophy.png")
+    (document / "icon.json").write_text(json.dumps({
+        "fill": {"automatic-gradient": TILE_COLOUR},
+        "groups": [{"layers": [{"image-name": "trophy.png", "name": "Trophy"}]}],
+        "supported-platforms": {"squares": ["macOS"]},
+    }, indent=2) + "\n", encoding="utf-8")
+    return document
+
+
 def main() -> int:
-    """make_icons.py [outdir] [--icns] [--pngs]; without flags, whatever this system uses."""
+    """make_icons.py [outdir] [--icns] [--pngs] [--icon]; without flags, whatever this system uses."""
     QGuiApplication(["make_icons", "-platform", "offscreen"])
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     flags = {a for a in sys.argv[1:] if a.startswith("--")}
@@ -72,6 +89,8 @@ def main() -> int:
     if want_pngs:
         made = make_pngs(out_dir)
         print(f"pngs: {len(made)} sizes in {out_dir}")
+    if "--icon" in flags or (not flags and sys.platform == "darwin"):
+        print(f"icon: {make_icon_document(out_dir)}")
     return 0
 
 

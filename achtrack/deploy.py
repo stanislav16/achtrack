@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -21,6 +22,21 @@ UA = f"AchTrack/{__version__}"
 
 class DeployError(Exception):
     pass
+
+
+def best_url(result: dict, project: str) -> str:
+    """The address to hand out.
+
+    A deployment answers with several: the project's own domain, one per team slug, and a hashed
+    one for this exact build. Only the project domain is public - Vercel's deployment protection
+    asks the others for a login, which is no use in a link you send a friend.
+    """
+    aliases = [a for a in (result.get("alias") or []) if isinstance(a, str) and a]
+    canonical = f"{project}.vercel.app"
+    if canonical in aliases:
+        return canonical
+    plain = [a for a in aliases if not re.search(r"-[a-z0-9]{8,}(-|\.)", a)]
+    return min(plain or aliases, key=len) if aliases else (result.get("url") or "")
 
 
 def scope(team: str | None) -> str:
@@ -82,7 +98,7 @@ def deploy(folder: Path, token: str, project: str = "achtrack", team: str | None
         "projectSettings": {"framework": None, "buildCommand": None, "outputDirectory": None,
                             "installCommand": None, "devCommand": None},
     })
-    url = result.get("alias", [None])[0] or result.get("url") or ""
+    url = best_url(result, project)
     if not url:
         raise DeployError(f"Vercel didn't return a URL: {json.dumps(result)[:200]}")
     return url if url.startswith("http") else f"https://{url}"
@@ -97,7 +113,7 @@ def inline_deploy(page: Path, token: str, project: str = "achtrack", team: str |
         "files": [{"file": page.name, "data": base64.b64encode(body).decode(), "encoding": "base64"}],
         "projectSettings": {"framework": None},
     })
-    url = result.get("alias", [None])[0] or result.get("url") or ""
+    url = best_url(result, project)
     return url if url.startswith("http") else f"https://{url}"
 
 

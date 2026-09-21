@@ -17,7 +17,7 @@ GRAPHITE = {
     "card": "#181818",        # rows, panels
     "card_hover": "#1D1D1D",
     "sel": "#232323",         # selected row
-    "toast": "#1C1C1CF2",     # popup (last two digits = alpha)
+    "toast": "#1C1C1CF2",     # popup; last two digits are alpha, CSS order
     "field": "#191919",       # inputs
     "hair": "#2B2B2B",        # hairline borders
     "text": "#F6F6F6",
@@ -51,6 +51,21 @@ PORCELAIN = {
     "icon_off": "#E8E6E1",
     "shadow": 45,
 }
+
+def colour(value: str):
+    """A palette colour as a QColor, reading "#RRGGBBAA" the way CSS does.
+
+    Qt reads an eight-digit hex colour as #AARRGGBB, so "#1C1C1CF2" came out as 11% opaque with
+    its blue at 242 - a washed-out blue popup instead of a near-solid grey one.
+    """
+    from PySide6.QtGui import QColor
+    text = value.strip()
+    if len(text) == 9 and text.startswith("#"):
+        c = QColor(text[:7])
+        c.setAlpha(int(text[7:], 16))
+        return c
+    return QColor(text)
+
 
 def font_rule(family: str = "") -> str:
     """Use the desktop's own UI font unless Settings names one."""

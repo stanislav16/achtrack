@@ -30,7 +30,7 @@ def set_palette(palette: dict) -> None:
 
 
 def _c(key: str) -> QColor:
-    return QColor(P[key])
+    return theme.colour(P[key])
 
 
 @dataclass
@@ -222,7 +222,7 @@ class Toast(QWidget):
 
         body = QPainterPath()
         body.addRoundedRect(card, RADIUS, RADIUS)
-        p.fillPath(body, QColor(P["toast"]))
+        p.fillPath(body, _c("toast"))
         p.strokePath(body, QPen(_c("accent") if rare else _c("hair"), 1))
 
         icon_rect = QRectF(card.left() + 14, card.top() + (CARD_H - ICON) / 2, ICON, ICON)

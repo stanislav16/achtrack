@@ -49,10 +49,17 @@ def cmd_scan() -> int:
             for exe in (r["exe_name"] or "").split(";"):
                 if exe.strip():
                     exe_map[exe.strip().lower()] = r["appid"]
-        running = ProcessMonitor().scan(exe_map)
+        monitor = ProcessMonitor()
+        running = monitor.scan(exe_map)
+        names = {r["appid"]: r["name"] for r in db.games(include_hidden=True)}
         print(f"\nRunning games ({len(running)}):")
         for appid, game_dir in running.items():
-            print(f"  app {appid}  {game_dir or ''}")
+            print(f"  app {appid}  {names.get(appid) or ''}  {game_dir or ''}")
+            for pid, state, exe in monitor.seen.get(appid, []):
+                print(f"      pid {pid} [{state}] {exe}")
+        if not running:
+            print("  (nothing - if the app still says a game is playing, it is the app's own state,"
+                  " not a process)")
     return 0
 
 

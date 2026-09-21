@@ -124,6 +124,7 @@ class Engine:
         self._describe_queue: deque = deque()
         self._describe_thread: threading.Thread | None = None
         self._share_thread: threading.Thread | None = None
+        self._export_thread: threading.Thread | None = None
         self._force_psn = False
         self._next_backup = time.time() + 300      # first automatic backup shortly after startup
         self._next_sync = 0.0
@@ -219,7 +220,7 @@ class Engine:
             elif kind == "sync":
                 self._next_sync = 0.0
             elif kind == "export":
-                self.build_export(deploy=len(req) > 1 and bool(req[1]))
+                self._start_export(deploy=len(req) > 1 and bool(req[1]))
             elif kind == "describe" and self.db.game(req[1]) is not None:
                 self._describe_queue.append((req[1], req[2] if len(req) > 2 else "",
                                              req[3] if len(req) > 3 else "", True, True, True))
@@ -563,6 +564,21 @@ class Engine:
 
     # Steam library -------------------------------------------------------
 
+    def _start_export(self, deploy: bool = False) -> None:
+        """The phone page goes over the network - and, with a sync command, through rclone. Neither
+        belongs on the loop that watches your games."""
+        if self._export_thread is not None and self._export_thread.is_alive():
+            return
+
+        def work():
+            try:
+                self.build_export(deploy, db=Database(self.db.path))
+            except Exception:
+                log.exception("phone page crashed")
+
+        self._export_thread = threading.Thread(target=work, name="achtrack-export", daemon=True)
+        self._export_thread.start()
+
     def _start_share(self, name: str, publish: bool) -> None:
         """Building the page reads the library and may upload it, so it gets its own thread too."""
         if self._share_thread is not None and self._share_thread.is_alive():
@@ -754,11 +770,12 @@ class Engine:
         self.listener.on_changed()
         return status
 
-    def build_export(self, deploy: bool = False) -> str:
+    def build_export(self, deploy: bool = False, db: Database | None = None) -> str:
         """Writes the phone page; publishes it too when a Vercel token is set."""
+        db = db or self.db
         folder = Path(self.cfg.export_dir or EXPORT_DIR)
         try:
-            page = export.write_page(self.db, folder, self.cfg.export_passphrase)
+            page = export.write_page(db, folder, self.cfg.export_passphrase)
         except (OSError, ValueError) as e:
             self._error(f"Phone page failed: {e}")
             return ""
@@ -776,7 +793,7 @@ class Engine:
             except DeployError as e:
                 status["error"] = str(e)
                 self._error(f"Publishing the phone page failed: {e}")
-        self.db.set_meta("export", status)
+        db.set_meta("export", status)
         self._run_sync_command(str(folder))
         self.listener.on_changed()
         return status["url"] or str(page)
@@ -1085,10 +1102,11 @@ class Engine:
                 self.db.update_session(run.session, int(run.seconds), int(now))
                 del self.running[appid]
                 log.info("game stopped: %s after %ds", appid, run.seconds)
-                if self.cfg.export_auto:
-                    self.build_export()
-                self.listener.on_game_stopped(appid, int(run.seconds))
                 changed = True
+                self.listener.on_game_stopped(appid, int(run.seconds))
+                self.listener.on_changed()      # the library should stop saying "playing now" now
+                if self.cfg.export_auto:
+                    self._start_export()
 
         if changed or self.running:
             self.listener.on_changed()

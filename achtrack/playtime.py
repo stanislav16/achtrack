@@ -30,6 +30,13 @@ class _Proc:
     ignore: bool = False
 
 
+def stat_fields(raw: bytes) -> tuple:
+    """(state, start time) from /proc/<pid>/stat. The command name is in brackets and can itself
+    contain brackets and spaces, so everything is read after the last one."""
+    fields = raw.rsplit(b")", 1)[-1].split()
+    return (fields[0] if fields else b"", fields[19] if len(fields) > 19 else b"")
+
+
 def _read(path: str) -> bytes:
     try:
         with open(path, "rb") as f:
@@ -100,6 +107,7 @@ class ProcessMonitor:
         """Returns {appid: game_dir or None} for every game currently running."""
         found: dict = {}
         self.prefixes = {}
+        self.seen = {}          # appid -> [(pid, state, what matched)], for `achtrack scan`
         alive = set()
         try:
             pids = [e.name for e in os.scandir("/proc") if e.name.isdigit()]
@@ -111,8 +119,12 @@ class ProcessMonitor:
             stat = _read(f"/proc/{pid}/stat")
             if not stat:
                 continue
-            fields = stat.rsplit(b")", 1)[-1].split()
-            key = (pid, fields[19] if len(fields) > 19 else b"")
+            state, started = stat_fields(stat)
+            if state in (b"Z", b"X", b"x"):
+                # Already exited, just not reaped by its launcher yet. It has no cmdline any more,
+                # but a process cached while it was running would otherwise keep counting.
+                continue
+            key = (pid, started)
             alive.add(key)
             proc = self.cache.get(key)
             if proc is None:
@@ -134,6 +146,8 @@ class ProcessMonitor:
                 if proc.detected:
                     appid, game_dir = proc.detected
             if appid is not None:
+                self.seen.setdefault(appid, []).append(
+                    (pid, state.decode("ascii", "replace"), proc.exe or (proc.args[0] if proc.args else "?")))
                 prefix = _prefix_of(proc)
                 if prefix and appid not in self.prefixes:
                     self.prefixes[appid] = prefix

@@ -203,6 +203,17 @@ class ProcessMonitor:
             self.dir_cache[directory] = appid_in_dir(directory)
         return self.dir_cache[directory]
 
+    def ignore_matching(self, appid: int) -> int:
+        """Stop counting the processes that currently make `appid` look like it's running."""
+        pids = {pid for pid, _state, _what, _why in self.seen.get(appid, [])}
+        gone = 0
+        for key, proc in self.cache.items():
+            if key[0] in pids:
+                proc.ignore = True
+                gone += 1
+        self.seen.pop(appid, None)
+        return gone
+
     @staticmethod
     def _still_loaded(pid: str, lib_dir: str) -> bool:
         maps = _read(f"/proc/{pid}/maps").decode("utf-8", "surrogateescape")

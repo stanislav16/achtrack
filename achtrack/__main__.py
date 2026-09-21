@@ -206,6 +206,27 @@ def cmd_psn_sync() -> int:
     return 0
 
 
+def cmd_not_playing(target: str) -> int:
+    """Tells the running app a game it thinks is playing has actually stopped."""
+    from .app import send_to_running
+    from .db import Database
+
+    db = Database()
+    matches = [r for r in db.q("SELECT appid, name FROM games")
+               if target.strip().lower() in (r["name"] or "").lower() or str(r["appid"]) == target.strip()]
+    open_now = db.open_sessions()
+    matches = [r for r in matches if r["appid"] in open_now] or matches
+    if len(matches) != 1:
+        print(f"{'No' if not matches else 'More than one'} game matches {target!r}"
+              + (": " + ", ".join(m["name"] or str(m["appid"]) for m in matches[:6]) if matches else ""))
+        return 1
+    if not send_to_running(f"not-playing:{matches[0]['appid']}"):
+        print("AchTrack isn't running, so there's no session to end.")
+        return 1
+    print(f"Ended the session for {matches[0]['name'] or matches[0]['appid']}.")
+    return 0
+
+
 def cmd_share(name: str, publish: bool, out: str) -> int:
     """Builds the page you send to friends."""
     from .config import Config
@@ -381,6 +402,8 @@ def main(argv=None) -> int:
     saves.add_argument("--fields", action="store_true", help="also print the fields read from each save")
     test = sub.add_parser("test-popup", help="show a sample achievement popup")
     test.add_argument("--rare", action="store_true", help="show the rare (gold) variant")
+    playing = sub.add_parser("not-playing", help="end a stuck \"playing now\" session")
+    playing.add_argument("game", help="appid or part of the name")
     sub.add_parser("quit", help="stop the running instance")
     args = parser.parse_args(argv)
 
@@ -411,6 +434,8 @@ def main(argv=None) -> int:
     from .app import run_gui, send_to_running, show_test_popup, make_app
     if args.command == "test-popup":
         return show_test_popup(args.rare)
+    if args.command == "not-playing":
+        return cmd_not_playing(args.game)
     if args.command == "quit":
         make_app()
         return 0 if send_to_running("quit") else 1

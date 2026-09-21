@@ -1777,6 +1777,12 @@ class MainWindow(QMainWindow):
 
     # events from the engine ------------------------------------------------
 
+    def not_playing(self, appid: int) -> None:
+        """Some games hang on exit, leaving a process behind that still is the game. Say so."""
+        self.worker.request("not_playing", appid)
+        self.statusBar().showMessage("Ended the session. If the game still has a process running, "
+                                     "quitting it from Heroic will free it.", 12000)
+
     def refresh_running(self) -> None:
         """What's playing comes from the engine's own open sessions, not from remembering events.
 
@@ -1988,6 +1994,8 @@ class MainWindow(QMainWindow):
                 menu.addAction("Remove from library", lambda: self._set_hidden(appid, True))
             menu.exec(self.games.mapToGlobal(pos))
             return
+        if appid in self.running:
+            menu.addAction("I'm not playing this — end the session", lambda: self.not_playing(appid))
         menu.addAction("Review achievements…", lambda: self.open_review(appid))
         after = menu.addMenu("After a session")
         group = QActionGroup(after)

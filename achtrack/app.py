@@ -189,6 +189,10 @@ def run_gui(background: bool = False) -> int:
             win.bring_up()
         elif message in ("test", "test-rare"):
             notifier.test(message == "test-rare")
+        elif message.startswith("not-playing:"):
+            appid = message.split(":", 1)[1].strip()
+            if appid.lstrip("-").isdigit():
+                win.not_playing(int(appid))
         elif message == "rescan":
             worker.request("rescan")
         elif message == "quit":

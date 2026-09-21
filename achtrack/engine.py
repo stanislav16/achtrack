@@ -236,6 +236,8 @@ class Engine:
             elif kind == "describe" and self.db.game(req[1]) is not None:
                 self._describe_queue.append((req[1], req[2] if len(req) > 2 else "",
                                              req[3] if len(req) > 3 else "", True, True, True))
+            elif kind == "not_playing" and req[1] in self.running:
+                self.end_session(req[1])
             elif kind == "share":
                 self._start_share(req[1] if len(req) > 1 else "", bool(req[2]) if len(req) > 2 else False)
             elif kind == "icons" and self.db.game(req[1]) is not None:
@@ -575,6 +577,24 @@ class Engine:
             self.listener.on_unlock(self.unlock_event(appid, name))
 
     # Steam library -------------------------------------------------------
+
+    def end_session(self, appid: int) -> None:
+        """You said you're not playing: close the session and ignore whatever is still matching.
+
+        A game that hangs on exit leaves a process behind that still looks exactly like the game -
+        because it is the game - so the only way to know it's over is that you say so.
+        """
+        run = self.running.pop(appid, None)
+        if run is None:
+            return
+        now = time.time()
+        self._flush_playtime(appid, run, now)
+        self.db.update_session(run.session, int(run.seconds), int(now))
+        if self.monitor:
+            self.monitor.ignore_matching(appid)
+        log.info("session for %s ended by hand after %ds", appid, run.seconds)
+        self.listener.on_game_stopped(appid, int(run.seconds))
+        self.listener.on_changed()
 
     def _start_export(self, deploy: bool = False) -> None:
         """The phone page goes over the network - and, with a sync command, through rclone. Neither

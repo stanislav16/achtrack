@@ -181,8 +181,15 @@ class Engine:
                     self.run_backup()
                 if time.time() >= self._next_beat:
                     self._next_beat = time.time() + 10
-                    self.db.set_meta("heartbeat", {"time": int(time.time()),
-                                                   "running": sorted(self.running)})
+                    seen = getattr(self.monitor, "seen", {}) if self.monitor else {}
+                    self.db.set_meta("heartbeat", {
+                        "time": int(time.time()),
+                        "running": sorted(self.running),
+                        "misses": {str(a): r.misses for a, r in self.running.items()},
+                        # what the engine itself is matching - its cache can hold a detection a
+                        # fresh scan would no longer make
+                        "matches": {str(a): seen.get(a, []) for a in self.running},
+                    })
                 if self.cfg.sync_dir.strip() and time.time() >= self._next_sync:
                     self._next_sync = time.time() + max(60.0, self.cfg.sync_interval)
                     self.run_device_sync()

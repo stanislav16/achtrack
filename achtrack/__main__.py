@@ -50,6 +50,12 @@ def cmd_scan() -> int:
         age = int(time.time()) - int(beat.get("time") or 0)
         state = "running normally" if age < 60 else f"NOT TICKING - last tick {age}s ago"
         print(f"\nEngine: {state}; it thinks these are playing: {beat.get('running') or 'nothing'}")
+        for appid, procs in (beat.get("matches") or {}).items():
+            misses = (beat.get("misses") or {}).get(appid, 0)
+            print(f"  app {appid}: the engine is matching {len(procs)} process(es), "
+                  f"{misses} scan(s) with none")
+            for pid, pstate, exe in procs:
+                print(f"      pid {pid} [{pstate}] {exe}")
     else:
         print("\nEngine: hasn't reported yet (start AchTrack, or it is an older version)")
     if open_now:

@@ -578,6 +578,23 @@ class Engine:
 
     # Steam library -------------------------------------------------------
 
+    def _end_run(self, appid: int, run: _Running, now: float) -> None:
+        """A game has stopped. Nothing in here may leave it in self.running: if it does, the
+        library says "playing now" until AchTrack is restarted.
+        """
+        try:
+            if self.cfg.save_detection:
+                self.discover_saves(appid, run)   # games often write the final save on exit
+        except Exception:
+            log.exception("final save scan for %s failed", appid)
+        self.db.update_session(run.session, int(run.seconds), int(now))
+        self.running.pop(appid, None)
+        log.info("game stopped: %s after %ds", appid, run.seconds)
+        self.listener.on_game_stopped(appid, int(run.seconds))
+        self.listener.on_changed()      # the library should stop saying "playing now" now
+        if self.cfg.export_auto:
+            self._start_export()
+
     def end_session(self, appid: int) -> None:
         """You said you're not playing: close the session and ignore whatever is still matching.
 
@@ -1127,18 +1144,8 @@ class Engine:
             # Launchers hand off between processes; wait for two empty scans before ending.
             run.misses += 1
             if run.misses >= 2:
-                if self.cfg.save_detection:
-                    self.discover_saves(appid, run)   # games often write the final save on exit
-                if self.screen is not None and self.screen.appid == appid:
-                        self._stop_screen()
-                self.db.update_session(run.session, int(run.seconds), int(now))
-                del self.running[appid]
-                log.info("game stopped: %s after %ds", appid, run.seconds)
+                self._end_run(appid, run, now)
                 changed = True
-                self.listener.on_game_stopped(appid, int(run.seconds))
-                self.listener.on_changed()      # the library should stop saying "playing now" now
-                if self.cfg.export_auto:
-                    self._start_export()
 
         if changed or self.running:
             self.listener.on_changed()

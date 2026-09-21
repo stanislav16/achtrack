@@ -54,8 +54,11 @@ def cmd_scan() -> int:
             misses = (beat.get("misses") or {}).get(appid, 0)
             print(f"  app {appid}: the engine is matching {len(procs)} process(es), "
                   f"{misses} scan(s) with none")
-            for pid, pstate, exe in procs:
-                print(f"      pid {pid} [{pstate}] {exe}")
+            for entry in procs:
+                pid, pstate, what = entry[0], entry[1], entry[2]
+                print(f"      pid {pid} [{pstate}] {what}")
+                if len(entry) > 3 and entry[3]:
+                    print(f"          because {entry[3]}")
     else:
         print("\nEngine: hasn't reported yet (start AchTrack, or it is an older version)")
     if open_now:

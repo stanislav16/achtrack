@@ -18,6 +18,7 @@ from .scanner import appid_in_dir
 STEAM_LIBS = ("steam_api64.dll", "steam_api.dll", "libsteam_api.so")
 SYSTEM_PREFIXES = ("/usr/", "/bin/", "/sbin/", "/lib", "/opt/steam", "/snap/", "/nix/", "/app/", "/proc/", "/dev/")
 DETECT_ATTEMPTS = 12  # a game loads steam_api shortly after starting - keep looking for ~1 minute
+RECHECK_EVERY = 10    # scans between re-checking that a detected process still looks like the game
 
 
 @dataclass
@@ -26,6 +27,9 @@ class _Proc:
     exe: str
     env: dict
     detected: tuple | None = None   # (appid, game_dir)
+    reason: str = ""                # why it counted as that game, for `achtrack scan`
+    lib_dir: str = ""               # the folder it loaded a Steam library from, if that's why
+    checks: int = 0
     attempts: int = 0
     ignore: bool = False
 
@@ -134,11 +138,22 @@ class ProcessMonitor:
 
             appid = self._env_appid(proc)
             game_dir = None
+            if appid is not None:
+                proc.reason = "ACHTRACK_APPID was set when it started"
             if appid is None and exe_map:
                 for name in [_basename(a).lower() for a in proc.args[:2]] + [_basename(proc.exe).lower()]:
                     if name in exe_map:
                         appid = exe_map[name]
+                        proc.reason = f"its name {name!r} is set as this game's executable"
                         break
+            if appid is None and proc.detected and proc.lib_dir:
+                # Wine and Proton leave helper processes running after a game exits. One that was
+                # identified by the Steam library it had loaded is only still that game while the
+                # library is still mapped, so don't take the first answer as final.
+                proc.checks += 1
+                if proc.checks % RECHECK_EVERY == 0 and not self._still_loaded(pid, proc.lib_dir):
+                    proc.detected, proc.reason, proc.lib_dir = None, "", ""
+                    proc.attempts = DETECT_ATTEMPTS      # it had its chance; don't re-detect it
             if appid is None:
                 if proc.detected is None and proc.attempts < DETECT_ATTEMPTS:
                     proc.attempts += 1
@@ -147,7 +162,8 @@ class ProcessMonitor:
                     appid, game_dir = proc.detected
             if appid is not None:
                 self.seen.setdefault(appid, []).append(
-                    (pid, state.decode("ascii", "replace"), proc.exe or (proc.args[0] if proc.args else "?")))
+                    (pid, state.decode("ascii", "replace"),
+                     " ".join(proc.args[:3]) or proc.exe or "?", proc.reason))
                 prefix = _prefix_of(proc)
                 if prefix and appid not in self.prefixes:
                     self.prefixes[appid] = prefix
@@ -187,6 +203,15 @@ class ProcessMonitor:
             self.dir_cache[directory] = appid_in_dir(directory)
         return self.dir_cache[directory]
 
+    @staticmethod
+    def _still_loaded(pid: str, lib_dir: str) -> bool:
+        maps = _read(f"/proc/{pid}/maps").decode("utf-8", "surrogateescape")
+        for line in maps.splitlines():
+            parts = line.split(None, 5)
+            if len(parts) == 6 and parts[5].lower().endswith(STEAM_LIBS) and os.path.dirname(parts[5]) == lib_dir:
+                return True
+        return False
+
     def _detect(self, pid: str, proc: _Proc) -> tuple | None:
         # Loaded steam_api library -> its folder carries the crack's config.
         maps = _read(f"/proc/{pid}/maps").decode("utf-8", "surrogateescape")
@@ -203,6 +228,8 @@ class ProcessMonitor:
                 return None
             appid = self._dir_appid(d)
             if appid:
+                proc.reason = f"it loaded a Steam library from {d}, which holds a crack config"
+                proc.lib_dir = d
                 return appid, d
 
         # Wine rewrites argv[0] to the Windows path of the .exe.
@@ -222,6 +249,7 @@ class ProcessMonitor:
                     break
                 appid = self._dir_appid(directory)
                 if appid:
+                    proc.reason = f"its Windows executable {path} sits under {directory}"
                     return appid, directory
                 directory = os.path.dirname(directory)
         return None

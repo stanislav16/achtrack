@@ -18,6 +18,7 @@ from .engine import Engine
 
 log = logging.getLogger(__name__)
 SOCKET = f"{APP_ID}-{os.getuid()}"
+IN_MAC_BUNDLE = sys.platform == "darwin" and ".app/Contents/MacOS/" in sys.executable
 
 
 class Worker(QThread):
@@ -121,7 +122,11 @@ def make_app() -> QApplication:
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setDesktopFileName(APP_ID)
-    app.setWindowIcon(QIcon(str(APP_ICON)))
+    if not IN_MAC_BUNDLE:
+        # Inside a .app, macOS draws the dock tile from the bundle - on macOS 26 that is a layered
+        # icon the system renders itself, in whatever icon appearance is set. Handing Qt an icon
+        # replaces it with a flat picture of our own.
+        app.setWindowIcon(QIcon(str(APP_ICON)))
     app.setQuitOnLastWindowClosed(False)
     return app
 

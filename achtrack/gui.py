@@ -1534,7 +1534,8 @@ class MainWindow(QMainWindow):
         self.on_hidden_without_tray = None
         self._reviews: dict = {}
         self.setWindowTitle(APP_NAME)
-        self.setWindowIcon(QIcon(str(APP_ICON)))
+        if not (sys.platform == "darwin" and ".app/Contents/MacOS/" in sys.executable):
+            self.setWindowIcon(QIcon(str(APP_ICON)))
         self.resize(1200, 780)
         self.apply_theme()
         # Follow the desktop switching between light and dark while the app is open.

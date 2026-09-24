@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import backup, descriptions, export, matcher, psn, savefiles, share, steam_api, sync
+from . import backup, descriptions, export, matcher, psn, savefiles, scanner, share, steam_api, sync
 from .config import BACKUP_DIR, CACHE_DIR, EXPORT_DIR, SHARE_DIR, Config
 from .db import PSN, SAVE, SCREEN, STEAM, Database
 from .emulators import parse_file
@@ -152,6 +152,10 @@ class Engine:
                 if now >= next_scan or self._force_scan:
                     self._force_scan = False
                     self.discover()
+                    try:
+                        self.import_heroic()
+                    except Exception:
+                        log.exception("importing Heroic's games failed")
                     next_scan = now + max(10.0, self.cfg.rescan_interval)
                 if now >= next_poll:
                     self.poll()
@@ -787,6 +791,53 @@ class Engine:
             self._error(f"Device sync failed: {status['error']}")
         elif status["unlocks"] or status["games"] or status["removed"] or status["updated"]:
             log.info("device sync: %s", status)
+            self.listener.on_changed()
+        return status
+
+    def import_heroic(self, db: Database | None = None, note=None) -> dict:
+        """Adds games Heroic has installed to the library, with Steam's achievement list.
+
+        An Epic or GOG copy has no AppID and no crack file, so nothing identifies it on its own.
+        But it is usually the same game Steam knows, so matching the name gives us the real
+        achievement list, and the folder and executable let the rest of AchTrack do its work:
+        playtime, save files, the post-session review. Epic exclusives have no Steam entry, and
+        those are reported rather than guessed at.
+        """
+        db = db or self.db
+        status = {"added": 0, "linked": 0, "known": 0, "unmatched": []}
+        tried = dict(db.get_meta("heroic_titles") or {})
+        for game in scanner.heroic_installed():
+            title, folder, exe = game["title"], game["folder"], game["exe"]
+            key = title.lower()
+            if key in tried:
+                appid = int(tried[key] or 0)
+            else:
+                appid, matched, how = steam_api.find_appid(title)
+                tried[key] = appid
+                if note and appid:
+                    note(f"{title}: Steam {appid} ({matched}, {how} match)")
+            if not appid:
+                status["unmatched"].append(title)
+                continue
+            created = db.ensure_game(appid)
+            row = db.game(appid)
+            values = {"name": row["name"] or title}
+            if folder and not row["game_dir"]:
+                values["game_dir"] = folder
+            if exe:
+                have = [e for e in (row["exe_name"] or "").split(";") if e]
+                if exe not in have:
+                    values["exe_name"] = ";".join(have + [exe])
+            db.update_game(appid, **values)
+            if created:
+                status["added"] += 1
+                self.meta_queue.append(appid)
+            elif len(values) > 1:
+                status["linked"] += 1
+            else:
+                status["known"] += 1
+        db.set_meta("heroic_titles", tried)
+        if status["added"] or status["linked"]:
             self.listener.on_changed()
         return status
 

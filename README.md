@@ -71,6 +71,25 @@ Some cracks never save achievements. For example, some RUNE releases leave `achi
   Manual unlocks are labelled *Added by you* and can be undone.
 - **Search** the achievement list from the game page.
 
+## Games that aren't from Steam
+
+Heroic launches Epic, GOG and Amazon copies, and those have no AppID and no crack file, so nothing
+about them says which game they are. AchTrack reads what Heroic has installed, matches the name to
+the same game on Steam, and uses **Steam's achievement list** for it - the real names,
+descriptions, icons and rarity - then tracks it like anything else: playtime, save files, the
+post-session review, manual unlocks.
+
+It runs with the periodic rescan, so a game you install in Heroic turns up on its own.
+`achtrack heroic` does it now and shows its working.
+
+Only an exact name match is taken (plus the obvious "Control" -> "CONTROL Ultimate Edition" case),
+because a game that is only on Epic is not the same game as something similarly named on Steam.
+Epic exclusives - Alan Wake 2, Rocket League, Fall Guys - have no Steam list, so they are reported
+and left alone.
+
+This needs no Epic account and no overlay. Unlocks come from the same places they do for a crack:
+your save files, the review after a session, or marking them yourself.
+
 ## Hidden achievements
 
 Steam blanks out a hidden achievement's description and never reveals it - not through the Web API,
@@ -215,6 +234,7 @@ achtrack list             print the library with playtime and achievement counts
 achtrack sync-steam       copy your Steam games, playtime and achievements in now
 achtrack sync-psn         copy your PlayStation games, play time and trophies in now
 achtrack sync-devices     merge libraries with your other machines
+achtrack heroic           add Heroic's installed games, using Steam's achievement lists
 achtrack describe [game]  fill in hidden achievement descriptions (--from-page URL, --forget)
 achtrack saves [appid]    show the save files AchTrack reads and what it matched (--fields for all values)
 achtrack backup           snapshot the database + JSON export (--restore FILE to put one back)

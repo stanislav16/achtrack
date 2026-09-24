@@ -189,6 +189,54 @@ def _heroic_values(keys: set) -> list:
     return [os.path.expanduser(v) for v in values]
 
 
+# Where Heroic records what is actually installed, per store.
+HEROIC_INSTALLED = (
+    "legendaryConfig/legendary/installed.json",     # Epic
+    "gog_store/installed.json",                     # GOG
+    "nile_config/nile/installed.json",              # Amazon
+    "sideload_apps/library.json",                   # added by hand
+)
+
+
+def heroic_installed() -> list:
+    """Games Heroic has installed: [{"title", "folder", "exe", "store"}].
+
+    These are ordinary copies, not cracks - there is no emulator file to read, so what they give
+    us is a name, a folder and an executable. That is enough to track playtime, watch save files
+    and, once the name is matched to a Steam AppID, show the real achievement list.
+    """
+    home, out, seen = Path.home(), [], set()
+    for rel in HEROIC_CONFIG_DIRS:
+        for name in HEROIC_INSTALLED:
+            path = home / rel / name
+            try:
+                data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+            except (OSError, ValueError):
+                continue
+            entries = data.get("installed") or data.get("games") or data.get("library") or data
+            if isinstance(entries, dict):
+                entries = list(entries.values())
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                title = (entry.get("title") or entry.get("app_name") or "").strip()
+                folder = (entry.get("install_path") or entry.get("install", {}).get("install_path")
+                          if isinstance(entry.get("install"), dict) else entry.get("install_path")) or ""
+                exe = (entry.get("executable") or entry.get("install", {}).get("executable")
+                       if isinstance(entry.get("install"), dict) else entry.get("executable")) or ""
+                key = (title.lower(), str(folder))
+                if not title or key in seen:
+                    continue
+                seen.add(key)
+                out.append({"title": title, "folder": os.path.expanduser(str(folder or "")),
+                            "exe": os.path.basename(str(exe or "")),
+                            "store": name.split("/")[0].replace("_config", "").replace("_store", "")
+                                         .replace("_apps", "").replace("Config", "")})
+    return out
+
+
 def heroic_prefixes() -> list:
     """Every Wine/Proton prefix Heroic is configured to use (per game and the default)."""
     return [Path(p) for p in _heroic_values({"winePrefix", "defaultWinePrefix"})]

@@ -219,6 +219,41 @@ def load_local_schema(path: Path, language: str = "english") -> list:
     return out
 
 
+SEARCH_URL = "https://store.steampowered.com/api/storesearch/"
+EDITIONS = re.compile(r"\b(ultimate|deluxe|definitive|complete|enhanced|goty|game of the year|"
+                      r"remastered|standard|anniversary|gold|premium)\b.*$", re.I)
+
+
+def _match_key(name: str) -> str:
+    name = re.sub(r"[™®©]", "", name or "")
+    name = re.sub(r"\b(edition|bundle|pack)\b", " ", name, flags=re.I)
+    return re.sub(r"[^a-z0-9]+", "", name.lower())
+
+
+def find_appid(title: str, timeout: float = 20) -> tuple:
+    """(appid, the Steam name, how sure) for a game known only by its name - (0, "", "") if not found.
+
+    Used for games that came from somewhere other than Steam: Epic and GOG copies through Heroic
+    have no AppID of their own, but most of them are the same game Steam has an achievement list
+    for. Epic exclusives are not, so a loose match is worse than none.
+    """
+    try:
+        raw = _get(f"{SEARCH_URL}?{urllib.parse.urlencode({'term': title, 'cc': 'us', 'l': 'en'})}",
+                   timeout=timeout)
+        items = json.loads(raw).get("items") or []
+    except (SteamError, ValueError):
+        return 0, "", ""
+    wanted = _match_key(title)
+    for item in items:                      # an exact name is the only answer worth taking as read
+        if _match_key(item.get("name", "")) == wanted and item.get("id"):
+            return int(item["id"]), item["name"], "exact"
+    for item in items:                      # "Control" -> "CONTROL Ultimate Edition"
+        name = item.get("name", "")
+        if item.get("id") and _match_key(EDITIONS.sub("", name)) == wanted:
+            return int(item["id"]), name, "edition"
+    return 0, "", ""
+
+
 def resolve_icon(appid: int, value: str) -> str:
     """Absolute URL or local path for an icon reference (full URL, CDN hash, or file)."""
     if not value:

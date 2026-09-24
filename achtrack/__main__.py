@@ -227,6 +227,30 @@ def cmd_not_playing(target: str) -> int:
     return 0
 
 
+def cmd_heroic() -> int:
+    """Adds games Heroic has installed to the library, with Steam's achievement list."""
+    from .config import Config
+    from .db import Database
+    from .engine import Engine, Listener
+    from .scanner import heroic_installed
+
+    found = heroic_installed()
+    print(f"Heroic has {len(found)} game(s) installed:")
+    for game in found:
+        print(f"  [{game['store']}] {game['title']}  {game['folder'] or ''}")
+    if not found:
+        print("  (nothing - install a game in Heroic first, or it keeps its library elsewhere)")
+        return 0
+    status = Engine(Config.load(), Database(), Listener()).import_heroic(note=lambda t: print(f"  {t}"))
+    print(f"\n{status['added']} added, {status['linked']} linked to what was already there, "
+          f"{status['known']} already complete.")
+    if status["unmatched"]:
+        print("No Steam achievement list for these, so there is nothing to show for them:")
+        for title in status["unmatched"]:
+            print(f"  {title}")
+    return 0
+
+
 def cmd_epic() -> int:
     """Reports whether Epic achievements can be read through Heroic's login."""
     from . import epic
@@ -397,6 +421,7 @@ def main(argv=None) -> int:
     backup.add_argument("--restore", metavar="FILE", help="put a snapshot back instead")
     export = sub.add_parser("export", help="build the phone page from your library")
     export.add_argument("--deploy", action="store_true", help="also publish it to Vercel")
+    sub.add_parser("heroic", help="add Heroic's installed games, using Steam's achievement lists")
     sub.add_parser("epic", help="check whether Epic achievements can be read through Heroic")
     sharing = sub.add_parser("share", help="build the statistics page you send to friends")
     sharing.add_argument("--name", default="", help="the name shown on the page")
@@ -441,6 +466,8 @@ def main(argv=None) -> int:
         return cmd_backup(args.restore)
     if args.command == "export":
         return cmd_export(args.deploy)
+    if args.command == "heroic":
+        return cmd_heroic()
     if args.command == "epic":
         return cmd_epic()
     if args.command == "share":

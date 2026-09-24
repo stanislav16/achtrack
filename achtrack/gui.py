@@ -1655,6 +1655,8 @@ class MainWindow(QMainWindow):
         lib.addSeparator()
         lib.addAction("Share my statistics…", self.share_stats)
         lib.addSeparator()
+        lib.addAction("Add Heroic's installed games", lambda: self.worker.request("rescan"))
+        lib.addSeparator()
         lib.addAction("Back up now", lambda: self.worker.request("backup"))
         lib.addAction("Sync with my other machines", lambda: self.worker.request("sync"))
         lib.addAction("Build phone page", lambda: self.worker.request("export", bool(self.cfg.vercel_token)))

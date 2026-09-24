@@ -227,6 +227,22 @@ def cmd_not_playing(target: str) -> int:
     return 0
 
 
+def cmd_epic() -> int:
+    """Reports whether Epic achievements can be read through Heroic's login."""
+    from . import epic
+
+    found = epic.probe()
+    if not found["login"]:
+        return 1
+    if any(a["status"] == 200 for a in found["answers"]):
+        print("\nEpic answered - achievements can be read from this account.")
+    else:
+        print("\nEpic didn't answer with achievements. The status codes above say why: 401 means "
+              "the token is stale (open Heroic), 403 means it lacks the scope, 404 means the "
+              "address is wrong and I'll look for the right one.")
+    return 0
+
+
 def cmd_share(name: str, publish: bool, out: str) -> int:
     """Builds the page you send to friends."""
     from .config import Config
@@ -381,6 +397,7 @@ def main(argv=None) -> int:
     backup.add_argument("--restore", metavar="FILE", help="put a snapshot back instead")
     export = sub.add_parser("export", help="build the phone page from your library")
     export.add_argument("--deploy", action="store_true", help="also publish it to Vercel")
+    sub.add_parser("epic", help="check whether Epic achievements can be read through Heroic")
     sharing = sub.add_parser("share", help="build the statistics page you send to friends")
     sharing.add_argument("--name", default="", help="the name shown on the page")
     sharing.add_argument("--publish", action="store_true", help="put it online and print the link")
@@ -424,6 +441,8 @@ def main(argv=None) -> int:
         return cmd_backup(args.restore)
     if args.command == "export":
         return cmd_export(args.deploy)
+    if args.command == "epic":
+        return cmd_epic()
     if args.command == "share":
         return cmd_share(args.name, args.publish, args.out)
     if args.command == "describe":

@@ -1168,7 +1168,8 @@ class Engine:
                 continue
             created = self.db.ensure_game(appid)
             game = self.db.game(appid)
-            if game_dir and not game["game_dir"]:
+            stale = bool(game["game_dir"]) and not os.path.isdir(game["game_dir"])
+            if game_dir and (not game["game_dir"] or stale):
                 self.db.update_game(appid, game_dir=game_dir)
                 self._force_scan = True  # look for local saves in the new folder
             if game["hidden"]:

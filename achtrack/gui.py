@@ -882,9 +882,7 @@ class ShareDialog(QDialog):
         self.make_link = QPushButton("Publish a link")
         self.make_link.setObjectName("Primary")
         self.make_link.clicked.connect(lambda: self._build(True))
-        self.make_link.setEnabled(bool(win.cfg.vercel_token.strip()))
-        if not win.cfg.vercel_token.strip():
-            self.make_link.setToolTip("Add a Vercel token in Settings → Backup & phone to publish")
+        # Kept enabled even with no token: a button that does nothing when clicked reads as broken.
         row.addWidget(self.make_link)
         lay.addLayout(row)
         self._page = ""
@@ -893,6 +891,13 @@ class ShareDialog(QDialog):
     def _build(self, publish: bool) -> None:
         self.win.cfg.share_name = self.name.text().strip()
         self.win.cfg.save()
+        if publish and not self.win.cfg.vercel_token.strip():
+            self.result.setText("There's no Vercel token on this machine yet, so there's nowhere to "
+                                "publish to. Add one in Settings → Backup & phone — or use "
+                                "<b>Build the file</b> and send that instead; it needs nothing.")
+            self.result.show()
+            self.adjustSize()
+            return
         for button in (self.make_file, self.make_link):
             button.setEnabled(False)
         self.result.setText("Building…" if not publish else "Building and publishing…")
@@ -901,7 +906,7 @@ class ShareDialog(QDialog):
 
     def finished_build(self, status: dict) -> None:
         self.make_file.setEnabled(True)
-        self.make_link.setEnabled(bool(self.win.cfg.vercel_token.strip()))
+        self.make_link.setEnabled(True)
         self._page, self._url = status.get("page", ""), status.get("url", "")
         lines = []
         if self._url:

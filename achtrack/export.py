@@ -197,7 +197,7 @@ function library() {
     const list = document.getElementById("list");
     const games = sorted(DATA.games);
     list.innerHTML = games.map((g,i) => `<div class="game" data-i="${DATA.games.indexOf(g)}">
-        <img loading="lazy" src="${g.h}" alt="">
+        <img loading="lazy" onerror="noimg(this)" src="${g.h}" alt="">
         <div style="flex:1;min-width:0">
           <div class="n">${esc(g.n)}</div>
           <div class="s">${g.p !== "pc" ? PLAT[g.p] + " · " : ""}${fmtH(g.t)}${g.c ? " · " + g.u + "/" + g.c : ""}</div>
@@ -223,7 +223,7 @@ function orderAchievements(list) {
 function detail(g) {
   const done = orderAchievements(g.a.filter(a => a[4])), locked = orderAchievements(g.a.filter(a => !a[4]));
   app.innerHTML = `<main><button class="back">‹ Library</button>
-    <div class="hero"><img src="${g.h}" alt=""><div><h2>${esc(g.n)}</h2>
+    <div class="hero"><img onerror="noimg(this)" src="${g.h}" alt=""><div><h2>${esc(g.n)}</h2>
       <div class="meta">${g.p !== "pc" ? PLAT[g.p] + " · " : ""}${fmtH(g.t)}${g.l ? " · " + fmtDate(g.l) : ""}
       ${g.g ? "<br>" + esc(g.g) : ""}</div></div></div>
     ${g.c ? `<div class="bar" style="margin-bottom:14px"><i style="width:${Math.round(g.u/g.c*100)}%"></i></div>` : ""}
@@ -245,7 +245,7 @@ function ach(a) {
   const [title, desc, icon, pct, at, source, hidden, kind] = a;
   const rare = pct !== null && pct < 10;
   return `<div class="ach ${at ? "" : "locked"}">
-    <img loading="lazy" src="${icon}" alt="">
+    <img loading="lazy" onerror="noimg(this)" src="${icon}" alt="">
     <div style="flex:1;min-width:0">
       <div class="t">${esc(!at && hidden ? "Hidden achievement" : title)}${kind === "platinum" ? " · Platinum" : ""}</div>
       <div class="d">${esc(!at && hidden ? "Revealed once unlocked" : desc)}</div>
@@ -254,6 +254,8 @@ function ach(a) {
     </div></div>`;
 }
 
+const BLANK = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+function noimg(el) { el.onerror = null; el.src = BLANK; }
 const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
 (async () => {

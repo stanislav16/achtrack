@@ -106,8 +106,10 @@ h2 { font-size:13px; letter-spacing:.08em; text-transform:uppercase; color:var(-
 .tile .v { font-size:27px; letter-spacing:-.02em; color:var(--text); font-weight:650; font-variant-numeric:tabular-nums; }
 .tile .k { font-size:13px; color:var(--muted); margin-top:3px; }
 .tile .v small { font-size:15px; color:var(--muted); font-weight:500; letter-spacing:0; }
-.list { display:grid; gap:8px; }
-.item { display:flex; gap:13px; align-items:center; background:var(--card); border:1px solid var(--hair);
+/* minmax(0,…): a grid child refuses to shrink below its own text otherwise, and a long game
+   name then pushes the row off the side of a phone screen. */
+.list { display:grid; grid-template-columns:minmax(0,1fr); gap:8px; }
+.item { display:flex; min-width:0; gap:13px; align-items:center; background:var(--card); border:1px solid var(--hair);
         border-radius:14px; padding:11px 13px; box-shadow:var(--shadow); }
 .item img { flex:none; background:var(--track); object-fit:cover; }
 .ico { width:44px; height:44px; border-radius:11px; }
@@ -120,7 +122,7 @@ h2 { font-size:13px; letter-spacing:.08em; text-transform:uppercase; color:var(-
 .pill.plain { color:var(--muted); border-color:var(--hair); }
 .bar { height:4px; background:var(--track); border-radius:999px; overflow:hidden; margin-top:7px; max-width:260px; }
 .bar i { display:block; height:100%; background:var(--accent); border-radius:999px; }
-.games { display:grid; gap:8px; }
+.games { display:grid; grid-template-columns:minmax(0,1fr); gap:8px; }
 .sorts { display:flex; gap:6px; flex-wrap:wrap; margin:-4px 0 14px; }
 .sorts button { font:inherit; font-size:13px; color:var(--muted); background:none; border:1px solid var(--hair);
   border-radius:999px; padding:5px 13px; cursor:pointer; }
@@ -153,6 +155,8 @@ footer { margin-top:48px; padding-top:18px; border-top:1px solid var(--hair); co
   <footer>Tracked with AchTrack</footer>
 </div>
 <script>
+const BLANK = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+function noimg(el) { el.onerror = null; el.src = BLANK; }
 const D = __DATA__;
 const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const hours = s => s >= 3600 ? Math.round(s / 3600).toLocaleString() + " h" : Math.round(s / 60) + " min";
@@ -176,7 +180,7 @@ document.getElementById("tiles").innerHTML = [
 
 function trophyRow([title, icon, pct, game, at, kind], tail) {
   return `<div class="item">
-    <img class="ico" loading="lazy" src="${esc(icon)}" alt="">
+    <img class="ico" loading="lazy" onerror="noimg(this)" src="${esc(icon)}" alt="">
     <div class="grow"><div class="t">${esc(title)}${kind === "platinum" ? " · Platinum" : ""}</div>
     <div class="d">${esc(game)}</div></div>
     <div class="pill${tail.plain ? " plain" : ""}">${esc(tail.text)}</div></div>`;
@@ -192,7 +196,7 @@ fill("recent", D.recent.map(t => trophyRow(t, {text: when(t[4]), plain: true})))
 function gameRow(g, note) {
   const pct = Math.round(pctOf(g) * 100);
   return `<div class="item">
-    ${g.h ? `<img class="art" loading="lazy" src="${esc(g.h)}" alt="">` : `<div class="art"></div>`}
+    ${g.h ? `<img class="art" loading="lazy" onerror="noimg(this)" src="${esc(g.h)}" alt="">` : `<div class="art"></div>`}
     <div class="grow"><div class="t">${esc(g.n)}</div>
       <div class="d">${esc(note(g))}</div>
       ${g.c ? `<div class="bar"><i style="width:${pct}%"></i></div>` : ""}</div>

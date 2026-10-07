@@ -5,6 +5,8 @@ import fnmatch
 import json
 import os
 import re
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -279,6 +281,39 @@ def _prefixes_under(root: Path, depth: int):
         yield from _prefixes_under(child, depth - 1)
 
 
+def crossover_bottle_dirs() -> list:
+    """Where CrossOver keeps its bottles - the default places, plus wherever you moved them.
+
+    CrossOver lets you pick the folder, and records the choice in its preferences rather than
+    anywhere a path scan would stumble on.
+    """
+    home = Path.home()
+    dirs = [home / "Library/Application Support/CrossOver/Bottles", home / ".cxoffice"]
+    if sys.platform == "darwin":
+        try:
+            out = subprocess.run(["defaults", "read", "com.codeweavers.CrossOver", "BottleDir"],
+                                 capture_output=True, text=True, timeout=5).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            out = ""
+        if out:
+            dirs.append(Path(os.path.expanduser(out)))
+    else:
+        conf = home / ".cxoffice" / "cxoffice.conf"
+        try:
+            for line in conf.read_text(encoding="utf-8", errors="replace").splitlines():
+                key, sep, value = line.partition("=")
+                if sep and key.strip().strip('"').lower() == "bottledir":
+                    dirs.append(Path(os.path.expanduser(value.strip().strip('"'))))
+        except OSError:
+            pass
+    seen, out_dirs = set(), []
+    for d in dirs:
+        if str(d) not in seen:
+            seen.add(str(d))
+            out_dirs.append(d)
+    return out_dirs
+
+
 def find_prefixes(extra_dirs=()) -> list:
     home = Path.home()
     candidates = [home / ".wine"]
@@ -292,9 +327,7 @@ def find_prefixes(extra_dirs=()) -> list:
         found = _as_prefix(prefix)
         if found:
             candidates.append(found)
-    roots = [
-        (home / "Library/Application Support/CrossOver/Bottles", 1),   # macOS
-        (home / ".cxoffice", 1),                                        # CrossOver on Linux
+    roots = [(d, 1) for d in crossover_bottle_dirs()] + [
         (home / "Games", 2),                      # Lutris default + umu / custom
         (home / "Games/Heroic/Prefixes", 2),      # Heroic: Prefixes/default/<game>[/pfx]
         (home / ".local/share/bottles/bottles", 1),

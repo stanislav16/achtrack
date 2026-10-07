@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 import sys
 import time
 from datetime import datetime
 
-from PySide6.QtCore import QDateTime, QRectF, QSize, Qt, QTimer, QUrl
+from PySide6.QtCore import QDateTime, QProcess, QRectF, QSize, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import (QAction, QActionGroup, QBrush, QColor, QDesktopServices, QFont, QGuiApplication, QIcon,
                            QImage, QKeySequence, QLinearGradient, QPainter, QPainterPath, QPalette, QPixmap)
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateTimeEdit, QDialog,
@@ -18,7 +19,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
                                QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSplitter, QStackedWidget,
                                QTabWidget, QVBoxLayout, QWidget)
 
-from . import __version__, descriptions, desktop, theme
+from . import __version__, descriptions, desktop, theme, updater
 from .config import APP_ICON, APP_NAME, BACKUP_DIR, POPUP_CORNERS, Config
 from .db import MANUAL, PSN, SAVE, SCREEN, STEAM, Database
 from .engine import build_unlock_event, needs_review
@@ -828,6 +829,148 @@ class ReviewRow(QFrame):
 
     def mousePressEvent(self, event) -> None:
         self.check.toggle()
+
+
+class _UpdateCheck(QThread):
+    """Asking the server what's new can take a while on a slow connection; keep the window alive."""
+    done = Signal(object)
+
+    def __init__(self, folder, parent=None):
+        super().__init__(parent)
+        self.folder = folder
+
+    def run(self) -> None:
+        self.done.emit(updater.check(self.folder))
+
+
+class UpdateDialog(QDialog):
+    """Check for a newer AchTrack and install it - what `git pull && install.sh` does by hand."""
+
+    def __init__(self, win: "MainWindow"):
+        super().__init__(win)
+        self.win = win
+        self.folder = updater.source_dir()
+        self.proc: QProcess | None = None
+        self.output: list = []
+        self.setWindowTitle("Updates")
+        self.setMinimumWidth(520)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 20, 22, 16)
+        lay.setSpacing(12)
+
+        self.title = QLabel("Checking for updates…")
+        self.title.setStyleSheet("font-size: 19px; font-weight: 650;")
+        lay.addWidget(self.title)
+        self.detail = QLabel("")
+        self.detail.setWordWrap(True)
+        self.detail.setTextFormat(Qt.TextFormat.RichText)
+        lay.addWidget(self.detail)
+        self.progress = QLabel("")
+        self.progress.setObjectName("Hint")
+        self.progress.setWordWrap(True)
+        self.progress.hide()
+        lay.addWidget(self.progress)
+
+        row = QHBoxLayout()
+        self.again = QPushButton("Check again")
+        self.again.clicked.connect(self.check)
+        row.addWidget(self.again)
+        row.addStretch(1)
+        self.install = QPushButton("Install update")
+        self.install.setObjectName("Primary")
+        self.install.clicked.connect(self.start_install)
+        self.install.hide()
+        row.addWidget(self.install)
+        self.restart = QPushButton("Restart AchTrack")
+        self.restart.setObjectName("Primary")
+        self.restart.clicked.connect(self.do_restart)
+        self.restart.hide()
+        row.addWidget(self.restart)
+        lay.addLayout(row)
+        self.check()
+
+    def _say(self, title: str, detail: str = "") -> None:
+        self.title.setText(title)
+        self.detail.setText(detail)
+        self.detail.setVisible(bool(detail))
+        self.adjustSize()
+
+    def check(self) -> None:
+        self.install.hide()
+        self.restart.hide()
+        self.progress.hide()
+        trouble = updater.problem(self.folder)
+        if trouble:
+            self._say("Can't check for updates", trouble)
+            return
+        self.again.setEnabled(False)
+        self._say("Checking for updates…")
+        self._check = _UpdateCheck(self.folder, self)
+        self._check.done.connect(self.checked)
+        self._check.start()
+
+    def checked(self, status: dict) -> None:
+        self.again.setEnabled(True)
+        if status["error"]:
+            self._say("Couldn't check for updates", status["error"])
+        elif not status["behind"]:
+            self._say("AchTrack is up to date", f"You have the latest version ({status['current']}).")
+        else:
+            shown = "".join(f"<li>{c}</li>" for c in status["changes"][:8])
+            more = len(status["changes"]) - 8
+            extra = f"<p>…and {more} more.</p>" if more > 0 else ""
+            count = status["behind"]
+            self._say(f"{count} update{'s' if count != 1 else ''} available",
+                      f"<ul style='margin-left:-18px'>{shown}</ul>{extra}")
+            self.install.show()
+
+    def start_install(self) -> None:
+        self.install.hide()
+        self.again.setEnabled(False)
+        self.output = []
+        self._say("Installing the update…", "This takes a minute. You can keep using AchTrack meanwhile.")
+        self.progress.setText("Starting…")
+        self.progress.show()
+        command = updater.update_command(self.folder)
+        self.proc = QProcess(self)
+        self.proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        self.proc.readyReadStandardOutput.connect(self._read)
+        self.proc.finished.connect(self.installed)
+        self.proc.errorOccurred.connect(lambda _e: self.installed(1))
+        self.proc.start(command[0], command[1:])
+
+    def _read(self) -> None:
+        text = bytes(self.proc.readAllStandardOutput()).decode("utf-8", "replace")
+        self.output += [line.strip() for line in text.splitlines() if line.strip()]
+        if self.output:
+            self.progress.setText(self.output[-1][:160])
+
+    def installed(self, code: int, *_args) -> None:
+        if self.proc is None:
+            return
+        self.proc = None
+        self.again.setEnabled(True)
+        if code == 0:
+            self.progress.hide()
+            self._say("Update installed", "Restart AchTrack to start using it. Tracking picks up where it left off.")
+            self.restart.show()
+        else:
+            self._say("The update didn't install",
+                      "Nothing was changed that stops the current version working. The last thing it said:")
+            self.progress.setText("\n".join(self.output[-4:]) or "The installer gave no output.")
+            self.progress.show()
+
+    def do_restart(self) -> None:
+        subprocess.Popen(updater.relaunch_command(), start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.win.quit_app()
+
+    def closeEvent(self, event) -> None:
+        if self.proc is not None:          # let a running install finish; just hide the window
+            event.ignore()
+            self.hide()
+            return
+        super().closeEvent(event)
 
 
 class ShareDialog(QDialog):
@@ -1687,6 +1830,7 @@ class MainWindow(QMainWindow):
         helpm.addAction("Test achievement popup", lambda: self.notifier.test(False))
         helpm.addAction("Test rare achievement popup", lambda: self.notifier.test(True))
         helpm.addSeparator()
+        helpm.addAction("Check for updates…", self.check_updates)
         helpm.addAction(f"About {APP_NAME}", self._about)
 
     # data ------------------------------------------------------------------
@@ -2041,6 +2185,15 @@ class MainWindow(QMainWindow):
 
     def open_settings(self) -> None:
         SettingsDialog(self).exec()
+
+    def check_updates(self) -> None:
+        existing = getattr(self, "_update_dialog", None)
+        if existing is not None and existing.proc is not None:
+            existing.show()                 # an install is still running in it
+            existing.raise_()
+            return
+        self._update_dialog = UpdateDialog(self)
+        self._update_dialog.show()
 
     def _about(self) -> None:
         QMessageBox.about(self, f"About {APP_NAME}",

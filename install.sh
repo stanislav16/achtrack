@@ -141,6 +141,8 @@ check_qt_libs() {
 
 mkdir -p "$BIN"
 ln -sf "$VENV/bin/achtrack" "$BIN/achtrack"
+# So "Check for updates" inside the app knows which folder to pull into.
+pwd > "$DATA/achtrack/source"
 
 # macOS 26 and later draw app icons themselves from a layered ".icon" document - the rounded
 # square, the material and the shading are the system's, so the icon matches everything else on

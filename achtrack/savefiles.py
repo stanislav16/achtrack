@@ -563,23 +563,89 @@ def related_prefixes(prefix: str) -> list:
     return [str(p) for p in found]
 
 
-def candidate_files(prefix: str | None, game_dir: str | None) -> list:
+GAME_FOLDERS = {"my games", "saved games", "savedgames", "savegames", "saves"}
+
+
+def _name_key(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (text or "").lower())
+
+
+def _is_about(folder: str, names: list) -> bool:
+    """Whether a folder's name is this game's name, give or take punctuation and an edition."""
+    key = _name_key(folder)
+    return any(len(n) >= 4 and len(key) >= 4 and (n in key or key in n) for n in names)
+
+
+def leaves_prefix(root: Path, prefix: str) -> bool:
+    """Wine and CrossOver link a prefix's Documents, Desktop and Downloads to your real ones."""
+    try:
+        real, inside = os.path.realpath(root), os.path.realpath(prefix)
+    except OSError:
+        return False
+    return not (real == inside or real.startswith(inside + os.sep))
+
+
+def _walk_personal(root: Path, names: list):
+    """Saves in a folder that is really your own Documents: only the parts that are a game's.
+
+    Everything else in there is yours - and anything you edit while a game is running would
+    otherwise look like a save that game just wrote.
+    """
+    try:
+        top = [e for e in os.scandir(root) if e.is_dir(follow_symlinks=False) and not e.name.startswith(".")]
+    except OSError:
+        return
+    for entry in top:
+        low = entry.name.lower()
+        if low in GAME_FOLDERS or _is_about(entry.name, names):
+            yield from _walk_files(Path(entry.path), only_save_paths=False)
+            continue
+        try:                                   # Documents/<publisher>/<game>
+            inner = [e for e in os.scandir(entry.path)
+                     if e.is_dir(follow_symlinks=False) and _is_about(e.name, names)]
+        except OSError:
+            continue
+        for sub in inner:
+            yield from _walk_files(Path(sub.path), only_save_paths=False)
+
+
+def candidate_files(prefix: str | None, game_dir: str | None, names: list | None = None) -> list:
     """Files that could be this game's saves: everything in the prefix's user folders, plus
-    anything under a *save* folder inside the game's install folder."""
+    anything under a *save* folder inside the game's install folder.
+
+    `names` are what the game is called. They only matter for user folders that turn out to be
+    links to your real ones, where the search is kept to folders belonging to the game.
+    """
     out = []
+    root = game_root(game_dir) if game_dir else None
+    known = [_name_key(n) for n in (names or []) + ([os.path.basename(root)] if root else []) if _name_key(n)]
     for pfx in related_prefixes(prefix) if prefix else []:
-        for root in prefix_save_roots(pfx):
-            out += list(_walk_files(root, only_save_paths=False))
+        for folder in prefix_save_roots(pfx):
+            if leaves_prefix(folder, pfx):
+                out += list(_walk_personal(folder, known))
+            else:
+                out += list(_walk_files(folder, only_save_paths=False))
         user_reg = Path(pfx) / "user.reg"
         if user_reg.is_file():
             out.append(str(user_reg))
-    root = game_root(game_dir) if game_dir else None
     if root and os.path.isdir(root):
         out += list(_walk_files(Path(root), only_save_paths=True))
     unity = Path.home() / ".config" / "unity3d"     # native Linux Unity games
     if unity.is_dir():
         out += list(_walk_files(unity, only_save_paths=False, max_depth=4))
     return out
+
+
+def is_stray(path: str, game_dir: str | None, names: list | None = None) -> bool:
+    """A registered "save" that is really one of your own files, reached through a prefix's link
+    to your Documents - something an older version could pick up while you edited it mid-game."""
+    cut = path.find(os.sep + "drive_c" + os.sep)
+    if cut < 0:
+        return False
+    prefix = path[:cut]
+    if not leaves_prefix(Path(path), prefix):
+        return False
+    return path not in candidate_files(prefix, game_dir, names)
 
 
 def changed_since(paths: list, since: float) -> list:

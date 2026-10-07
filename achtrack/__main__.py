@@ -76,8 +76,10 @@ def cmd_scan() -> int:
         print(f"\nRunning games ({len(running)}):")
         for appid, game_dir in running.items():
             print(f"  app {appid}  {names.get(appid) or ''}  {game_dir or ''}")
-            for pid, state, exe in monitor.seen.get(appid, []):
-                print(f"      pid {pid} [{state}] {exe}")
+            for pid, state, what, why in monitor.seen.get(appid, []):
+                print(f"      pid {pid} [{state}] {what}")
+                if why:
+                    print(f"          because {why}")
         if not running:
             print("  (nothing - if the app still says a game is playing, it is the app's own state,"
                   " not a process)")

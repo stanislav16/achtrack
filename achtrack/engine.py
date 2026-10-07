@@ -132,10 +132,18 @@ class Engine:
         self._icons = ThreadPoolExecutor(max_workers=4, thread_name_prefix="achtrack-icons")
         self.saves = {}
         for r in self.db.save_files():
-            if savefiles.is_candidate(r["path"]):
+            game = self.db.game(r["appid"])
+            stray = savefiles.is_stray(r["path"], game["game_dir"] if game is not None else None,
+                                       [game["name"]] if game is not None and game["name"] else [])
+            if savefiles.is_candidate(r["path"]) and not stray:
                 self.saves[(r["path"], r["appid"])] = dict(r)
-            else:   # registered by an older version that mistook engine caches for saves
-                self.db.x("DELETE FROM save_files WHERE path = ? AND appid = ?", (r["path"], r["appid"]))
+                continue
+            # Registered by an older version: an engine cache, or one of your own documents reached
+            # through a prefix's link. What such a file "suggested" can't be trusted either.
+            self.db.x("DELETE FROM save_files WHERE path = ? AND appid = ?", (r["path"], r["appid"]))
+            if stray:
+                log.info("forgetting %s - it is a personal file, not a save of %s", r["path"], r["appid"])
+                self.db.x("DELETE FROM save_suggestions WHERE appid = ?", (r["appid"],))
         self._models: dict = {}
         self._last_error = ("", 0.0)
 
@@ -453,13 +461,17 @@ class Engine:
         tmp.write_text(json.dumps(flat), encoding="utf-8")
         tmp.replace(dest)
 
+    def _game_names(self, appid: int) -> list:
+        game = self.db.game(appid)
+        return [game["name"]] if game is not None and game["name"] else []
+
     def _snapshot_candidates(self, appid: int, run: _Running) -> dict:
         """Remember save-looking files as they are at game start, so the first save of the
         session can be compared against them instead of only being read as a starting point."""
         snaps: dict = {}
         deadline = time.monotonic() + 5.0
         try:
-            files = savefiles.candidate_files(run.prefix, run.game_dir)
+            files = savefiles.candidate_files(run.prefix, run.game_dir, self._game_names(appid))
         except OSError:
             return snaps
         files = [f for f in files if savefiles.looks_like_save(f) and (f, appid) not in self.saves
@@ -477,7 +489,7 @@ class Engine:
     def discover_saves(self, appid: int, run: _Running) -> None:
         """Registers files the game wrote during this session as its saves."""
         try:
-            files = savefiles.candidate_files(run.prefix, run.game_dir)
+            files = savefiles.candidate_files(run.prefix, run.game_dir, self._game_names(appid))
         except OSError:
             return
         for path in savefiles.changed_since(files, run.started - 2):

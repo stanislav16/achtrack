@@ -496,7 +496,9 @@ SKIP_EXTENSIONS = {
 }
 # Engine data folders and files that live next to saves but aren't saves.
 NOT_SAVE_NAMES = ("d3ddriverbytecodeblob", "shadercache", "pipelinecache", "gameusersettings", "engine.ini",
-                  "input.ini", "scalability", "crashreport", "manifest")
+                  "input.ini", "scalability", "crashreport", "manifest",
+                  # settings, not progress: readable, but nothing in them says what you have done
+                  "settings", "keybind", "keymap", "controls.", "graphics.", "audio.", "video.", "display.")
 SAVE_DIR_RE = re.compile(r"(^|[/\\])(save|saves|savegame|savegames|savedata|savefiles?|profiles?|slots?)([/\\]|$)",
                          re.IGNORECASE)
 

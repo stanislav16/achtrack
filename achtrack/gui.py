@@ -586,7 +586,13 @@ class DetailView(QWidget):
         saves = [f for f in files if not f["path"].lower().endswith("user.reg")]
         readable_saves = [f for f in saves if f["readable"]]
         registry = any(f["readable"] for f in files if f["path"].lower().endswith("user.reg"))
-        if readable_saves:
+        unreadable = len(saves) - len(readable_saves)
+        if readable_saves and unreadable:
+            # Don't let one readable file speak for the rest: the progress may be in the others.
+            formats = sorted({f["format"] for f in readable_saves if f["format"]})
+            lines.append(f"💾 {len(readable_saves)} of {len(saves)} save files readable ({', '.join(formats)}); "
+                         f"the rest use a format AchTrack can't read{extra}")
+        elif readable_saves:
             formats = sorted({f["format"] for f in readable_saves if f["format"]})
             lines.append(f"💾 Save file readable ({', '.join(formats)}) - checked for progress each time "
                          f"the game saves{extra}")

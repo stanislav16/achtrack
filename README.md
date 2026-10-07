@@ -171,11 +171,17 @@ entry and (with `--autostart`) starts it in the background at login. Run `./inst
 ./install.sh --autostart
 ```
 
-You get `AchTrack.app` in `~/Applications` plus the `achtrack` command. The Mac build is the full
-client apart from the Linux-only parts: your library with manual unlocking and the review, Steam and
-PlayStation sync, backups, the phone page, and sync with your other machines. Watching cracks,
-tracking playtime and reading save files need Linux (Windows support is planned), though CrossOver
-bottles are scanned if you do run Windows games there.
+You get `AchTrack.app` in `~/Applications` plus the `achtrack` command, and the Mac build does what
+the Linux one does: your library, manual unlocking and the review, Steam and PlayStation sync,
+backups, the phone page and sync with your other machines - and tracking of Windows games run
+through **CrossOver**: the "playing now" badge, playtime, crack achievement files, save-file
+detection and the review after a session.
+
+Bottles are found wherever CrossOver keeps them, including a folder you chose yourself. A game is
+recognised by where its executable lives, the same as on Linux. The one rule that doesn't carry over
+is spotting a game by the Steam library it has loaded - macOS doesn't show another process's memory
+map - so a crack whose config sits somewhere other than beside the game may need its executable
+named in the game's settings.
 
 Point **Settings → Devices** at the same shared folder on both machines and your PC library, manual
 unlocks included, appears here and stays in step.

@@ -1,29 +1,31 @@
 """Save reader for FINAL FANTASY VII REBIRTH. Written from an AchTrack reader kit.
 
 The save is plain fixed-layout binary, mostly zeros: a 16-byte header, one "RESD" section of
-about 934 KB holding the game's state, then a run of "LOSD" sections. Nothing in it is named,
-so this reader decodes only what could be established from evidence, and says how.
+about 934 KB holding the game's state, then a run of "LOSD" sections. Nothing in it is named.
 
-What was established, from one player's 25 save slots made over twelve days and the dates on
-which that player recorded each "Complete Chapter N" achievement:
+One thing in it was established beyond doubt, and it is the one thing needed: the game keeps
+its own record of which achievements have been earned. The 64-bit value at 0x3DC8 has one bit
+per achievement, and bit N is the achievement Steam calls ACH_N (ACH_00 .. ACH_60).
 
-  The 32-bit value at 0x3DC8 is a set of flags. Bit N (N = 1..8) is clear in every slot saved
-  before chapter N was finished and set in every slot saved after - eight chapters, eight bits,
-  each appearing in the first save made after that chapter's achievement, never earlier. Bits
-  16 and up belong to something else and fill in over the first few chapters; bit 15 is always
-  set.
+The evidence is one player's 25 save slots, written over twelve days, and that player's own
+record of 32 achievements:
 
-Chapters 9 to 14 use bits 9 to 14 on the strength of that pattern: it has not been seen happen,
-because the player had not got that far. If it is wrong the rule simply never fires.
+  - In the newest slot exactly 32 bits are set, and they are exactly those 32 achievements.
+    None of the other 29 is set, and no bit above 60 is ever set.
+  - Reading the slots in the order they were written, bits only ever appear, never disappear,
+    and each appears where it should: "Win a battle" and "Stagger an enemy" in the very first
+    slot, the four early combat ones together, "Complete Chapter N" for N = 1..8 each in the
+    first slot written after that chapter, the Junon parade ones with chapter 4.
+
+So nothing here is inferred from a pattern: every achievement is read from the game's own flag.
 """
 import struct
 
 NAME = "FINAL FANTASY VII REBIRTH"
 
 SECTION = b"RESD" * 4
-FLAGS_AT = 0x3DC8
-PROGRESS_ID_AT = 0x450BC
-CHAPTERS = 14
+EARNED_AT = 0x3DC8
+ACHIEVEMENTS = 61           # ACH_00 .. ACH_60
 
 
 def can_read(filename: str, data: bytes) -> bool:
@@ -36,23 +38,21 @@ def can_read(filename: str, data: bytes) -> bool:
 def read(filename: str, data: bytes) -> dict:
     if not can_read(filename, data):
         raise ValueError("not a FINAL FANTASY VII REBIRTH save slot")
-    flags = struct.unpack_from("<I", data, FLAGS_AT)[0]
-    if not flags & 0x8000:
-        # Every slot examined has this bit set; a file without it is not laid out the way this
-        # reader assumes (an empty slot, or a different version of the game).
+    flags = struct.unpack_from("<Q", data, EARNED_AT)[0]
+    if flags >> ACHIEVEMENTS:
+        # Bits past the last achievement have never been seen set. If they are, this file is not
+        # laid out the way the reader assumes (another version of the game, perhaps) and nothing
+        # read from it should be believed.
         raise ValueError("this save is not laid out the way the reader expects")
     return {
         "SectionSize": struct.unpack_from("<I", data, 4)[0],
-        "StoryFlags": flags,
-        "ChaptersCompleted": [n for n in range(1, CHAPTERS + 1) if flags >> n & 1],
-        # Changes exactly when the chapter does; what the number itself means is not known.
-        "ProgressId": struct.unpack_from("<I", data, PROGRESS_ID_AT)[0],
+        "AchievementFlags": flags,
+        "AchievementsEarned": [n for n in range(ACHIEVEMENTS) if flags >> n & 1],
     }
 
 
 def achievements(values: dict) -> dict:
-    """ACH_01 .. ACH_14 are "Complete Chapter 1" .. "Complete Chapter 14". Nothing else is judged."""
-    done = values.get("ChaptersCompleted")
-    if not isinstance(done, list):
+    earned = values.get("AchievementsEarned")
+    if not isinstance(earned, list):
         return {}
-    return {"ACH_%02d" % n: n in done for n in range(1, CHAPTERS + 1)}
+    return {"ACH_%02d" % n: n in earned for n in range(ACHIEVEMENTS)}

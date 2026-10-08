@@ -9,6 +9,7 @@ and a way to test. It assumes the reader has never heard of AchTrack.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -63,7 +64,8 @@ def hexdump(data: bytes, limit: int = 128) -> str:
 
 def describe(path: Path) -> str:
     data = path.read_bytes()
-    out = [f"### {path.name}", f"size: {len(data):,} bytes"]
+    out = [f"### {path.name}", f"size: {len(data):,} bytes",
+           f"last written: {time.strftime('%Y-%m-%d %H:%M', time.localtime(path.stat().st_mtime))}"]
     known = [what for magic, what in SIGNATURES if data.startswith(magic)]
     out.append("starts like: " + (known[0] if known else "nothing AchTrack recognises"))
     bits = entropy(data)
@@ -175,6 +177,7 @@ def _instructions(game: str, appid: int, file_name: str, achievements: list, rep
                   skipped: list) -> str:
     listed = "\n".join(f"- `{a['api_name']}` - **{a['title']}**"
                        + (f" - {a['description']}" if a["description"] else " - (no description published)")
+                       + (f"  *(recorded {a['recorded_at']})*" if a.get("recorded_at") else "")
                        for a in achievements)
     modules = ", ".join(sorted(m for m in ALLOWED_MODULES if not m.startswith("_")))
     history_text = ("`saves/history/` holds older copies of the same files, one folder per moment in time "
@@ -246,6 +249,21 @@ is not evidence: the name of a region also appears in music tracks, dialogue and
 Where there are older copies of the save, use them to confirm: a value that was 0 before the
 player did something and 1 after is strong evidence. Say in a comment what each rule relies on.
 
+### A method that works when nothing in the save is named
+Some saves are bare numbers at fixed positions. The kit still gives you labelled evidence:
+
+- Every file in `saves/` has a "last written" time in `file_report.md` (the files keep their
+  original times too). Numbered slots are the same game at different moments.
+- `achievements.json` has `recorded_at` for each achievement the player already has: the moment
+  it was recorded. For one recorded by hand that is the end of the play session, so the real
+  moment is a little earlier - treat it as "no later than".
+
+Put the files in time order and look for a value that changes in step with the achievements:
+clear in every file written before an achievement, set in every file written after. A value that
+does this for several achievements in a row - a bit per chapter, say - is as good as a name. One
+that fits a single achievement is a coincidence until something else supports it. Say in the
+reader's comments exactly what you compared.
+
 Without an `achievements` function the reader still helps a little - AchTrack can suggest
 achievements for the player to confirm - but it will never unlock one by itself.
 
@@ -309,12 +327,17 @@ def build(db, cfg, backup_dir: Path, appid: int, out_root: Path) -> dict:
     if folder.exists():
         shutil.rmtree(folder)
     (folder / "saves").mkdir(parents=True)
-    copied, skipped, used = [], [], set()
+    copied, skipped, used, seen = [], [], set(), set()
     for real, _portable in found:
         base = os.path.basename(real)
         if os.path.getsize(real) > MAX_COPY:
             skipped.append(base)
             continue
+        with open(real, "rb") as handle:
+            digest = hashlib.sha1(handle.read()).hexdigest()
+        if digest in seen:                   # the same file, reached through a second folder
+            continue
+        seen.add(digest)
         target = base if base not in used else f"{len(used)}_{base}"
         used.add(target)
         shutil.copy2(real, folder / "saves" / target)
@@ -338,7 +361,10 @@ def build(db, cfg, backup_dir: Path, appid: int, out_root: Path) -> dict:
 
     achievements = [{"api_name": a["name"], "title": a["display_name"] or a["name"],
                      "description": a.get("description") or "", "hidden": bool(a.get("hidden")),
-                     "already_unlocked": bool(a.get("unlocked_at"))} for a in db.achievements(appid)]
+                     "already_unlocked": bool(a.get("unlocked_at")),
+                     "recorded_at": (time.strftime("%Y-%m-%d %H:%M", time.localtime(a["unlocked_at"]))
+                                     if a.get("unlocked_at") else None),
+                     "recorded_how": a.get("source") or None} for a in db.achievements(appid)]
     reports = [describe(p) for p in copied]
     file_name = f"{slug(name)}_reader.py"
     (folder / "achievements.json").write_text(json.dumps(achievements, indent=1, ensure_ascii=False), encoding="utf-8")

@@ -13,6 +13,7 @@ import ctypes
 import ctypes.util
 import os
 import re
+import shlex
 import struct
 import sys
 from dataclasses import dataclass
@@ -174,6 +175,11 @@ class _MacProcesses:
             k, sep, v = item.partition(b"=")
             if sep and k.decode("ascii", "replace") in ENV_KEYS:
                 env[k.decode()] = v.decode("utf-8", "surrogateescape")
+        if not any(a.lower().endswith(".exe") for a in args[:4]):
+            target, bottle = crossover_hosted(exe)
+            if target:                      # say what it really is, the way a plain Wine process does
+                args = [target] + args
+                env.setdefault("WINEPREFIX", bottle)
         return args, exe, env
 
     def cwd(self, pid: str) -> str:
@@ -212,6 +218,60 @@ def win_to_linux(arg: str, cwd: str, prefix: str) -> str | None:
     if path.startswith("/"):
         return path
     return os.path.join(cwd, path) if cwd else None
+
+
+EXE_IN_LNK = re.compile(rb"[A-Za-z]:\\[\x20-\x7e]{2,240}?\.exe", re.I)
+
+
+def shortcut_target(data: bytes) -> str:
+    """The program a Windows .lnk shortcut starts, as a Windows path - "" if it can't be found."""
+    found = [m.decode("ascii") for m in EXE_IN_LNK.findall(data)]
+    wide = data.decode("utf-16-le", "ignore")
+    found += re.findall(r"[A-Za-z]:\\[^\x00-\x1f\"<>|]{2,240}?\.exe", wide, re.I)
+    return found[0] if found else ""
+
+
+def crossover_hosted(exe: str) -> tuple:
+    """(Windows program, bottle) for a game started from one of CrossOver's launcher apps.
+
+    CrossOver makes a small .app per installed program and runs the game *as* that app, so the
+    dock shows the game's own name. The process then says nothing about what it is - its only
+    argument is the launcher. But the launcher's Info.plist names a script, the script names a
+    shortcut in the bottle, and the shortcut names the program.
+    """
+    cut = exe.find(".app/Contents/MacOS/")
+    if cut < 0:
+        return "", ""
+    try:
+        import plistlib
+        with open(exe[:cut] + ".app/Contents/Info.plist", "rb") as f:
+            command = plistlib.load(f).get("CrossOverHelperCommand") or ""
+    except (OSError, ValueError):
+        return "", ""
+    try:                                    # it is a command line, with the path in quotes
+        command = shlex.split(command)[0]
+    except (ValueError, IndexError):
+        return "", ""
+    where = command.find("/desktopdata/")
+    if where < 0:
+        return "", ""
+    bottle = command[:where]
+    data = _read(command)
+    target = ""
+    if data[:2] == b"#!":                                   # a script: wine --start "C:/…/Game.lnk"
+        text = data.decode("utf-8", "replace")
+        named = re.findall(r'"([A-Za-z]:[/\\][^"]+\.(?:lnk|exe))"', text, re.I)
+        for path in named:
+            if path.lower().endswith(".exe"):
+                target = path
+            else:
+                real = win_to_linux(path, "", bottle)
+                target = shortcut_target(_read(real)) if real else ""
+            if target:
+                break
+    else:
+        target = shortcut_target(data)
+    return target, bottle if target else ""
 
 
 def _prefix_of(proc: "_Proc") -> str:

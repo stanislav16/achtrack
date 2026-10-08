@@ -253,6 +253,8 @@ class Engine:
                                              req[3] if len(req) > 3 else "", True, True, True))
             elif kind == "not_playing" and req[1] in self.running:
                 self.end_session(req[1])
+            elif kind == "readers":
+                self.retry_unreadable()
             elif kind == "saves_backup":
                 self._start_saves(("backup", req[1] if len(req) > 1 else None, "", True))
             elif kind == "saves_restore" and len(req) > 2:
@@ -548,6 +550,27 @@ class Engine:
             match = appid in self.running or not self._is_shared(path)
             self._handle_save(path, appid, fmt, flat, self._read_snapshot(path, appid), match=match)
 
+    def retry_unreadable(self) -> int:
+        """Gives saves that couldn't be decoded another go - for when a reader has just been installed.
+
+        What the save already shows becomes suggestions for the review, not unlocks: there is no
+        telling when those things were earned. Changes seen from here on unlock as usual.
+        """
+        fixed = 0
+        for (path, appid), info in list(self.saves.items()):
+            if info.get("readable") or not os.path.exists(path):
+                continue
+            try:
+                fmt, flat = savefiles.load_save(path)
+            except (savefiles.Unreadable, OSError, ValueError, UnicodeError):
+                continue
+            self._handle_save(path, appid, fmt, flat, None)
+            log.info("%s is readable now (%s)", path, fmt)
+            fixed += 1
+        if fixed:
+            self.listener.on_changed()
+        return fixed
+
     def _handle_save(self, path: str, appid: int, fmt: str, flat: dict, old: dict | None, match: bool = True) -> None:
         st = os.stat(path)
         if match:
@@ -565,7 +588,49 @@ class Engine:
             cached = self._models[appid] = (key, matcher.build_models(rows))
         return cached[1]
 
+    def _apply_reader_rulings(self, appid: int, old: dict | None, new: dict) -> None:
+        """A save decoded by a reader you installed: go by what the reader states, not by resemblance.
+
+        Earned-since-we-last-looked unlocks. Earned-already-when-first-seen is only suggested, since
+        nothing says when it happened. A reader that states nothing can't unlock anything.
+        """
+        reader = new.get(savefiles.READER_KEY)
+        known = {name.lower(): name for name in self.db.achievement_names(appid)}
+        unlocked = self.db.unlocked_names(appid)
+        suggested = self.db.suggestions(appid)
+        rejected = {name for name, _key in self.db.rejections(appid)}
+        fresh = []
+        for key, value in new.items():
+            if key.startswith(savefiles.PROGRESS_KEY):
+                name = known.get(key[len(savefiles.PROGRESS_KEY):].lower())
+                current, _, target = str(value).partition("/")
+                if name and name not in unlocked:
+                    try:
+                        self.db.set_progress(appid, name, float(current), float(target))
+                    except ValueError:
+                        pass
+                continue
+            if not key.startswith(savefiles.RULING_KEY) or value is not True:
+                continue
+            name = known.get(key[len(savefiles.RULING_KEY):].lower())
+            if not name or name in unlocked or name in rejected:
+                continue
+            reason = f"{reader}: {name} = earned"
+            if old is not None and old.get(key) is False:          # it changed while we were watching
+                if self.db.add_unlock(appid, name, int(time.time()), SAVE, reason):
+                    fresh.append(name)
+            elif name not in suggested:
+                self.db.add_suggestion(appid, name, reason)
+        self.listener.on_changed()
+        for name in fresh:
+            log.info("unlocked %s / %s from save (%s)", appid, name, reader)
+            self.listener.on_unlock(self.unlock_event(appid, name))
+
     def _apply_save_matches(self, appid: int, old: dict | None, new: dict, first_time: bool = False) -> None:
+        if savefiles.READER_KEY in new:
+            if any(key.startswith(savefiles.RULING_KEY) for key in new) or len(new) > savefiles.FUZZY_LIMIT:
+                self._apply_reader_rulings(appid, old, new)
+                return
         models = self._achievement_models(appid)
         if not models:
             return
@@ -589,7 +654,8 @@ class Engine:
             if not m.satisfied:
                 continue
             # Only a clear change seen during play unlocks by itself; anything else is a suggestion.
-            if not baseline and m.confidence == "high":
+            # ...and never from a reader's save by resemblance alone: a reader that wants unlocks states them.
+            if not baseline and m.confidence == "high" and savefiles.READER_KEY not in new:
                 if self.db.add_unlock(appid, name, int(time.time()), SAVE, m.reason):
                     fresh.append(name)
             elif name not in suggested:

@@ -19,8 +19,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
                                QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSplitter, QStackedWidget,
                                QTabWidget, QVBoxLayout, QWidget)
 
-from . import __version__, descriptions, desktop, savesync, theme, updater
-from .config import APP_ICON, APP_NAME, BACKUP_DIR, POPUP_CORNERS, Config
+from . import __version__, descriptions, desktop, readerkit, readers, savesync, theme, updater
+from .config import APP_ICON, APP_NAME, BACKUP_DIR, DATA_DIR, POPUP_CORNERS, Config
 from .db import MANUAL, PSN, SAVE, SCREEN, STEAM, Database
 from .engine import build_unlock_event, needs_review
 from .notifier import ToastData, trophy_pixmap
@@ -1923,6 +1923,7 @@ class MainWindow(QMainWindow):
         lib.addSeparator()
         lib.addAction("Back up now", lambda: self.worker.request("backup"))
         lib.addAction("Back up every game's saves", lambda: self.backup_saves(None))
+        lib.addAction("Install a save reader…", self.install_reader)
         lib.addAction("Sync with my other machines", lambda: self.worker.request("sync"))
         lib.addAction("Build phone page", lambda: self.worker.request("export", bool(self.cfg.vercel_token)))
         lib.addSeparator()
@@ -2267,6 +2268,8 @@ class MainWindow(QMainWindow):
         menu.addAction("Review achievements…", lambda: self.open_review(appid))
         menu.addAction("Back up saves", lambda: self.backup_saves(appid))
         menu.addAction("Restore saves…", lambda: self.restore_saves(appid))
+        if any(not f["readable"] for f in self.db.save_files(appid)):
+            menu.addAction("Make a save-reader kit…", lambda: self.make_reader_kit(appid))
         after = menu.addMenu("After a session")
         group = QActionGroup(after)
         for label, value in (("Ask automatically (crack not recording)", None), ("Always ask what I earned", 1),
@@ -2335,6 +2338,47 @@ class MainWindow(QMainWindow):
                                          f"({fmt_size(done[0]['bytes'])}) to {where}.", 15000)
         else:
             self.statusBar().showMessage(f"Backed up the saves of {len(done)} games.", 15000)
+
+    def make_reader_kit(self, appid: int) -> None:
+        """Writes the brief for a save reader and shows where it is."""
+        try:
+            kit = readerkit.build(self.db, self.cfg, BACKUP_DIR, appid, DATA_DIR / "reader-kits")
+        except (ValueError, OSError) as e:
+            QMessageBox.information(self, APP_NAME, f"Couldn't make a reader kit: {e}.")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(kit["zip"])))
+        QMessageBox.information(
+            self, APP_NAME,
+            f"<p>The kit is ready - its folder is open:<br><b>{os.path.basename(kit['zip'])}</b></p>"
+            f"<p><b>1.</b> Give that zip to an AI assistant and say:<br><i>Read INSTRUCTIONS.md in the attached kit "
+            f"and do what it asks. Reply with the finished Python file.</i></p>"
+            f"<p><b>2.</b> Save its answer as <b>{kit['reader_file']}</b>.</p>"
+            f"<p><b>3.</b> Come back here: <b>Library → Install a save reader…</b></p>"
+            f"<p>The kit holds copies of this game's save files ({kit['files']} now"
+            + (f", and {kit['history']} older sets" if kit["history"] else "")
+            + "), its achievement list and the full instructions.</p>")
+
+    def install_reader(self) -> None:
+        """Checks a reader file someone wrote, installs it and re-reads the saves it understands."""
+        path, _ = QFileDialog.getOpenFileName(self, "Choose the save reader", os.path.expanduser("~/Downloads"),
+                                              "Python files (*.py)")
+        if not path:
+            return
+        try:
+            dest = readers.install(path)
+            reader = readers.Reader(dest)
+        except (readers.ReaderProblem, OSError, UnicodeError) as e:
+            box = QMessageBox(QMessageBox.Icon.Warning, APP_NAME, "This reader can't be installed.", parent=self)
+            box.setInformativeText("Copy the details back to whoever wrote it and ask for a corrected file.")
+            box.setDetailedText(str(e))
+            box.exec()
+            return
+        self.worker.request("readers")
+        extra = "" if reader.has_rules else (" It has no rules of its own, so it can only suggest achievements "
+                                             "for you to confirm, never unlock them.")
+        QMessageBox.information(self, APP_NAME,
+                                f"Installed the reader for <b>{reader.name}</b>. AchTrack is re-reading that game's "
+                                f"saves now; anything they already show will be in its review.{extra}")
 
     def check_updates(self) -> None:
         existing = getattr(self, "_update_dialog", None)

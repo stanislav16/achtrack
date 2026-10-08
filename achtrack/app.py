@@ -197,6 +197,8 @@ def run_gui(background: bool = False) -> int:
             appid = message.split(":", 1)[1].strip()
             if appid.lstrip("-").isdigit():
                 win.not_playing(int(appid))
+        elif message == "readers":
+            worker.request("readers")
         elif message == "rescan":
             worker.request("rescan")
         elif message == "quit":

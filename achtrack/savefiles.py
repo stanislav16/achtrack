@@ -27,11 +27,19 @@ import xml.etree.ElementTree as ET
 import zlib
 from pathlib import Path
 
-from . import formats
+from . import formats, readers
 
 MAX_SAVE_BYTES = 64 * 1024 * 1024
 MAX_FIELDS = 200_000
 MAX_LIST = 5_000
+
+
+# Kept in a decoded save next to its values when a reader made it: which reader, and what the
+# reader itself says about each achievement.
+READER_KEY = "__reader__"
+RULING_KEY = "__achievement__."
+PROGRESS_KEY = "__progress__."
+FUZZY_LIMIT = 1500      # above this many values, comparing names with descriptions is guesswork
 
 
 class Unreadable(Exception):
@@ -415,6 +423,17 @@ def load_save(path: str) -> tuple:
     data = Path(path).read_bytes()
     if not data:
         raise Unreadable("empty file")
+    theirs = readers.try_read(path, data)        # a reader you installed knows this game's format
+    if theirs:
+        name, values, rulings = theirs
+        flat = flatten(values)
+        flat[READER_KEY] = name
+        for api_name, ruling in (rulings or {}).items():
+            if isinstance(ruling, tuple):
+                flat[f"{PROGRESS_KEY}{api_name}"] = f"{ruling[0]}/{ruling[1]}"
+                ruling = ruling[1] > 0 and ruling[0] >= ruling[1]
+            flat[f"{RULING_KEY}{api_name}"] = bool(ruling)
+        return f"{name} (reader)", flat
     if data.startswith(b"SQLite format 3\0"):
         try:
             return "SQLite", flatten(formats.parse_sqlite(path))

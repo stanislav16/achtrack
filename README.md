@@ -121,6 +121,41 @@ they travel to your other devices and the phone page. Nothing on a page you past
 executed - it is read as text, once. Turn the automatic PlayStation lookup off in
 **Settings → Accounts**.
 
+## When a save can't be read: reader kits
+
+Some games keep their save in a format of their own. If the crack records nothing either, AchTrack
+has no way to see what you've earned - unless it is taught that one format. That is a small program
+called a **reader**, and AchTrack doesn't write it: it prepares everything someone else needs to.
+
+1. Right-click the game → **Make a save-reader kit…** (or `achtrack reader-kit "Game"`). You get
+   a zip holding copies of the game's saves - and older copies, to compare - its achievement
+   list, a first look at the bytes, a template, a tester and `INSTRUCTIONS.md`.
+2. Give the zip to any AI assistant: *"Read INSTRUCTIONS.md in the attached kit and do what it
+   asks. Reply with the finished Python file."* The instructions assume it has never heard of
+   AchTrack.
+3. **Library → Install a save reader…** and pick the file it wrote
+   (or `achtrack reader-install file.py`).
+
+A reader does two things: it decodes the save into named values, and it **states** which value
+proves which achievement. AchTrack acts on what is stated - a value going from false to true
+between two saves unlocks the achievement with the usual popup. What a save already shows when a
+reader is first installed is only suggested in the review, since nothing says when it happened.
+
+A reader is somebody else's code, so before it is ever run AchTrack checks it: it may import only
+a short list of standard modules and may not touch files, the network or other programs, and it
+runs with a time limit. If it fails the check you get the reason, to pass back to whoever wrote
+it. That is a seat belt rather than a guarantee - glance through a reader from a source you
+don't trust.
+
+`readers/hades_ii_reader.py` in this repository is a worked example, written from such a kit.
+
+```text
+achtrack reader-kit <game>            make the kit
+achtrack reader-test file.py [game]   check a reader and try it, without installing
+achtrack reader-install file.py       check it, install it, re-read the saves
+achtrack readers                      list what is installed
+```
+
 ## Moving saves between your machines
 
 Play on one machine, carry on on the other. Right-click a game → **Back up saves** on the machine

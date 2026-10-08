@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import logging.handlers
 import sys
 import time
@@ -334,6 +335,133 @@ def cmd_saves_restore(target: str, pick: int, listing: bool) -> int:
     return 0
 
 
+def cmd_reader_kit(target: str, out: str) -> int:
+    """Makes the brief for writing a save reader for one game."""
+    from .config import BACKUP_DIR, DATA_DIR, Config
+    from .db import Database
+    from . import readerkit
+
+    db = Database()
+    game = _one_game(db, target)
+    if game is None:
+        return 1
+    try:
+        kit = readerkit.build(db, Config.load(), BACKUP_DIR, game["appid"], Path(out).expanduser() if out else DATA_DIR / "reader-kits")
+    except ValueError as e:
+        print(e)
+        return 1
+    print(f"Reader kit for {game['name']}: {kit['files']} save files"
+          + (f", plus {kit['history']} older sets to compare" if kit["history"] else ""))
+    print(f"  folder: {kit['folder']}\n  zip:    {kit['zip']}")
+    print("\nGive the zip to an AI assistant with: \"Read INSTRUCTIONS.md in the attached kit and do what "
+          "it asks. Reply with the finished Python file.\"")
+    print(f"Save its answer as {kit['reader_file']}, then:  achtrack reader-install {kit['reader_file']}")
+    return 0
+
+
+def _try_reader(db, reader, appid: int | None) -> int:
+    """Runs a reader over the saves AchTrack knows, and says what it made of them."""
+    from . import readers, savefiles
+
+    rows = db.save_files(appid) if appid is not None else db.save_files()
+    decoded = 0
+    for row in rows:
+        path = row["path"]
+        if os.path.basename(path).lower() == "user.reg" or not os.path.isfile(path):
+            continue
+        data = Path(path).read_bytes()
+        if not reader.can_read(os.path.basename(path), data):
+            continue
+        try:
+            values = reader.read(os.path.basename(path), data)
+            flat = savefiles.flatten(values)
+        except readers.ReaderProblem as e:
+            print(f"  could not read {os.path.basename(path)}: {e}")
+            continue
+        decoded += 1
+        print(f"  {os.path.basename(path)}: {len(flat):,} values, for example:")
+        for key in list(flat)[:6]:
+            print(f"      {key} = {str(flat[key])[:60]}")
+        try:
+            rulings = reader.rules(values)
+        except readers.ReaderProblem as e:
+            print(f"      its achievements() failed: {e}")
+            continue
+        if rulings is None:
+            continue
+        game_of = row["appid"]
+        titles = {a["name"].lower(): a["display_name"] or a["name"] for a in db.achievements(game_of)}
+        earned = [n for n, v in rulings.items() if v is True or (isinstance(v, tuple) and v[1] > 0 and v[0] >= v[1])]
+        unknown = [n for n in rulings if n.lower() not in titles]
+        print(f"      it rules on {len(rulings)} achievements; earned in this file: "
+              + (", ".join(titles.get(n.lower(), n) for n in earned) or "none"))
+        if unknown:
+            print(f"      WARNING: these are not achievements of this game, so they will be ignored: {', '.join(unknown[:8])}")
+    return decoded
+
+
+def cmd_reader_test(file: str, target: str | None) -> int:
+    """Checks a save reader and tries it, without installing it."""
+    from .db import Database
+    from . import readers
+
+    db = Database()
+    appid = None
+    if target:
+        game = _one_game(db, target)
+        if game is None:
+            return 1
+        appid = game["appid"]
+    try:
+        reader = readers.Reader(Path(file).expanduser())
+    except (readers.ReaderProblem, OSError, UnicodeError) as e:
+        print(f"This reader is not acceptable:\n  {str(e).replace('; ', chr(10) + '  ')}")
+        return 1
+    print(f"The reader passes the checks. It calls itself \"{reader.name}\".")
+    if not reader.has_rules:
+        print("It has no achievements() function, so it can only suggest achievements, never unlock them.")
+    decoded = _try_reader(db, reader, appid)
+    print(f"It decoded {decoded} save file(s)." if decoded else
+          "It didn't recognise any save file AchTrack knows about - can_read() returned False for all of them.")
+    return 0 if decoded else 1
+
+
+def cmd_reader_install(file: str) -> int:
+    """Checks a save reader, installs it and re-reads the saves it understands."""
+    from .app import send_to_running
+    from .db import Database
+    from . import readers
+
+    try:
+        dest = readers.install(file)
+    except readers.ReaderProblem as e:
+        print(f"Not installed - this reader is not acceptable:\n  {str(e).replace(chr(10), chr(10) + '  ')}")
+        print("Give that message to whoever wrote it and ask for a corrected file.")
+        return 1
+    reader = readers.Reader(dest)
+    print(f"Installed \"{reader.name}\" as {dest}")
+    decoded = _try_reader(Database(), reader, None)
+    if not decoded:
+        print("It is installed, but it didn't recognise any save AchTrack knows about yet.")
+    if send_to_running("readers"):
+        print("AchTrack is re-reading those saves now. Anything they already show appears in the game's review.")
+    else:
+        print("Start AchTrack and it will use the reader.")
+    return 0
+
+
+def cmd_readers() -> int:
+    from . import readers
+
+    found = readers.installed()
+    print(f"Save readers in {readers.READERS_DIR}:")
+    for reader in found:
+        print(f"  {reader.name}  ({reader.path.name})")
+    if not found:
+        print("  none")
+    return 0
+
+
 def cmd_share(name: str, publish: bool, out: str) -> int:
     """Builds the page you send to friends."""
     from .config import Config
@@ -488,6 +616,15 @@ def main(argv=None) -> int:
     backup.add_argument("--restore", metavar="FILE", help="put a snapshot back instead")
     export = sub.add_parser("export", help="build the phone page from your library")
     export.add_argument("--deploy", action="store_true", help="also publish it to Vercel")
+    kit = sub.add_parser("reader-kit", help="make the brief for writing a save reader for a game")
+    kit.add_argument("game", help="appid or part of the name")
+    kit.add_argument("--out", default="", metavar="DIR", help="where to put it")
+    rtest = sub.add_parser("reader-test", help="check a save reader and try it, without installing")
+    rtest.add_argument("file")
+    rtest.add_argument("game", nargs="?", help="only try it on this game's saves")
+    rinstall = sub.add_parser("reader-install", help="check a save reader and install it")
+    rinstall.add_argument("file")
+    sub.add_parser("readers", help="list installed save readers")
     sbackup = sub.add_parser("saves-backup", help="pack a game's save files into the shared folder")
     sbackup.add_argument("game", nargs="?", help="appid or part of the name; default every game")
     srestore = sub.add_parser("saves-restore", help="put a backup of a game's saves in place here")
@@ -538,6 +675,14 @@ def main(argv=None) -> int:
         return cmd_backup(args.restore)
     if args.command == "export":
         return cmd_export(args.deploy)
+    if args.command == "reader-kit":
+        return cmd_reader_kit(args.game, args.out)
+    if args.command == "reader-test":
+        return cmd_reader_test(args.file, args.game)
+    if args.command == "reader-install":
+        return cmd_reader_install(args.file)
+    if args.command == "readers":
+        return cmd_readers()
     if args.command == "saves-backup":
         return cmd_saves_backup(args.game)
     if args.command == "saves-restore":

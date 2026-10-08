@@ -31,6 +31,7 @@ class Worker(QThread):
     error = Signal(str)
     described = Signal(int, object)
     shared = Signal(object)
+    saves = Signal(object)
 
     def __init__(self, cfg: Config):
         super().__init__()
@@ -71,6 +72,9 @@ class Worker(QThread):
 
     def on_shared(self, status: dict) -> None:
         self.shared.emit(status)
+
+    def on_saves(self, status: dict) -> None:
+        self.saves.emit(status)
 
 
 def send_to_running(message: str) -> bool:
@@ -215,6 +219,7 @@ def run_gui(background: bool = False) -> int:
     worker.error.connect(lambda msg: win.statusBar().showMessage(msg, 15000))
     worker.described.connect(win.described)
     worker.shared.connect(win.shared)
+    worker.saves.connect(win.saves_done)
     worker.start()
 
     if background:

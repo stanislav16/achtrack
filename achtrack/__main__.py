@@ -253,6 +253,87 @@ def cmd_heroic() -> int:
     return 0
 
 
+def _one_game(db, target: str):
+    wanted = target.strip().lower()
+    found = [r for r in db.q("SELECT appid, name FROM games WHERE appid > 0")
+             if wanted in (r["name"] or "").lower() or str(r["appid"]) == wanted]
+    exact = [r for r in found if (r["name"] or "").lower() == wanted or str(r["appid"]) == wanted]
+    found = exact or found
+    if len(found) != 1:
+        print(f"{'No' if not found else 'More than one'} game matches {target!r}"
+              + (": " + ", ".join(r["name"] or str(r["appid"]) for r in found[:6]) if found else ""))
+        return None
+    return found[0]
+
+
+def cmd_saves_backup(target: str | None) -> int:
+    """Packs save files into the folder your devices share."""
+    from .config import Config
+    from .db import Database
+    from .engine import Engine, Listener
+
+    db = Database()
+    engine = Engine(Config.load(), db, Listener())
+    appid = None
+    if target:
+        game = _one_game(db, target)
+        if game is None:
+            return 1
+        appid = game["appid"]
+    status = engine.saves_job(db, "backup", appid)
+    names = {r["appid"]: r["name"] for r in db.q("SELECT appid, name FROM games")}
+    for done in status["done"]:
+        print(f"{names.get(done['appid']) or done['appid']}: {done['files']} files, "
+              f"{done['bytes'] / 1024:.0f} KB -> {done['path']}")
+    if status["error"]:
+        print(status["error"])
+        return 1
+    if not status["done"]:
+        print("No save files known on this machine yet.")
+    return 0
+
+
+def cmd_saves_restore(target: str, pick: int, listing: bool) -> int:
+    """Puts a backup of a game's saves in place on this machine."""
+    import datetime
+    from .app import send_to_running
+    from .config import BACKUP_DIR, Config
+    from .db import Database
+    from .engine import Engine, Listener
+    from . import savesync
+
+    db = Database()
+    cfg = Config.load()
+    game = _one_game(db, target)
+    if game is None:
+        return 1
+    found = [b for b in savesync.backups(cfg, BACKUP_DIR, game["appid"]) if not b["pending"]]
+    if not found:
+        print(f"No backups of {game['name']} to restore.")
+        return 1
+    for number, entry in enumerate(found, 1):
+        when = datetime.datetime.fromtimestamp(entry["created"]).strftime("%Y-%m-%d %H:%M")
+        note = f" ({entry['note']})" if entry["note"] else ""
+        print(f"  {number}. {entry['device_name'] or entry['device']}  {when}  {entry['files']} files{note}")
+    if listing:
+        return 0
+    if not 1 <= pick <= len(found):
+        print(f"There is no backup number {pick}.")
+        return 1
+    if game["appid"] in db.open_sessions():
+        print("The game is running - quit it first, or it will overwrite what is restored.")
+        return 1
+    status = Engine(cfg, db, Listener()).saves_job(db, "restore", game["appid"], found[pick - 1]["path"])
+    if status["error"]:
+        print(f"Not restored: {status['error']}")
+        return 1
+    done = status["done"][0]
+    print(f"Restored {done['files']} files from backup {pick}."
+          + (" Your previous saves were backed up first." if done["safety"] else ""))
+    send_to_running("rescan")
+    return 0
+
+
 def cmd_share(name: str, publish: bool, out: str) -> int:
     """Builds the page you send to friends."""
     from .config import Config
@@ -407,6 +488,12 @@ def main(argv=None) -> int:
     backup.add_argument("--restore", metavar="FILE", help="put a snapshot back instead")
     export = sub.add_parser("export", help="build the phone page from your library")
     export.add_argument("--deploy", action="store_true", help="also publish it to Vercel")
+    sbackup = sub.add_parser("saves-backup", help="pack a game's save files into the shared folder")
+    sbackup.add_argument("game", nargs="?", help="appid or part of the name; default every game")
+    srestore = sub.add_parser("saves-restore", help="put a backup of a game's saves in place here")
+    srestore.add_argument("game", help="appid or part of the name")
+    srestore.add_argument("--pick", type=int, default=1, help="which backup, by its number (default the newest)")
+    srestore.add_argument("--list", action="store_true", help="only show the backups there are")
     sub.add_parser("heroic", help="add Heroic's installed games, using Steam's achievement lists")
     sharing = sub.add_parser("share", help="build the statistics page you send to friends")
     sharing.add_argument("--name", default="", help="the name shown on the page")
@@ -451,6 +538,10 @@ def main(argv=None) -> int:
         return cmd_backup(args.restore)
     if args.command == "export":
         return cmd_export(args.deploy)
+    if args.command == "saves-backup":
+        return cmd_saves_backup(args.game)
+    if args.command == "saves-restore":
+        return cmd_saves_restore(args.game, args.pick, args.list)
     if args.command == "heroic":
         return cmd_heroic()
     if args.command == "share":

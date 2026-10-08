@@ -121,6 +121,31 @@ they travel to your other devices and the phone page. Nothing on a page you past
 executed - it is read as text, once. Turn the automatic PlayStation lookup off in
 **Settings → Accounts**.
 
+## Moving saves between your machines
+
+Play on one machine, carry on on the other. Right-click a game → **Back up saves** on the machine
+that has them, and **Restore saves…** on the other. You never point at a folder: AchTrack knows
+which prefix or CrossOver bottle each game runs in on each machine, and which files the game writes.
+
+- A backup is made automatically each time you stop playing (Settings → Devices), into the folder
+  your devices already share, so it travels the same way your library does.
+- Restoring is always something you ask for. The saves already on that machine are backed up first,
+  so a restore can be taken back from the same list. It is refused while the game is running.
+- Paths are stored relative to what they belong to - the Windows user's folder, the shared Public
+  folder, the game's own folder - so a save from `…/Heroic/Prefixes/Game/…/users/steamuser/` lands
+  in `…/CrossOver/Game/…/users/crossover/` without either machine knowing about the other.
+- A crack's stand-in for Steam Cloud (its `remote` folder) is carried too. Achievement files are
+  not - unlocks already sync - and neither are settings that describe one machine's screen.
+
+A game has to have been started once on a machine before saves can be restored there; that is how
+AchTrack learns where it lives. The five newest backups per machine are kept for each game.
+
+```text
+achtrack saves-backup [game]             back up one game's saves, or every game's
+achtrack saves-restore <game> --list     show the backups there are
+achtrack saves-restore <game> --pick 2   restore one of them (default the newest)
+```
+
 ## Sharing your statistics
 
 **Library → Share my statistics…**, or `achtrack share`. It builds one self-contained HTML file -

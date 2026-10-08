@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import backup, descriptions, export, matcher, psn, savefiles, scanner, share, steam_api, sync
+from . import backup, descriptions, export, matcher, psn, savefiles, savesync, scanner, share, steam_api, sync
 from .config import BACKUP_DIR, CACHE_DIR, EXPORT_DIR, SHARE_DIR, Config
 from .db import PSN, SAVE, SCREEN, STEAM, Database
 from .emulators import parse_file
@@ -44,6 +44,7 @@ class Listener:
     def on_error(self, message: str) -> None: ...
     def on_described(self, appid: int, status: dict) -> None: ...
     def on_shared(self, status: dict) -> None: ...
+    def on_saves(self, status: dict) -> None: ...
 
 
 @dataclass
@@ -124,6 +125,8 @@ class Engine:
         self._describe_queue: deque = deque()
         self._describe_thread: threading.Thread | None = None
         self._share_thread: threading.Thread | None = None
+        self._saves_thread: threading.Thread | None = None
+        self._saves_queue: deque = deque()
         self._export_thread: threading.Thread | None = None
         self._next_beat = 0.0
         self._force_psn = False
@@ -250,6 +253,10 @@ class Engine:
                                              req[3] if len(req) > 3 else "", True, True, True))
             elif kind == "not_playing" and req[1] in self.running:
                 self.end_session(req[1])
+            elif kind == "saves_backup":
+                self._start_saves(("backup", req[1] if len(req) > 1 else None, "", True))
+            elif kind == "saves_restore" and len(req) > 2:
+                self._start_saves(("restore", req[1], req[2], True))
             elif kind == "share":
                 self._start_share(req[1] if len(req) > 1 else "", bool(req[2]) if len(req) > 2 else False)
             elif kind == "icons" and self.db.game(req[1]) is not None:
@@ -610,6 +617,8 @@ class Engine:
         self.listener.on_changed()      # the library should stop saying "playing now" now
         if self.cfg.export_auto:
             self._start_export()
+        if self.cfg.saves_auto_backup and appid > 0:
+            self._start_saves(("backup", appid, "", False))
 
     def end_session(self, appid: int) -> None:
         """You said you're not playing: close the session and ignore whatever is still matching.
@@ -643,6 +652,64 @@ class Engine:
 
         self._export_thread = threading.Thread(target=work, name="achtrack-export", daemon=True)
         self._export_thread.start()
+
+    def _start_saves(self, job: tuple) -> None:
+        """Save backups and restores copy files about, so they queue up on their own thread."""
+        self._saves_queue.append(job)
+        if self._saves_thread is not None and self._saves_thread.is_alive():
+            return
+
+        def work():
+            db = Database(self.db.path)
+            while self._saves_queue:
+                action, appid, archive, announce = self._saves_queue.popleft()
+                try:
+                    status = self.saves_job(db, action, appid, archive)
+                except Exception:
+                    log.exception("save %s crashed", action)
+                    status = {"action": action, "appid": appid, "error": "it failed - see the log", "done": []}
+                if status.get("done") and action == "backup":
+                    self._next_sync = 0.0              # send it to the shared folder now
+                if announce:
+                    self.listener.on_saves(status)
+                elif status.get("done"):
+                    self.listener.on_changed()
+
+        self._saves_thread = threading.Thread(target=work, name="achtrack-saves", daemon=True)
+        self._saves_thread.start()
+
+    def saves_job(self, db: Database, action: str, appid: int | None, archive: str = "") -> dict:
+        """Backs up one game's saves (or every game's, with no appid), or restores a backup."""
+        status = {"action": action, "appid": appid, "error": "", "done": [], "skipped": []}
+        device = (sync.device_id(db), sync.device_name(db))
+        if action == "restore":
+            if appid in self.running:
+                status["error"] = "the game is running - quit it first, or it will overwrite what is restored"
+                return status
+            try:
+                result = savesync.restore(db, self.cfg, BACKUP_DIR, appid, archive, device)
+            except (savesync.SaveSyncError, OSError) as e:
+                status["error"] = str(e)
+                return status
+            status["done"].append({"appid": appid, **result})
+            log.info("restored %s save files for %s from %s", result["files"], appid, result["from"])
+            return status
+        targets = [appid] if appid is not None else \
+            sorted({r["appid"] for r in db.save_files()} | {r["appid"] for r in db.q("SELECT appid FROM sources")})
+        for target in targets:
+            if target is None or target < 0:
+                continue
+            try:
+                result = savesync.backup(db, self.cfg, BACKUP_DIR, target, device)
+            except (savesync.SaveSyncError, OSError) as e:
+                if appid is not None:
+                    status["error"] = str(e)
+                else:
+                    status["skipped"].append(target)
+                continue
+            status["done"].append({"appid": target, **result})
+            log.info("backed up %s save files for %s", result["files"], target)
+        return status
 
     def _start_share(self, name: str, publish: bool) -> None:
         """Building the page reads the library and may upload it, so it gets its own thread too."""
@@ -1188,6 +1255,11 @@ class Engine:
                 self.db.update_game(appid, hidden=0)
             run = self.running[appid] = _Running(self.db.start_session(appid, int(now)), now, now)
             run.prefix = self.monitor.prefixes.get(appid) or self._prefix_from_sources(appid)
+            if run.prefix:      # remembered per machine: it is how a save backup finds its way home
+                known = dict(self.db.get_meta("prefixes") or {})
+                if known.get(str(appid)) != run.prefix:
+                    known[str(appid)] = run.prefix
+                    self.db.set_meta("prefixes", known)
             run.game_dir = game_dir or game["game_dir"]
             run.next_save_scan = now + SAVE_SCAN_EVERY
             if self.cfg.save_detection:

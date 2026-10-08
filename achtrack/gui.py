@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
                                QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSplitter, QStackedWidget,
                                QTabWidget, QVBoxLayout, QWidget)
 
-from . import __version__, descriptions, desktop, theme, updater
+from . import __version__, descriptions, desktop, savesync, theme, updater
 from .config import APP_ICON, APP_NAME, BACKUP_DIR, POPUP_CORNERS, Config
 from .db import MANUAL, PSN, SAVE, SCREEN, STEAM, Database
 from .engine import build_unlock_event, needs_review
@@ -979,6 +979,109 @@ class UpdateDialog(QDialog):
         super().closeEvent(event)
 
 
+def fmt_size(count: int) -> str:
+    return f"{count / 1024:.0f} KB" if count < 1024 * 1024 else f"{count / 1024 / 1024:.1f} MB"
+
+
+class RestoreSavesDialog(QDialog):
+    """Pick a backup of a game's saves - from this machine or another - and put it in place."""
+
+    def __init__(self, win: "MainWindow", appid: int):
+        super().__init__(win)
+        self.win = win
+        self.appid = appid
+        game = win.db.game(appid)
+        self.name = (game["name"] if game is not None else "") or f"App {appid}"
+        self.setWindowTitle(f"Restore saves - {self.name}")
+        self.setMinimumWidth(560)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 20, 22, 16)
+        lay.setSpacing(12)
+        title = QLabel(f"Restore saves for {self.name}")
+        title.setStyleSheet("font-size: 19px; font-weight: 650;")
+        title.setWordWrap(True)
+        lay.addWidget(title)
+        self.hint = QLabel("")
+        self.hint.setObjectName("Hint")
+        self.hint.setWordWrap(True)
+        lay.addWidget(self.hint)
+        self.list = QListWidget()
+        self.list.setMinimumHeight(190)
+        self.list.setStyleSheet(
+            f"QListWidget {{ background: {P['field']}; border: 1px solid {P['hair']}; border-radius: 10px;"
+            f" padding: 4px; outline: 0; }}"
+            f"QListWidget::item {{ padding: 9px 10px; border-radius: 7px; color: {P['text2']}; }}"
+            f"QListWidget::item:selected {{ background: {P['sel']}; color: {P['text']}; }}"
+            f"QListWidget::item:disabled {{ color: {P['muted']}; }}")
+        self.list.itemSelectionChanged.connect(self._selected)
+        lay.addWidget(self.list, 1)
+        row = QHBoxLayout()
+        refresh = QPushButton("Look again")
+        refresh.clicked.connect(self.load)
+        row.addWidget(refresh)
+        row.addStretch(1)
+        close = QPushButton("Close")
+        close.clicked.connect(self.reject)
+        row.addWidget(close)
+        self.go = QPushButton("Restore")
+        self.go.setObjectName("Primary")
+        self.go.clicked.connect(self.restore)
+        row.addWidget(self.go)
+        lay.addLayout(row)
+        self.load()
+
+    def load(self) -> None:
+        self.list.clear()
+        mine = (self.win.db.get_meta("device") or {}).get("id", "")
+        found = savesync.backups(self.win.cfg, BACKUP_DIR, self.appid)
+        for entry in found:
+            if entry["pending"]:
+                item = QListWidgetItem(f"{entry['name']}  ·  still downloading from iCloud")
+                item.setFlags(Qt.ItemFlag.NoItemFlags)
+            else:
+                who = "This machine" if entry["device"] == mine else (entry["device_name"] or "Another machine")
+                when = datetime.fromtimestamp(entry["created"]).strftime("%-d %b %Y, %H:%M")
+                note = f"  ·  {entry['note']}" if entry["note"] else ""
+                item = QListWidgetItem(f"{who}  ·  {when}  ·  {entry['files']} files, {fmt_size(entry['bytes'])}{note}")
+                item.setData(Qt.ItemDataRole.UserRole, entry["path"])
+            self.list.addItem(item)
+        usable = [i for i in range(self.list.count()) if self.list.item(i).data(Qt.ItemDataRole.UserRole)]
+        if usable:
+            self.list.setCurrentRow(usable[0])
+            self.hint.setText("Newest first. The saves on this machine are backed up before anything is "
+                              "replaced, so a restore can be taken back from this same list.")
+        elif found:
+            self.hint.setText("A backup exists but hasn't finished downloading. Give it a moment and look again.")
+        else:
+            where = "the folder your devices share" if self.win.cfg.sync_dir.strip() else "this machine"
+            self.hint.setText(f"No backups of this game in {where} yet. On the machine that has the saves, "
+                              f"right-click the game and choose Back up saves - or just play it there, "
+                              f"since a backup is made each time you stop.")
+        self._selected()
+
+    def _selected(self) -> None:
+        item = self.list.currentItem()
+        self.go.setEnabled(bool(item is not None and item.data(Qt.ItemDataRole.UserRole)))
+
+    def restore(self) -> None:
+        item = self.list.currentItem()
+        if item is None or not item.data(Qt.ItemDataRole.UserRole):
+            return
+        self.go.setEnabled(False)
+        self.hint.setText("Restoring…")
+        self.win.worker.request("saves_restore", self.appid, item.data(Qt.ItemDataRole.UserRole))
+
+    def finished_restore(self, status: dict) -> None:
+        if status["error"]:
+            self.hint.setText(f"<b>Not restored:</b> {status['error']}.")
+            self._selected()
+            return
+        done = status["done"][0]
+        kept = " Your previous saves were backed up first and are in this list." if done["safety"] else ""
+        self.load()
+        self.hint.setText(f"<b>Restored {done['files']} files</b> from {done['from'] or 'the backup'}.{kept}")
+
+
 class ShareDialog(QDialog):
     """Builds the page you send to friends - as a file, or as a link."""
 
@@ -1504,6 +1607,11 @@ class SettingsDialog(QDialog):
         self.sync_push = QLineEdit(cfg.sync_push_command)
         self.sync_push.setPlaceholderText("Optional, after writing, e.g. rclone copy {dir} icloud:AchTrack")
         devices.addRow("Upload command", self.sync_push)
+        self.saves_auto = QCheckBox("Back up a game's save files to this folder when I stop playing")
+        self.saves_auto.setChecked(cfg.saves_auto_backup)
+        self.saves_auto.setToolTip("So the other machine can pick up where you left off. Restoring is "
+                                   "always something you ask for - right-click a game.")
+        devices.addRow("", self.saves_auto)
         self.device_status = self._status(devices, device_sync_text(parent.db.get_meta("sync")))
         self._status(devices, "Point every machine at the same folder. Unlocks from all of them are combined, "
                               "play time takes the highest per source, and anything you undo stays undone.")
@@ -1592,6 +1700,7 @@ class SettingsDialog(QDialog):
 
     def _devices_now(self) -> None:
         self.win.cfg.sync_dir = self.sync_dir.text().strip()
+        self.win.cfg.saves_auto_backup = self.saves_auto.isChecked()
         self.win.cfg.sync_pull_command = self.sync_pull.text().strip()
         self.win.cfg.sync_push_command = self.sync_push.text().strip()
         self.win.worker.request("sync")
@@ -1651,6 +1760,7 @@ class SettingsDialog(QDialog):
         cfg.publish_command = self.publish_command.text().strip()
         cfg.sync_command = self.sync_command.text().strip()
         cfg.sync_dir = self.sync_dir.text().strip()
+        cfg.saves_auto_backup = self.saves_auto.isChecked()
         cfg.sync_pull_command = self.sync_pull.text().strip()
         cfg.sync_push_command = self.sync_push.text().strip()
         cfg.scan_dirs = [line.strip() for line in self.dirs.toPlainText().splitlines() if line.strip()]
@@ -1812,6 +1922,7 @@ class MainWindow(QMainWindow):
         lib.addAction("Add Heroic's installed games", lambda: self.worker.request("rescan"))
         lib.addSeparator()
         lib.addAction("Back up now", lambda: self.worker.request("backup"))
+        lib.addAction("Back up every game's saves", lambda: self.backup_saves(None))
         lib.addAction("Sync with my other machines", lambda: self.worker.request("sync"))
         lib.addAction("Build phone page", lambda: self.worker.request("export", bool(self.cfg.vercel_token)))
         lib.addSeparator()
@@ -2154,6 +2265,8 @@ class MainWindow(QMainWindow):
         if appid in self.running:
             menu.addAction("I'm not playing this — end the session", lambda: self.not_playing(appid))
         menu.addAction("Review achievements…", lambda: self.open_review(appid))
+        menu.addAction("Back up saves", lambda: self.backup_saves(appid))
+        menu.addAction("Restore saves…", lambda: self.restore_saves(appid))
         after = menu.addMenu("After a session")
         group = QActionGroup(after)
         for label, value in (("Ask automatically (crack not recording)", None), ("Always ask what I earned", 1),
@@ -2191,6 +2304,37 @@ class MainWindow(QMainWindow):
 
     def open_settings(self) -> None:
         SettingsDialog(self).exec()
+
+    def backup_saves(self, appid: int | None = None) -> None:
+        self.statusBar().showMessage("Backing up save files…", 20000)
+        self.worker.request("saves_backup", appid)
+
+    def restore_saves(self, appid: int) -> None:
+        self._restore_dialog = RestoreSavesDialog(self, appid)
+        self._restore_dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self._restore_dialog.destroyed.connect(lambda *_: setattr(self, "_restore_dialog", None))
+        self._restore_dialog.show()
+
+    def saves_done(self, status: dict) -> None:
+        """A save backup or restore the engine has finished."""
+        if status["action"] == "restore":
+            dialog = getattr(self, "_restore_dialog", None)
+            if dialog is not None:
+                dialog.finished_restore(status)
+            self.reload(force=True)
+            return
+        done = status["done"]
+        if status["error"]:
+            QMessageBox.information(self, APP_NAME, f"Couldn't back up the saves: {status['error']}.")
+        elif not done:
+            self.statusBar().showMessage("No save files to back up yet - AchTrack learns where a game "
+                                         "keeps them the first time you play and save.", 15000)
+        elif len(done) == 1:
+            where = "the shared folder" if self.cfg.sync_dir.strip() else "your backups folder"
+            self.statusBar().showMessage(f"Backed up {done[0]['files']} save files "
+                                         f"({fmt_size(done[0]['bytes'])}) to {where}.", 15000)
+        else:
+            self.statusBar().showMessage(f"Backed up the saves of {len(done)} games.", 15000)
 
     def check_updates(self) -> None:
         existing = getattr(self, "_update_dialog", None)

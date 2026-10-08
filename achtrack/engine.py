@@ -127,6 +127,8 @@ class Engine:
         self._share_thread: threading.Thread | None = None
         self._saves_thread: threading.Thread | None = None
         self._saves_queue: deque = deque()
+        self._art_tried: set = set()
+        self._art_checked = False
         self._export_thread: threading.Thread | None = None
         self._next_beat = 0.0
         self._force_psn = False
@@ -194,6 +196,9 @@ class Engine:
                 if self.cfg.backup_daily and time.time() >= self._next_backup:
                     self._next_backup = time.time() + 86400
                     self.run_backup()
+                if not self._art_checked:
+                    self._art_checked = True
+                    self.fetch_missing_art()
                 if time.time() >= self._next_beat:
                     self._next_beat = time.time() + 10
                     seen = getattr(self.monitor, "seen", {}) if self.monitor else {}
@@ -414,6 +419,22 @@ class Engine:
         refs = [r["icon"] for r in rows] + [r["icon_gray"] for r in rows]
         if any(ref and not steam_api.cached_icon(appid, ref) for ref in refs):
             self._prefetch_icons(appid, refs)
+
+    def fetch_missing_art(self) -> int:
+        """Downloads banners this machine knows the address of but has never fetched.
+
+        A game that arrives through device sync brings its details with it, so nothing here ever
+        looked it up - and looking it up was the only thing that downloaded its banner.
+        """
+        wanted = 0
+        for row in self.db.q("SELECT appid, header_url FROM games WHERE header_url IS NOT NULL AND header_url != ''"):
+            key = (row["appid"], row["header_url"])
+            if key in self._art_tried or steam_api.cached_icon(row["appid"], row["header_url"]):
+                continue
+            self._art_tried.add(key)               # once per run: a dead address shouldn't be retried forever
+            self._prefetch_icons(row["appid"], [row["header_url"]])
+            wanted += 1
+        return wanted
 
     def _prefetch_icons(self, appid: int, refs: list) -> None:
         refs = [r for r in refs if r]
@@ -937,6 +958,7 @@ class Engine:
         elif status["unlocks"] or status["games"] or status["removed"] or status["updated"]:
             log.info("device sync: %s", status)
             self.listener.on_changed()
+        self.fetch_missing_art()
         return status
 
     def import_heroic(self, db: Database | None = None, note=None) -> dict:

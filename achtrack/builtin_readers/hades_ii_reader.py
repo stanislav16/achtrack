@@ -141,19 +141,36 @@ def read(filename: str, data: bytes) -> dict:
     return out
 
 
-def achievements(values: dict) -> dict:
-    """Only what one value settles. Everything else is left for the player to tick.
+# The names Steam gives the game's achievements, which are also the names the game uses itself.
+ACHIEVEMENTS = (
+    "AchClearErebus", "AchClearOceanus", "AchClearFields", "AchClearTartarus",
+    "AchClearEphyra", "AchClearThessaly", "AchClearOlympus", "AchClearSummit",
+    "AchCauldronSpells1", "AchBathHouse", "AchFishingPier", "AchTaverna",
+    "AchForgeBonds", "AchProphecies1", "AchMaxMem", "AchAllArcana",
+    "AchAllArcanaMax", "AchAllWeapons", "AchAllAspects", "AchConfideFrinos",
+    "AchAllFamiliars", "AchAllFamiliarsMax", "AchEarnPrestige1", "AchAllKeepsakes",
+    "AchBounties1", "AchAllRandomStreak", "AchAllRandomUnderworld", "AchBeatHecateNoArcana",
+    "AchHelpOdysseus", "AchHelpDora", "AchHelpHypnos", "AchHelpArachne",
+    "AchHelpNarcissusAndEcho", "AchCatchFish", "AchBeatRivalsVow1", "AchBeatTyphonWithWeapons",
+    "AchBeatChronosWithArcana", "AchClearWithAllAspects", "AchClearChaosQuest", "AchNemesisCombat",
+    "AchFamiliarCostumes", "AchKillWitchAsSheep", "AchSummonSiren", "AchTartarusInDress",
+    "AchEarnStatue1", "AchEarnStatue2", "AchWinSecretContest", "AchTrueEnding",
+    "AchEpilogue", "AchAllOtherAch",
+)
 
-    AchClearErebus ("Clear Erebus"): the guardian of Erebus is Hecate, and the save counts her
-    defeats in GameState.EnemyKills.Hecate. Confirmed against this player's own saves: 0 in every
-    copy made while only Erebus (biome F) had been visited, 1 in the first copy where Oceanus
-    (biome G) had been reached.
+
+def achievements(values: dict) -> dict:
+    """Read from the game's own record, GameState.AchievementsUnlocked.
+
+    The game adds an entry there, under the achievement's own name, when it awards one - the
+    table does not exist at all in a save from before the first award. Seen in one player's
+    saves: absent in every copy made while nothing had been earned, and holding exactly
+    AchClearErebus in the first copy after the guardian of Erebus was defeated (her defeat count
+    in GameState.EnemyKills going from 0 to 1 in that same save).
     """
     state = values.get("GameState")
     if not isinstance(state, dict):
         return {}
-    kills = state.get("EnemyKills")
-    kills = kills if isinstance(kills, dict) else {}
-    return {
-        "AchClearErebus": kills.get("Hecate", 0) >= 1,
-    }
+    record = state.get("AchievementsUnlocked")
+    record = record if isinstance(record, dict) else {}
+    return {name: record.get(name) is True for name in ACHIEVEMENTS}

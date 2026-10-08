@@ -133,8 +133,8 @@ called a **reader**, and AchTrack doesn't write it: it prepares everything someo
 2. Give the zip to any AI assistant: *"Read INSTRUCTIONS.md in the attached kit and do what it
    asks. Reply with the finished Python file."* The instructions assume it has never heard of
    AchTrack.
-3. **Library → Install a save reader…** and pick the file it wrote
-   (or `achtrack reader-install file.py`).
+3. **Library → Save readers…** → **Install from a file…** and pick the file it wrote, or drop
+   it on that window. The same window lists the readers you have, removes one, and makes kits.
 
 A reader does two things: it decodes the save into named values, and it **states** which value
 proves which achievement. AchTrack acts on what is stated - a value going from false to true
@@ -147,7 +147,9 @@ runs with a time limit. If it fails the check you get the reason, to pass back t
 it. That is a seat belt rather than a guarantee - glance through a reader from a source you
 don't trust.
 
-`readers/hades_ii_reader.py` in this repository is a worked example, written from such a kit.
+Only readers you install are ever used. A reader for Hades II, written from such a kit, comes
+with AchTrack as an option: it is listed in the Save readers window as not installed, and does
+nothing until you install it there.
 
 ```text
 achtrack reader-kit <game>            make the kit

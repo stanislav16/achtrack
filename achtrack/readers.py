@@ -36,6 +36,7 @@ from .config import DATA_DIR
 log = logging.getLogger(__name__)
 
 READERS_DIR = DATA_DIR / "readers"
+BUILTIN_DIR = Path(__file__).resolve().parent / "builtin_readers"     # offered, never used unasked
 TIME_LIMIT = 8.0
 ALLOWED_MODULES = {
     "struct", "zlib", "gzip", "bz2", "lzma", "json", "re", "io", "math", "base64", "binascii",
@@ -108,6 +109,7 @@ class Reader:
         except Exception as e:
             raise ReaderProblem(f"it failed while loading: {type(e).__name__}: {e}") from e
         self.name = str(space.get("NAME") or self.path.stem)
+        self.builtin = False
         self._can_read, self._read = space["can_read"], space["read"]
         self._rules = space.get("achievements") if callable(space.get("achievements")) else None
 
@@ -170,14 +172,20 @@ class Reader:
 _loaded: dict = {"stamp": None, "readers": []}
 
 
-def installed(folder: Path | None = None) -> list:
-    """The readers in the readers folder, reloaded when a file there changes."""
-    folder = Path(folder or READERS_DIR)
+def _files(folder: Path) -> list:
     try:
-        files = sorted(p for p in folder.glob("*.py") if not p.name.startswith("_"))
-        stamp = tuple((str(p), p.stat().st_mtime, p.stat().st_size) for p in files)
+        return sorted(p for p in Path(folder).glob("*.py") if not p.name.startswith("_"))
     except OSError:
         return []
+
+
+def installed(folder: Path | None = None) -> list:
+    """The readers you have installed - the only ones ever used. Reloaded when a file changes."""
+    files = _files(Path(folder or READERS_DIR))
+    try:
+        stamp = tuple((str(p), p.stat().st_mtime, p.stat().st_size) for p in files)
+    except OSError:
+        return _loaded["readers"]
     if stamp != _loaded["stamp"]:
         readers = []
         for path in files:
@@ -187,6 +195,30 @@ def installed(folder: Path | None = None) -> list:
                 log.warning("save reader %s was not loaded: %s", path.name, e)
         _loaded.update(stamp=stamp, readers=readers)
     return _loaded["readers"]
+
+
+def available(folder: Path | None = None) -> list:
+    """Readers that come with AchTrack and that you have not installed. They do nothing until you do."""
+    taken = {p.name for p in _files(Path(folder or READERS_DIR))}
+    out = []
+    for path in _files(BUILTIN_DIR):
+        if path.name in taken:
+            continue
+        try:
+            reader = Reader(path)
+            reader.builtin = True
+            out.append(reader)
+        except (ReaderProblem, OSError, UnicodeError) as e:
+            log.warning("bundled save reader %s is broken: %s", path.name, e)
+    return out
+
+
+def remove(reader) -> None:
+    """Takes out a reader you installed."""
+    try:
+        Path(reader.path).unlink()
+    except OSError as e:
+        raise ReaderProblem(f"couldn't remove it: {e}") from e
 
 
 def try_read(path: str, data: bytes) -> tuple | None:

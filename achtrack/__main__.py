@@ -432,6 +432,9 @@ def cmd_reader_install(file: str) -> int:
     from .db import Database
     from . import readers
 
+    bundled = readers.BUILTIN_DIR / f"{Path(file).stem}.py"
+    if not Path(file).expanduser().exists() and bundled.is_file():
+        file = str(bundled)                    # one that comes with AchTrack, asked for by name
     try:
         dest = readers.install(file)
     except readers.ReaderProblem as e:
@@ -454,11 +457,16 @@ def cmd_readers() -> int:
     from . import readers
 
     found = readers.installed()
-    print(f"Save readers in {readers.READERS_DIR}:")
+    print(f"Installed save readers ({readers.READERS_DIR}):")
     for reader in found:
         print(f"  {reader.name}  ({reader.path.name})")
     if not found:
         print("  none")
+    offered = readers.available()
+    if offered:
+        print("Come with AchTrack, not installed:")
+        for reader in offered:
+            print(f"  {reader.name}  ->  achtrack reader-install {reader.path.stem}")
     return 0
 
 

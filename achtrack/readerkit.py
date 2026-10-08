@@ -193,12 +193,13 @@ this folder alone.
 1. Give this whole folder (or the zip of it) to an AI assistant, and say:
    *"Read INSTRUCTIONS.md in the attached kit and do what it asks. Reply with the finished Python file."*
 2. Save the Python file it gives you as `{file_name}`.
-3. Install it: in AchTrack choose **Library → Install a save reader…** and pick the file. Or run:
-   `achtrack reader-install {file_name}`
+3. Install it: in AchTrack open **Library → Save readers…**, click **Install from a file…** and
+   pick the file - or drop the file onto that window.
 4. AchTrack checks the file, tries it on your saves and tells you what it found. If it says the
    reader is not acceptable, copy that message back to the assistant and ask it to fix the file.
 
-To try a reader without installing it: `achtrack reader-test {file_name} "{game}"`.
+There is a command for each step too, if you prefer a terminal: `achtrack reader-install {file_name}`,
+and `achtrack reader-test {file_name} "{game}"` to try a reader without installing it.
 
 ## If you are writing the reader - read all of this
 

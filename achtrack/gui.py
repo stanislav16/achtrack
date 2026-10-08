@@ -1082,6 +1082,170 @@ class RestoreSavesDialog(QDialog):
         self.hint.setText(f"<b>Restored {done['files']} files</b> from {done['from'] or 'the backup'}.{kept}")
 
 
+class ReadersDialog(QDialog):
+    """Save readers: what is installed, adding one from a file, removing one, making a kit."""
+
+    def __init__(self, win: "MainWindow"):
+        super().__init__(win)
+        self.win = win
+        self.setWindowTitle("Save readers")
+        self.setMinimumWidth(600)
+        self.setAcceptDrops(True)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 20, 22, 16)
+        lay.setSpacing(12)
+        title = QLabel("Save readers")
+        title.setStyleSheet("font-size: 19px; font-weight: 650;")
+        lay.addWidget(title)
+        hint = QLabel("A reader teaches AchTrack one game's save format, so achievements can unlock from the "
+                      "save when the game itself records nothing. Only the ones you install are used. To get "
+                      "one, make a kit for the game, give it to an AI assistant, and install the file it "
+                      "writes - here, or by dropping it on this window.")
+        hint.setObjectName("Hint")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+        self.list = QListWidget()
+        self.list.setMinimumHeight(170)
+        self.list.setStyleSheet(
+            f"QListWidget {{ background: {P['field']}; border: 1px solid {P['hair']}; border-radius: 10px;"
+            f" padding: 4px; outline: 0; }}"
+            f"QListWidget::item {{ padding: 9px 10px; border-radius: 7px; color: {P['text2']}; }}"
+            f"QListWidget::item:selected {{ background: {P['sel']}; color: {P['text']}; }}")
+        self.list.itemSelectionChanged.connect(self._selected)
+        lay.addWidget(self.list, 1)
+        self.result = QLabel("")
+        self.result.setWordWrap(True)
+        self.result.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.result.hide()
+        lay.addWidget(self.result)
+        row = QHBoxLayout()
+        kit = QPushButton("Make a kit for a game…")
+        kit.clicked.connect(self.make_kit)
+        row.addWidget(kit)
+        self.remove = QPushButton("Remove")
+        self.remove.clicked.connect(self.remove_selected)
+        row.addWidget(self.remove)
+        self.enable = QPushButton("Install this one")
+        self.enable.clicked.connect(lambda: self.install(str(self._current()[1].path)))
+        row.addWidget(self.enable)
+        row.addStretch(1)
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        row.addWidget(close)
+        add = QPushButton("Install from a file…")
+        add.setObjectName("Primary")
+        add.clicked.connect(self.pick_file)
+        row.addWidget(add)
+        lay.addLayout(row)
+        self.load()
+
+    def load(self) -> None:
+        self.list.clear()
+        self.rows = [("installed", r) for r in readers.installed()] + [("available", r) for r in readers.available()]
+        for kind, reader in self.rows:
+            ability = "unlocks from its own rules" if reader.has_rules else "can only suggest"
+            if kind == "installed":
+                self.list.addItem(f"{reader.name}  ·  installed  ·  {ability}")
+            else:
+                item = QListWidgetItem(f"{reader.name}  ·  comes with AchTrack, not installed  ·  {ability}")
+                item.setForeground(QColor(P["muted"]))
+                self.list.addItem(item)
+        if not self.rows:
+            item = QListWidgetItem("No readers yet.")
+            item.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.list.addItem(item)
+        self._selected()
+
+    def _current(self) -> tuple:
+        row = self.list.currentRow()
+        return self.rows[row] if 0 <= row < len(self.rows) else ("", None)
+
+    def _selected(self) -> None:
+        kind, _reader = self._current()
+        self.remove.setEnabled(kind == "installed")
+        self.enable.setVisible(kind == "available")
+
+    def _say(self, text: str) -> None:
+        self.result.setText(text)
+        self.result.show()
+        self.adjustSize()
+
+    def pick_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Choose the save reader", os.path.expanduser("~/Downloads"),
+                                              "Python files (*.py)")
+        if path:
+            self.install(path)
+
+    def install(self, path: str) -> None:
+        try:
+            reader = readers.Reader(readers.install(path))
+        except (readers.ReaderProblem, OSError, UnicodeError) as e:
+            problems = "".join(f"<li>{line}</li>" for line in str(e).replace("; ", "\n").split("\n") if line.strip())
+            self._say(f"<b>This reader can't be installed.</b> Copy this back to whoever wrote it and ask for a "
+                      f"corrected file:<ul style='margin-left:-18px'>{problems}</ul>")
+            return
+        decoded, earned = 0, set()
+        for row in self.win.db.save_files():
+            if os.path.basename(row["path"]).lower() == "user.reg" or not os.path.isfile(row["path"]):
+                continue
+            try:
+                with open(row["path"], "rb") as handle:
+                    data = handle.read()
+                if not reader.can_read(os.path.basename(row["path"]), data):
+                    continue
+                rulings = reader.rules(reader.read(os.path.basename(row["path"]), data)) or {}
+            except (readers.ReaderProblem, OSError):
+                continue
+            decoded += 1
+            earned |= {name for name, value in rulings.items() if value is True}
+        self.win.worker.request("readers")
+        self.load()
+        if not decoded:
+            understood = "It didn't recognise any save file AchTrack knows about yet - play the game once and it will be tried again."
+        else:
+            understood = f"It decoded {decoded} save file{'s' if decoded != 1 else ''}"
+            understood += (f" and finds {len(earned)} achievement{'s' if len(earned) != 1 else ''} already earned - "
+                           f"look in that game's review." if earned else ".")
+        limits = "" if reader.has_rules else " It has no rules of its own, so it can only suggest achievements, never unlock them."
+        self._say(f"<b>Installed the reader for {reader.name}.</b> {understood}{limits}")
+
+    def remove_selected(self) -> None:
+        kind, reader = self._current()
+        if kind != "installed":
+            return
+        try:
+            readers.remove(reader)
+        except readers.ReaderProblem as e:
+            self._say(f"Couldn't remove it: {e}.")
+            return
+        self.load()
+        self._say(f"Removed the reader for {reader.name}. Achievements it already unlocked stay unlocked.")
+
+    def make_kit(self) -> None:
+        games = {}
+        for row in self.win.db.save_files():
+            if not row["readable"] and os.path.basename(row["path"]).lower() != "user.reg":
+                game = self.win.db.game(row["appid"])
+                if game is not None:
+                    games[game["name"] or f"App {row['appid']}"] = row["appid"]
+        if not games:
+            self._say("No game has a save AchTrack can't read at the moment, so there is nothing to make a kit for.")
+            return
+        name, ok = QInputDialog.getItem(self, APP_NAME, "Make a kit for which game?", sorted(games), 0, False)
+        if ok and name:
+            self.win.make_reader_kit(games[name])
+
+    def dragEnterEvent(self, event) -> None:
+        if any(url.toLocalFile().lower().endswith(".py") for url in event.mimeData().urls()):
+            event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:
+        for url in event.mimeData().urls():
+            if url.toLocalFile().lower().endswith(".py"):
+                self.install(url.toLocalFile())
+                break
+
+
 class ShareDialog(QDialog):
     """Builds the page you send to friends - as a file, or as a link."""
 
@@ -1923,7 +2087,7 @@ class MainWindow(QMainWindow):
         lib.addSeparator()
         lib.addAction("Back up now", lambda: self.worker.request("backup"))
         lib.addAction("Back up every game's saves", lambda: self.backup_saves(None))
-        lib.addAction("Install a save reader…", self.install_reader)
+        lib.addAction("Save readers…", self.open_readers)
         lib.addAction("Sync with my other machines", lambda: self.worker.request("sync"))
         lib.addAction("Build phone page", lambda: self.worker.request("export", bool(self.cfg.vercel_token)))
         lib.addSeparator()
@@ -2353,32 +2517,15 @@ class MainWindow(QMainWindow):
             f"<p><b>1.</b> Give that zip to an AI assistant and say:<br><i>Read INSTRUCTIONS.md in the attached kit "
             f"and do what it asks. Reply with the finished Python file.</i></p>"
             f"<p><b>2.</b> Save its answer as <b>{kit['reader_file']}</b>.</p>"
-            f"<p><b>3.</b> Come back here: <b>Library → Install a save reader…</b></p>"
+            f"<p><b>3.</b> Come back to <b>Library → Save readers…</b> and choose <b>Install from a file…</b>, "
+            f"or drop the file on that window.</p>"
             f"<p>The kit holds copies of this game's save files ({kit['files']} now"
             + (f", and {kit['history']} older sets" if kit["history"] else "")
             + "), its achievement list and the full instructions.</p>")
 
-    def install_reader(self) -> None:
-        """Checks a reader file someone wrote, installs it and re-reads the saves it understands."""
-        path, _ = QFileDialog.getOpenFileName(self, "Choose the save reader", os.path.expanduser("~/Downloads"),
-                                              "Python files (*.py)")
-        if not path:
-            return
-        try:
-            dest = readers.install(path)
-            reader = readers.Reader(dest)
-        except (readers.ReaderProblem, OSError, UnicodeError) as e:
-            box = QMessageBox(QMessageBox.Icon.Warning, APP_NAME, "This reader can't be installed.", parent=self)
-            box.setInformativeText("Copy the details back to whoever wrote it and ask for a corrected file.")
-            box.setDetailedText(str(e))
-            box.exec()
-            return
-        self.worker.request("readers")
-        extra = "" if reader.has_rules else (" It has no rules of its own, so it can only suggest achievements "
-                                             "for you to confirm, never unlock them.")
-        QMessageBox.information(self, APP_NAME,
-                                f"Installed the reader for <b>{reader.name}</b>. AchTrack is re-reading that game's "
-                                f"saves now; anything they already show will be in its review.{extra}")
+    def open_readers(self) -> None:
+        self._readers_dialog = ReadersDialog(self)
+        self._readers_dialog.show()
 
     def check_updates(self) -> None:
         existing = getattr(self, "_update_dialog", None)

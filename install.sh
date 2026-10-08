@@ -198,6 +198,7 @@ if [ "$OS" = "Darwin" ]; then
     if "$VENV/bin/pyinstaller" --noconfirm --windowed --clean --log-level WARN \
             --name AchTrack --icon "$BUILD/AchTrack.icns" --osx-bundle-identifier com.achtrack.app \
             --add-data "$PWD/achtrack/assets:achtrack/assets" \
+            --add-data "$PWD/achtrack/builtin_readers:achtrack/builtin_readers" \
             --distpath "$BUILD/dist" --workpath "$BUILD/work" --specpath "$BUILD" \
             tools/mac_entry.py >/dev/null 2>&1 && [ -d "$BUILD/dist/AchTrack.app" ]; then
         rm -rf "$APP"

@@ -17,4 +17,4 @@ achtrack = "achtrack.__main__:main"
 packages = ["achtrack"]
 
 [tool.setuptools.package-data]
-achtrack = ["assets/*"]
+achtrack = ["assets/*", "builtin_readers/*.py"]

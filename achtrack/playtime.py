@@ -284,7 +284,12 @@ class ProcessMonitor:
             if appid is not None:
                 proc.reason = "ACHTRACK_APPID was set when it started"
             if appid is None and exe_map:
-                for name in [_basename(a).lower() for a in proc.args[:2]] + [_basename(proc.exe).lower()]:
+                # A Wine process is the Windows program in its arguments, not the loader that runs
+                # it. CrossOver names that loader after the game it launched, and every process in
+                # the bottle - services, an installer left open - then carries the game's name.
+                windows = any(a.lower().endswith(".exe") for a in proc.args[:4])
+                own = [] if windows else [_basename(proc.exe).lower()]
+                for name in [_basename(a).lower() for a in proc.args[:2]] + own:
                     if name in exe_map:
                         appid = exe_map[name]
                         proc.reason = f"its name {name!r} is set as this game's executable"

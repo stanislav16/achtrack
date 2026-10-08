@@ -31,7 +31,9 @@ PREFIX = "achtrack-sync-"
 VERSION = 1
 GAME_COPY = ("name", "header_url", "genre", "platform", "psn_id", "steam_owned", "trophy_src")
 PLAYTIME_MAX = ("playtime", "steam_playtime", "psn_playtime", "last_played", "steam_last_played", "psn_last_played")
-EDITED = ("hidden", "review", "exe_name", "game_dir")
+# Not game_dir: where a game is installed is true of one machine only. Sending it made a Mac
+# believe a game lived under /home on the PC.
+EDITED = ("hidden", "review", "exe_name")
 
 
 def device_id(db: Database) -> str:

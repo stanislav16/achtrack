@@ -80,7 +80,8 @@ PAGE = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
-<meta name="theme-color" content="#0F0F0F">
+<meta name="theme-color" content="#111112" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#F5F5F7" media="(prefers-color-scheme: light)">
 <title>__TITLE__</title>
 <style>
 :root {
@@ -94,47 +95,62 @@ PAGE = r"""<!doctype html>
 * { box-sizing:border-box; }
 body { margin:0; background:var(--bg); color:var(--text2); font:15px/1.45 -apple-system, BlinkMacSystemFont,
   "Segoe UI", Roboto, "Noto Sans", sans-serif; -webkit-font-smoothing:antialiased; }
-.wrap { max-width:940px; margin:0 auto; padding:40px 20px 64px; }
-h1 { font-size:30px; line-height:1.15; letter-spacing:-.02em; margin:0; color:var(--text); font-weight:650; }
-h2 { font-size:13px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted);
-     margin:40px 0 14px; font-weight:600; }
+.wrap { max-width:880px; margin:0 auto; padding:48px 20px 64px; }
+h1 { font-size:34px; line-height:1.1; letter-spacing:-.025em; margin:0; color:var(--text); font-weight:700; }
+h2 { font-size:20px; letter-spacing:-.01em; color:var(--text); margin:44px 0 12px; font-weight:650; }
 .sub { color:var(--muted); margin:8px 0 0; font-size:14px; }
-.tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-top:28px; }
-@media (min-width:640px) { .tiles { grid-template-columns:repeat(3,1fr); } }
-.tile { background:var(--card); border:1px solid var(--hair); border-radius:16px; padding:16px 18px;
-        box-shadow:var(--shadow); }
-.tile .v { font-size:27px; letter-spacing:-.02em; color:var(--text); font-weight:650; font-variant-numeric:tabular-nums; }
-.tile .k { font-size:13px; color:var(--muted); margin-top:3px; }
-.tile .v small { font-size:15px; color:var(--muted); font-weight:500; letter-spacing:0; }
+.hero { display:flex; align-items:center; gap:20px; }
+.hero .grow { flex:1; min-width:0; }
+.ring { flex:none; width:84px; height:84px; border-radius:50%; display:grid; place-items:center;
+        background:conic-gradient(var(--accent) calc(var(--p) * 1%), var(--track) 0); }
+.ring b { width:70px; height:70px; border-radius:50%; background:var(--bg); display:flex; align-items:baseline;
+          justify-content:center; line-height:70px;
+          color:var(--text); font-size:19px; font-weight:650; font-variant-numeric:tabular-nums; }
+.ring small { font-size:12px; color:var(--muted); font-weight:500; margin-left:1px; }
+/* One card, split by hairlines: the 1px gap shows the hairline colour behind the tiles. */
+.tiles { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1px; margin-top:28px; background:var(--hair);
+         border:1px solid var(--hair); border-radius:18px; overflow:hidden; box-shadow:var(--shadow); }
+@media (min-width:640px) { .tiles { grid-template-columns:repeat(var(--n,4),minmax(0,1fr)); } }
+.tile { background:var(--card); padding:16px 18px; }
+@media (max-width:639px) { .tile:first-child:nth-last-child(odd) { grid-column:span 2; } }
+.tile .v { font-size:24px; letter-spacing:-.02em; color:var(--text); font-weight:650; font-variant-numeric:tabular-nums; }
+.tile .k { font-size:12.5px; color:var(--muted); margin-top:2px; }
 /* minmax(0,…): a grid child refuses to shrink below its own text otherwise, and a long game
    name then pushes the row off the side of a phone screen. */
-.list { display:grid; grid-template-columns:minmax(0,1fr); gap:8px; }
-.item { display:flex; min-width:0; gap:13px; align-items:center; background:var(--card); border:1px solid var(--hair);
-        border-radius:14px; padding:11px 13px; box-shadow:var(--shadow); }
-.item img { flex:none; background:var(--track); object-fit:cover; }
+.list, .games { display:grid; grid-template-columns:minmax(0,1fr); background:var(--card); border:1px solid var(--hair);
+        border-radius:18px; overflow:hidden; box-shadow:var(--shadow); }
+.item { display:flex; min-width:0; gap:14px; align-items:center; padding:12px 16px; position:relative; }
+.item + .item::before { content:""; position:absolute; top:0; right:0; left:var(--inset,74px); height:1px;
+        background:var(--hair); }
+.games .item, #played .item { --inset:124px; }
+.item img, .item .art { flex:none; background:var(--track); object-fit:cover; }
 .ico { width:44px; height:44px; border-radius:11px; }
-.art { width:92px; height:43px; border-radius:9px; }
+.art { width:94px; height:44px; border-radius:9px; }
 .grow { flex:1; min-width:0; }
-.t { color:var(--text); font-weight:560; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.t { color:var(--text); font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .d { font-size:13px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:1px; }
-.pill { flex:none; font-size:12px; font-variant-numeric:tabular-nums; color:var(--accent);
-        border:1px solid color-mix(in srgb, var(--accent) 35%, transparent); border-radius:999px; padding:3px 9px; }
-.pill.plain { color:var(--muted); border-color:var(--hair); }
+.pill { flex:none; font-size:12px; font-weight:600; font-variant-numeric:tabular-nums; color:var(--text);
+        background:var(--track); border-radius:999px; padding:3px 10px; }
+.pill.plain { color:var(--muted); background:none; font-weight:400; padding-right:0; }
 .bar { height:4px; background:var(--track); border-radius:999px; overflow:hidden; margin-top:7px; max-width:260px; }
 .bar i { display:block; height:100%; background:var(--accent); border-radius:999px; }
-.games { display:grid; grid-template-columns:minmax(0,1fr); gap:8px; }
-.sorts { display:flex; gap:6px; flex-wrap:wrap; margin:-4px 0 14px; }
-.sorts button { font:inherit; font-size:13px; color:var(--muted); background:none; border:1px solid var(--hair);
-  border-radius:999px; padding:5px 13px; cursor:pointer; }
-.sorts button[aria-pressed="true"] { color:var(--text); border-color:color-mix(in srgb, var(--accent) 50%, transparent); }
-footer { margin-top:48px; padding-top:18px; border-top:1px solid var(--hair); color:var(--muted); font-size:13px; }
-@media (max-width:560px) { .wrap { padding:26px 16px 48px; } h1 { font-size:25px; } .art { width:74px; height:35px; } }
+.sorts { display:inline-flex; gap:2px; padding:2px; margin:0 0 12px; background:var(--track); border-radius:10px;
+         max-width:100%; overflow-x:auto; }
+.sorts button { font:inherit; font-size:13px; color:var(--muted); background:none; border:none; border-radius:8px;
+  padding:5px 13px; cursor:pointer; white-space:nowrap; }
+.sorts button[aria-pressed="true"] { color:var(--text); background:var(--card); font-weight:600; box-shadow:var(--shadow); }
+footer { margin-top:48px; color:var(--muted); font-size:13px; text-align:center; }
+@media (max-width:560px) { .wrap { padding:28px 16px 48px; } h1 { font-size:27px; } h2 { font-size:18px; margin-top:34px; }
+  .ring { width:68px; height:68px; } .ring b { width:56px; height:56px; line-height:56px; font-size:16px; }
+  .art { width:74px; height:35px; } .games .item, #played .item { --inset:104px; } .item { padding:11px 14px; } }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1 id="who"></h1>
-  <p class="sub" id="when"></p>
+  <div class="hero">
+    <div class="grow"><h1 id="who"></h1><p class="sub" id="when"></p></div>
+    <div class="ring" id="ring"><b></b></div>
+  </div>
   <div class="tiles" id="tiles"></div>
 
   <section id="rare-wrap" hidden><h2>Rarest finds</h2><div class="list" id="rare"></div></section>
@@ -169,14 +185,19 @@ document.getElementById("who").textContent = D.name ? D.name + "'s achievements"
 document.getElementById("when").textContent = "As of " + when(D.generated);
 
 const s = D.stats, done = s.total ? Math.round(s.unlocked / s.total * 100) : 0;
-document.getElementById("tiles").innerHTML = [
+const ring = document.getElementById("ring");
+ring.style.setProperty("--p", done);
+ring.firstChild.innerHTML = done + "<small>%</small>";
+const tiles = [
   [s.unlocked.toLocaleString(), "of " + s.total.toLocaleString() + " unlocked"],
-  [done + "<small>%</small>", "Overall completion"],
   [hours(s.seconds), "Time played"],
   [s.games.toLocaleString(), s.games === 1 ? "Game tracked" : "Games tracked"],
   [s.perfect.toLocaleString(), s.perfect === 1 ? "Game completed" : "Games completed"],
 ].concat(s.platinums ? [[s.platinums.toLocaleString(), s.platinums === 1 ? "Platinum" : "Platinums"]] : [])
- .map(([v, k]) => `<div class="tile"><div class="v">${v}</div><div class="k">${esc(k)}</div></div>`).join("");
+;
+document.getElementById("tiles").style.setProperty("--n", tiles.length > 4 ? 5 : 4);
+document.getElementById("tiles").innerHTML =
+  tiles.map(([v, k]) => `<div class="tile"><div class="v">${v}</div><div class="k">${esc(k)}</div></div>`).join("");
 
 function trophyRow([title, icon, pct, game, at, kind], tail) {
   return `<div class="item">

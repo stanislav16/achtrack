@@ -79,7 +79,8 @@ PAGE = r"""<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="theme-color" content="#0F0F0F">
+<meta name="theme-color" content="#111112" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#F5F5F7" media="(prefers-color-scheme: light)">
 <title>AchTrack</title>
 <style>
 :root {
@@ -93,37 +94,63 @@ PAGE = r"""<!doctype html>
 * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
 body { margin:0; background:var(--bg); color:var(--text2); font:15px/1.4 -apple-system, BlinkMacSystemFont,
   "Segoe UI", Roboto, "Noto Sans", sans-serif; padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
-header { position:sticky; top:0; background:color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter:blur(14px);
-  border-bottom:1px solid var(--hair); padding:10px 16px; z-index:5; }
-h1 { font-size:17px; margin:0 0 8px; color:var(--text); font-weight:600; }
+header { position:sticky; top:0; background:color-mix(in srgb, var(--bg) 82%, transparent);
+  -webkit-backdrop-filter:saturate(1.6) blur(18px); backdrop-filter:saturate(1.6) blur(18px);
+  padding:12px 16px 10px; z-index:5; }
+header > * { max-width:788px; margin-left:auto; margin-right:auto; }
+h1 { font-size:30px; letter-spacing:-.025em; margin:2px auto 10px; color:var(--text); font-weight:700; }
 .row { display:flex; gap:8px; align-items:center; }
-input, select, button { font:inherit; color:var(--text); background:var(--card); border:1px solid var(--hair);
-  border-radius:10px; padding:9px 11px; }
+input, select, button { font:inherit; color:var(--text); background:var(--track); border:none; border-radius:10px;
+  padding:9px 12px; -webkit-appearance:none; appearance:none; }
 input { flex:1; min-width:0; }
+input::placeholder { color:var(--muted); }
+select { padding-right:14px; font-weight:500; }
 button { cursor:pointer; }
-main { padding:12px 16px 40px; max-width:820px; margin:0 auto; }
-.game { display:flex; gap:12px; align-items:center; padding:10px; border:1px solid var(--hair); border-radius:14px;
-  background:var(--card); margin-bottom:8px; cursor:pointer; }
+main { padding:8px 16px 40px; max-width:820px; margin:0 auto; }
+.group { background:var(--card); border:1px solid var(--hair); border-radius:16px; overflow:hidden; }
+.game, .ach { display:flex; gap:12px; align-items:center; padding:11px 14px; position:relative; }
+.game { cursor:pointer; }
+.game + .game::before, .ach + .ach::before { content:""; position:absolute; top:0; right:0; left:70px; height:1px;
+  background:var(--hair); }
+.game:active { background:var(--track); }
 .game img { width:44px; height:44px; border-radius:11px; object-fit:cover; background:var(--track); flex:none; }
-.game .n { color:var(--text); font-weight:500; }
-.game .s { color:var(--muted); font-size:12.5px; margin-top:2px; }
-.bar { height:4px; border-radius:2px; background:var(--track); overflow:hidden; margin-top:6px; }
-.bar > i { display:block; height:100%; background:var(--accent); }
-.back { background:none; border:none; color:var(--accent); padding:0 0 10px; font-size:14px; }
-.hero { display:flex; gap:14px; align-items:center; margin-bottom:14px; }
-.hero img { width:112px; height:52px; object-fit:cover; border-radius:10px; background:var(--track); }
-.hero h2 { margin:0; font-size:20px; color:var(--text); }
+.game .n { color:var(--text); font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.game .s { color:var(--muted); font-size:12.5px; margin-top:1px; }
+.game .go { flex:none; color:var(--muted); font-size:18px; opacity:.6; }
+.mini { flex:none; width:30px; height:30px; border-radius:50%;
+  background:conic-gradient(var(--accent) calc(var(--p) * 1%), var(--track) 0); display:grid; place-items:center; }
+.mini::after { content:""; width:22px; height:22px; border-radius:50%; background:var(--card); }
+.back { background:none; color:var(--text); padding:6px 0 12px; font-size:15px; font-weight:500; }
+.banner { display:block; width:100%; aspect-ratio:460/215; object-fit:cover; border-radius:16px; background:var(--track); }
+.hero h2 { margin:16px 0 0; font-size:26px; letter-spacing:-.02em; line-height:1.15; color:var(--text); font-weight:700; }
 .meta { color:var(--muted); font-size:13px; margin-top:4px; }
-.ach { display:flex; gap:12px; padding:10px; border:1px solid var(--hair); border-radius:12px; background:var(--card);
-  margin-bottom:6px; }
-.ach img { width:46px; height:46px; border-radius:10px; object-fit:cover; background:var(--track); flex:none; }
+.tiles { display:flex; align-items:center; gap:12px; background:var(--card); border:1px solid var(--hair);
+  border-radius:16px; padding:13px 14px; margin:16px 0; }
+.tiles > div { flex:1; min-width:0; }
+.tiles > div + div { border-left:1px solid var(--hair); padding-left:12px; }
+.tiles .v { color:var(--text); font-size:16px; font-weight:650; font-variant-numeric:tabular-nums; white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis; }
+.tiles .k { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.tiles .k { color:var(--muted); font-size:11.5px; margin-top:1px; }
+.ring { flex:none; width:46px; height:46px; border-radius:50%; display:grid; place-items:center;
+  background:conic-gradient(var(--accent) calc(var(--p) * 1%), var(--track) 0); }
+.ring b { width:37px; height:37px; border-radius:50%; background:var(--card); display:grid; place-items:center;
+  color:var(--text); font-size:11px; font-weight:650; }
+.seg { display:inline-flex; gap:2px; padding:2px; background:var(--track); border-radius:10px; }
+.seg button { background:none; color:var(--muted); font-size:13px; padding:5px 12px; border-radius:8px; }
+.seg button[aria-pressed="true"] { background:var(--card); color:var(--text); font-weight:600;
+  box-shadow:0 1px 2px rgba(0,0,0,.18); }
+.tools { display:flex; gap:8px; align-items:center; justify-content:space-between; margin-bottom:10px; }
+.tools select { font-size:13px; padding:7px 10px; background:none; color:var(--muted); text-align:right; }
+.ach { align-items:flex-start; }
+.ach img { width:46px; height:46px; border-radius:11px; object-fit:cover; background:var(--track); flex:none; }
 .ach.locked img { filter:grayscale(1); opacity:.45; }
-.ach .t { color:var(--text); font-weight:500; font-size:14px; }
-.ach.locked .t { color:var(--text2); font-weight:400; }
-.ach .d { color:var(--muted); font-size:12.5px; margin-top:2px; }
-.ach .w { color:var(--muted); font-size:11.5px; margin-top:4px; }
-.rare { color:var(--accent); }
-.empty, .note { color:var(--muted); text-align:center; padding:28px 12px; }
+.ach .t { color:var(--text); font-weight:600; font-size:14.5px; }
+.ach.locked .t { color:var(--muted); }
+.ach .d { color:var(--muted); font-size:12.5px; margin-top:1px; }
+.ach .w { color:var(--muted); font-size:11.5px; margin-top:5px; display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+.rare { color:var(--text); background:var(--track); border-radius:999px; padding:1px 8px; font-weight:600; }
+.empty, .note { color:var(--muted); text-align:center; padding:28px 12px; font-size:13px; }
 form.gate { max-width:320px; margin:18vh auto; padding:0 16px; text-align:center; }
 form.gate p { color:var(--muted); font-size:13px; }
 form.gate input { width:100%; text-align:center; margin:10px 0; }
@@ -137,6 +164,8 @@ const PAYLOAD = __PAYLOAD__;
 const app = document.getElementById("app");
 const fmtH = s => s >= 3600 ? (s/3600).toFixed(1) + " h" : Math.round(s/60) + " min";
 const fmtDate = t => t ? new Date(t*1000).toLocaleDateString(undefined, {day:"numeric", month:"short", year:"numeric"}) : "";
+const fmtShort = t => { const d = new Date(t*1000), same = d.getFullYear() === new Date().getFullYear();
+  return d.toLocaleDateString(undefined, same ? {day:"numeric", month:"short"} : {month:"short", year:"numeric"}); };
 const PLAT = {pc:"PC", ps5:"PS5", ps4:"PS4", ps3:"PS3", psvita:"Vita"};
 let DATA = null, sort = localStorage.getItem("sort") || "recent", query = "";
 
@@ -182,7 +211,7 @@ function sorted(games) {
 function library() {
   const when = new Date(DATA.generated*1000).toLocaleString();
   app.innerHTML = `<header><h1>Library</h1><div class="row">
-      <input id="q" placeholder="Search games" value="${query.replace(/"/g,"&quot;")}">
+      <input id="q" type="search" placeholder="Search" value="${query.replace(/"/g,"&quot;")}">
       <select id="s">
         <option value="recent">Recent</option><option value="name">Name</option>
         <option value="playtime">Play time</option><option value="progress">Completion</option>
@@ -196,14 +225,14 @@ function library() {
   function draw() {
     const list = document.getElementById("list");
     const games = sorted(DATA.games);
-    list.innerHTML = games.map((g,i) => `<div class="game" data-i="${DATA.games.indexOf(g)}">
+    const rows = games.map((g,i) => `<div class="game" data-i="${DATA.games.indexOf(g)}">
         <img loading="lazy" onerror="noimg(this)" src="${g.h}" alt="">
         <div style="flex:1;min-width:0">
           <div class="n">${esc(g.n)}</div>
           <div class="s">${g.p !== "pc" ? PLAT[g.p] + " · " : ""}${fmtH(g.t)}${g.c ? " · " + g.u + "/" + g.c : ""}</div>
-          ${g.c ? `<div class="bar"><i style="width:${Math.round(g.u/g.c*100)}%"></i></div>` : ""}
-        </div></div>`).join("") ||
-      `<div class="empty">Nothing matches “${esc(query)}”.</div>`;
+        </div>${g.c ? `<div class="mini" style="--p:${Math.round(g.u/g.c*100)}"></div>` : ""}
+        <div class="go">›</div></div>`).join("");
+    list.innerHTML = rows ? `<div class="group">${rows}</div>` : `<div class="empty">Nothing matches “${esc(query)}”.</div>`;
     list.innerHTML += `<div class="note">${games.length} games · updated ${when}</div>`;
     list.querySelectorAll(".game").forEach(el => el.onclick = () => detail(DATA.games[+el.dataset.i]));
   }
@@ -220,24 +249,35 @@ function orderAchievements(list) {
   return copy;
 }
 
+let achShow = "all";
+
 function detail(g) {
   const done = orderAchievements(g.a.filter(a => a[4])), locked = orderAchievements(g.a.filter(a => !a[4]));
+  const total = g.c || g.a.length, pct = total ? Math.round(g.u / total * 100) : 0;
+  const shown = achShow === "done" ? done : achShow === "locked" ? locked : [...done, ...locked];
+  const seg = [["all", "All"], ["done", "Unlocked"], ["locked", "Locked"]].map(([v, label]) =>
+    `<button data-v="${v}" aria-pressed="${v === achShow}">${label}</button>`).join("");
   app.innerHTML = `<main><button class="back">‹ Library</button>
-    <div class="hero"><img onerror="noimg(this)" src="${g.h}" alt=""><div><h2>${esc(g.n)}</h2>
-      <div class="meta">${g.p !== "pc" ? PLAT[g.p] + " · " : ""}${fmtH(g.t)}${g.l ? " · " + fmtDate(g.l) : ""}
-      ${g.g ? "<br>" + esc(g.g) : ""}</div></div></div>
-    ${g.c ? `<div class="bar" style="margin-bottom:14px"><i style="width:${Math.round(g.u/g.c*100)}%"></i></div>` : ""}
-    <div class="row" style="margin-bottom:10px">
-      <div class="meta" style="flex:1">${g.u} of ${g.c || g.a.length} unlocked</div>
+    <div class="hero"><img class="banner" onerror="noimg(this)" src="${g.h}" alt=""><h2>${esc(g.n)}</h2>
+      <div class="meta">${[g.g ? esc(g.g) : "", g.p !== "pc" ? PLAT[g.p] : ""].filter(Boolean).join(" · ")}</div></div>
+    <div class="tiles">
+      <div><div class="v">${fmtH(g.t)}</div><div class="k">Play time</div></div>
+      <div><div class="v">${g.l ? fmtShort(g.l) : "Never"}</div><div class="k">Last played</div></div>
+      <div><div class="v">${g.u} / ${total}</div><div class="k">Unlocked</div></div>
+      ${total ? `<span class="ring" style="--p:${pct}"><b>${pct}%</b></span>` : ""}
+    </div>
+    <div class="tools"><div class="seg">${seg}</div>
       <select id="as">
         <option value="default">Unlocked first</option><option value="rarest">Rarest first</option>
         <option value="common">Most common</option><option value="name">Name</option>
       </select></div>
-    ${[...done, ...locked].map(a => ach(a)).join("")}</main>`;
+    ${shown.length ? `<div class="group">${shown.map(a => ach(a)).join("")}</div>` : `<div class="empty">Nothing here yet.</div>`}</main>`;
   const sel = document.getElementById("as");
   sel.value = achSort;
   sel.onchange = () => { achSort = sel.value; localStorage.setItem("achSort", achSort); detail(g); };
-  app.querySelector(".back").onclick = library;
+  app.querySelectorAll(".seg button").forEach(b => b.onclick = () => {
+    const y = window.scrollY; achShow = b.dataset.v; detail(g); window.scrollTo(0, y); });
+  app.querySelector(".back").onclick = () => { achShow = "all"; library(); };
   window.scrollTo(0,0);
 }
 
@@ -249,8 +289,8 @@ function ach(a) {
     <div style="flex:1;min-width:0">
       <div class="t">${esc(!at && hidden ? "Hidden achievement" : title)}${kind === "platinum" ? " · Platinum" : ""}</div>
       <div class="d">${esc(!at && hidden ? "Revealed once unlocked" : desc)}</div>
-      <div class="w">${at ? "Unlocked " + fmtDate(at) : ""}${at && source ? " · " + esc(source) : ""}
-        ${pct !== null ? `<span class="${rare ? "rare" : ""}">${at ? " · " : ""}${pct.toFixed(pct < 10 ? 1 : 0)}%</span>` : ""}</div>
+      <div class="w">${at ? `<span>${fmtDate(at)}${source ? " · " + esc(source) : ""}</span>` : ""}
+        ${pct !== null ? `<span class="${rare ? "rare" : ""}">${rare ? "Rare · " : ""}${pct.toFixed(pct < 10 ? 1 : 0)}%${rare ? "" : " of players"}</span>` : ""}</div>
     </div></div>`;
 }
 

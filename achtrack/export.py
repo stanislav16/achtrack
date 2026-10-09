@@ -83,12 +83,12 @@ PAGE = r"""<!doctype html>
 <title>AchTrack</title>
 <style>
 :root {
-  --bg:#0F0F0F; --side:#151515; --card:#181818; --hair:#2B2B2B; --text:#F6F6F6; --text2:#D7D7D7;
-  --muted:#8C8C8C; --accent:#E0913C; --track:#272727;
+  --bg:#111112; --side:#18181A; --card:#1C1C1E; --hair:#2B2B2E; --text:#F5F5F7; --text2:#D1D1D6;
+  --muted:#8E8E93; --accent:#F5F5F7; --track:#2C2C2E;
 }
 @media (prefers-color-scheme: light) {
-  :root { --bg:#F6F5F3; --side:#EFEEEB; --card:#FFFFFF; --hair:#DEDCD7; --text:#1C1C1E; --text2:#3A3A3C;
-          --muted:#86847F; --accent:#B0702C; --track:#E4E2DD; }
+  :root { --bg:#F5F5F7; --side:#ECECEE; --card:#FFFFFF; --hair:#DCDCE0; --text:#1D1D1F; --text2:#3A3A3C;
+          --muted:#86868B; --accent:#1D1D1F; --track:#E2E2E6; }
 }
 * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
 body { margin:0; background:var(--bg); color:var(--text2); font:15px/1.4 -apple-system, BlinkMacSystemFont,
@@ -127,7 +127,7 @@ main { padding:12px 16px 40px; max-width:820px; margin:0 auto; }
 form.gate { max-width:320px; margin:18vh auto; padding:0 16px; text-align:center; }
 form.gate p { color:var(--muted); font-size:13px; }
 form.gate input { width:100%; text-align:center; margin:10px 0; }
-form.gate button { width:100%; background:var(--accent); border:none; color:#1A1206; font-weight:600; }
+form.gate button { width:100%; background:var(--accent); border:none; color:var(--bg); font-weight:600; }
 </style>
 </head>
 <body>

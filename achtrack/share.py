@@ -84,12 +84,12 @@ PAGE = r"""<!doctype html>
 <title>__TITLE__</title>
 <style>
 :root {
-  --bg:#0F0F0F; --card:#181818; --hair:#2B2B2B; --text:#F6F6F6; --text2:#D7D7D7;
-  --muted:#8C8C8C; --accent:#E0913C; --track:#272727; --shadow:0 1px 2px rgba(0,0,0,.4);
+  --bg:#111112; --card:#1C1C1E; --hair:#2B2B2E; --text:#F5F5F7; --text2:#D1D1D6;
+  --muted:#8E8E93; --accent:#F5F5F7; --track:#2C2C2E; --shadow:0 1px 2px rgba(0,0,0,.4);
 }
 @media (prefers-color-scheme: light) {
-  :root { --bg:#F6F5F3; --card:#FFFFFF; --hair:#DEDCD7; --text:#1C1C1E; --text2:#3A3A3C;
-          --muted:#86847F; --accent:#B0702C; --track:#E4E2DD; --shadow:0 1px 2px rgba(0,0,0,.06); }
+  :root { --bg:#F5F5F7; --card:#FFFFFF; --hair:#DCDCE0; --text:#1D1D1F; --text2:#3A3A3C;
+          --muted:#86868B; --accent:#1D1D1F; --track:#E2E2E6; --shadow:0 1px 2px rgba(0,0,0,.06); }
 }
 * { box-sizing:border-box; }
 body { margin:0; background:var(--bg); color:var(--text2); font:15px/1.45 -apple-system, BlinkMacSystemFont,

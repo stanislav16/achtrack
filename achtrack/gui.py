@@ -10,7 +10,7 @@ from datetime import datetime
 
 from PySide6.QtCore import QDateTime, QProcess, QRectF, QSize, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import (QAction, QActionGroup, QBrush, QColor, QDesktopServices, QFont, QGuiApplication, QIcon,
-                           QImage, QKeySequence, QLinearGradient, QPainter, QPainterPath, QPalette, QPixmap)
+                           QImage, QKeySequence, QLinearGradient, QPainter, QPainterPath, QPalette, QPen, QPixmap)
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateTimeEdit, QDialog,
                                QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsScene,
                                QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout,
@@ -75,7 +75,7 @@ def fmt_day(ts: int | None) -> str:
 
 def fmt_unlock(ts: int) -> str:
     dt = datetime.fromtimestamp(ts)
-    return f"Unlocked {dt.strftime('%-d %b %Y')} @ {dt.strftime('%-I:%M%p').lower()}"
+    return f"{dt.strftime('%-d %b %Y')}, {dt.strftime('%-I:%M %p').lower()}"
 
 
 def load_pixmap(path: str | None, size: int, gray: bool = False) -> QPixmap:
@@ -109,7 +109,7 @@ def sync_text(status: dict | None, what: str, unit: str) -> str:
         return "Not synced yet."
     when = fmt_day(status.get("time"))
     if status.get("error"):
-        return f"<span style='color:#e5735c'>Last sync failed ({when}): {status['error']}</span>"
+        return f"<span style='color:{P['danger']}'>Last sync failed ({when}): {status['error']}</span>"
     return (f"Last sync {when.lower() if when in ('Today', 'Yesterday') else when}: "
             f"{status.get('games', 0)} games, {status.get(what, 0)} {unit}.")
 
@@ -118,7 +118,7 @@ def device_sync_text(status: dict | None) -> str:
     if not status:
         return "Not syncing with other machines yet."
     if status.get("error"):
-        return f"<span style='color:#e5735c'>Last sync failed: {status['error']}</span>"
+        return f"<span style='color:{P['danger']}'>Last sync failed: {status['error']}</span>"
     parts = [f"{status.get('devices', 0)} other machine(s)"]
     for field, label in (("games", "new games"), ("unlocks", "new unlocks"), ("removed", "removals")):
         if status.get(field):
@@ -130,7 +130,7 @@ def backup_text(status: dict | None) -> str:
     if not status:
         return "No backup yet."
     if status.get("error"):
-        return f"<span style='color:#e5735c'>Last backup failed: {status['error']}</span>"
+        return f"<span style='color:{P['danger']}'>Last backup failed: {status['error']}</span>"
     return f"Last backup {fmt_day(status.get('time')).lower()} in {status.get('dir', '')}"
 
 
@@ -138,9 +138,9 @@ def export_text(status: dict | None) -> str:
     if not status:
         return "The phone page hasn't been built yet."
     if status.get("error"):
-        return f"<span style='color:#e5735c'>Publishing failed: {status['error']}</span>"
+        return f"<span style='color:{P['danger']}'>Publishing failed: {status['error']}</span>"
     if status.get("url"):
-        return f"Published: <a href='{status['url']}' style='color:#66c0f4'>{status['url']}</a>"
+        return f"Published: <a href='{status['url']}' style='color:{P['text']}'>{status['url']}</a>"
     return f"Built: {status.get('page', '')} (add a Vercel token to publish it)"
 
 
@@ -149,7 +149,7 @@ def steam_sync_text(status: dict | None) -> str:
         return "Not synced yet."
     when = fmt_day(status.get("time"))
     if status.get("error"):
-        return f"<span style='color:#e5735c'>Last sync failed ({when}): {status['error']}</span>"
+        return f"<span style='color:{P['danger']}'>Last sync failed ({when}): {status['error']}</span>"
     return (f"Last sync {when.lower() if when in ('Today', 'Yesterday') else when}: {status.get('games', 0)} played "
             f"games, {status.get('achievements', 0)} Steam achievements.")
 
@@ -174,8 +174,10 @@ class MenuButton(QPushButton):
     """A pop-up button: the current choice plus a menu. Qt's combo popups misbehave on Wayland,
     and menus don't."""
 
-    def __init__(self, options: list, current, on_change, width: int = 0):
+    def __init__(self, options: list, current, on_change, width: int = 0, flat: bool = False):
         super().__init__()
+        if flat:
+            self.setObjectName("Flat")
         self.options = options              # [(label, value)]
         self.on_change = on_change
         self.value = current if current in [v for _l, v in options] else options[0][1]
@@ -204,6 +206,73 @@ class MenuButton(QPushButton):
             action.setChecked(v == value)
         self._sync_text()
         self.on_change(value)
+
+
+class Segmented(QFrame):
+    """A segmented control: a few choices side by side, one of them picked."""
+
+    def __init__(self, options: list, current, on_change):
+        super().__init__()
+        self.setObjectName("Segmented")
+        self.on_change = on_change
+        self.value = current
+        self.buttons = {}
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(2, 2, 2, 2)
+        lay.setSpacing(2)
+        for label, value in options:
+            button = QPushButton(label)
+            button.setObjectName("Seg")
+            button.setCheckable(True)
+            button.setChecked(value == current)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(lambda _=False, v=value: self._choose(v))
+            lay.addWidget(button)
+            self.buttons[value] = button
+
+    def _choose(self, value) -> None:
+        changed = value != self.value
+        self.value = value
+        for v, button in self.buttons.items():
+            button.setChecked(v == value)
+        if changed:
+            self.on_change(value)
+
+
+class Ring(QWidget):
+    """Completion as a ring, with the percentage inside it."""
+
+    def __init__(self, size: int = 46):
+        super().__init__()
+        self.setFixedSize(size, size)
+        self.fraction = 0.0
+        self.known = False
+
+    def set(self, done: int, total: int) -> None:
+        self.known = total > 0
+        self.fraction = min(1.0, done / total) if total else 0.0
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        width = 4.5
+        box = QRectF(self.rect()).adjusted(width / 2, width / 2, -width / 2, -width / 2)
+        pen = QPen(QColor(P["track"]), width)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        p.drawEllipse(box)
+        if self.fraction > 0:
+            pen.setColor(QColor(P["accent"]))
+            p.setPen(pen)
+            p.drawArc(box, 90 * 16, -int(self.fraction * 360 * 16))
+        font = p.font()
+        font.setPixelSize(11)
+        font.setWeight(QFont.Weight.DemiBold)
+        p.setFont(font)
+        p.setPen(QColor(P["text" if self.known else "muted"]))
+        p.drawText(QRectF(self.rect()), Qt.AlignmentFlag.AlignCenter,
+                   f"{int(self.fraction * 100)}%" if self.known else "–")
 
 
 def letter_pixmap(name: str, size: int) -> QPixmap:
@@ -236,7 +305,7 @@ def game_thumbnail(appid: int, row, size: int = 40) -> QPixmap:
 
 
 class Dot(QWidget):
-    """Small accent dot marking the game you're playing."""
+    """Small green dot marking the game you're playing."""
 
     def __init__(self, size: int = 8):
         super().__init__()
@@ -246,7 +315,7 @@ class Dot(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(accent())
+        p.setBrush(QColor(P["live"]))
         p.drawEllipse(self.rect())
 
 
@@ -255,18 +324,17 @@ class GameRow(QWidget):
         super().__init__()
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         outer = QHBoxLayout(self)
-        outer.setContentsMargins(10 if icon else 14, 8, 12, 8)
-        outer.setSpacing(10)
+        outer.setContentsMargins(8 if icon else 14, 7, 12, 7)
+        outer.setSpacing(11)
         if icon:
             thumb = QLabel()
             thumb.setFixedSize(40, 40)
             thumb.setPixmap(game_thumbnail(row["appid"], row))
             outer.addWidget(thumb, 0, Qt.AlignmentFlag.AlignVCenter)
         lay = QVBoxLayout()
-        lay.setSpacing(3)
+        lay.setSpacing(2)
         name = QLabel(row["name"] or f"App {row['appid']}")
-        name.setStyleSheet(f"color: {P['text'] if running else P['text2']}; font-size: 13.5px; font-weight: 500;"
-                           " background: transparent;")
+        name.setStyleSheet(f"color: {P['text']}; font-size: 13.5px; font-weight: 500; background: transparent;")
         lay.addWidget(name)
         parts = []
         if (row["platform"] or "pc") != "pc":
@@ -276,7 +344,7 @@ class GameRow(QWidget):
             parts.append(f"{min(row['unlocked'], row['total'])}/{row['total']}")
         elif row["unlocked"]:
             parts.append(str(row["unlocked"]))
-        sub = QLabel("     ".join(parts))
+        sub = QLabel("  ·  ".join(parts))
         sub.setStyleSheet(f"color: {P['muted']}; font-size: 11.5px; background: transparent;")
         lay.addWidget(sub)
         outer.addLayout(lay, 1)
@@ -291,23 +359,24 @@ class AchievementRow(QFrame):
         self.setObjectName("AchRow")
         self.setProperty("unlocked", unlocked)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(10, 9, 16, 9)
+        lay.setContentsMargins(16, 11, 18, 11)
         lay.setSpacing(14)
 
         icon = QLabel()
-        icon.setFixedSize(64, 64)
+        icon.setFixedSize(ACH_ICON, ACH_ICON)
         if unlocked:
-            icon.setPixmap(load_pixmap(cached_icon(appid, a.get("icon") or ""), 64))
+            art = load_pixmap(cached_icon(appid, a.get("icon") or ""), ACH_ICON)
         else:
             gray_path = cached_icon(appid, a.get("icon_gray") or "")
-            icon.setPixmap(load_pixmap(gray_path or cached_icon(appid, a.get("icon") or ""), 64, gray=not gray_path))
+            art = load_pixmap(gray_path or cached_icon(appid, a.get("icon") or ""), ACH_ICON, gray=not gray_path)
+        art = art.copy((art.width() - ACH_ICON) // 2, (art.height() - ACH_ICON) // 2, ACH_ICON, ACH_ICON)
+        icon.setPixmap(rounded(art, 11))
         pct = a.get("global_pct")
-        if pct is not None and pct < RARE_PCT:
-            icon.setStyleSheet(f"border: 1px solid {P['accent']}; border-radius: 12px;")
-        lay.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
+        lay.addWidget(icon, 0, Qt.AlignmentFlag.AlignVCenter)
 
         texts = QVBoxLayout()
         texts.setSpacing(3)
+        texts.addStretch(1)
         hidden_locked = a.get("hidden") and not unlocked and not reveal
         title_row = QHBoxLayout()
         title_row.setSpacing(8)
@@ -342,21 +411,22 @@ class AchievementRow(QFrame):
         lay.addLayout(texts, 1)
 
         right = QVBoxLayout()
-        right.setSpacing(4)
+        right.setSpacing(5)
+        right.addStretch(1)
         if unlocked:
             source = a.get("source")
             tag = {STEAM: "  ·  Steam", PSN: "  ·  PlayStation", MANUAL: "  ·  Added by you",
                    SAVE: "  ·  Found in your save", SCREEN: "  ·  Seen on screen"}.get(source, "")
             date = QLabel(fmt_unlock(a["unlocked_at"]) + tag)
             date.setObjectName("AchDate")
-            date.setAlignment(Qt.AlignmentFlag.AlignRight)
-            right.addWidget(date)
+            right.addWidget(date, 0, Qt.AlignmentFlag.AlignRight)
         if pct is not None:
-            label = QLabel(f"{pct:.0f}%" if pct >= 10 else f"{pct:.1f}%")
+            share = f"{pct:.0f}%" if pct >= 10 else f"{pct:.1f}%"
+            rare = pct < RARE_PCT
+            label = QLabel(f"Rare  ·  {share}" if rare else f"{share} of players")
             label.setObjectName("AchPct")
-            label.setProperty("rare", pct < RARE_PCT)
-            label.setAlignment(Qt.AlignmentFlag.AlignRight)
-            right.addWidget(label)
+            label.setProperty("rare", rare)
+            right.addWidget(label, 0, Qt.AlignmentFlag.AlignRight)
         right.addStretch(1)
         lay.addLayout(right)
 
@@ -366,30 +436,44 @@ class HiddenSummaryRow(QFrame):
         super().__init__()
         self.setObjectName("AchRow")
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(14, 14, 16, 14)
-        text = QLabel(f"<b style='color:#e7eef4'>+{count} hidden achievement{'s' if count != 1 else ''} remaining</b>"
-                      "<br><span style='color:#7f8b98'>Details for each achievement will be revealed once unlocked</span>")
-        lay.addWidget(text)
+        lay.setContentsMargins(16, 14, 16, 14)
+        self.setProperty("last", True)
+        texts = QVBoxLayout()
+        texts.setSpacing(3)
+        name = QLabel(f"+{count} hidden achievement{'s' if count != 1 else ''} remaining")
+        name.setObjectName("AchName")
+        desc = QLabel("Details for each achievement will be revealed once unlocked")
+        desc.setObjectName("AchDesc")
+        texts.addWidget(name)
+        texts.addWidget(desc)
+        lay.addLayout(texts)
 
 
 class Stat(QWidget):
-    """One "LABEL      value" line, the way a settings row reads."""
+    """One tile of the summary: the figure, and what it counts underneath."""
 
     def __init__(self, label: str):
         super().__init__()
-        lay = QHBoxLayout(self)
+        lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(12)
-        cap = QLabel(label.upper())
-        cap.setObjectName("StatLabel")
-        cap.setFixedWidth(116)
+        lay.setSpacing(2)
         self.value = QLabel("-")
         self.value.setObjectName("StatValue")
-        lay.addWidget(cap, 0, Qt.AlignmentFlag.AlignVCenter)
-        lay.addWidget(self.value, 1, Qt.AlignmentFlag.AlignVCenter)
+        cap = QLabel(label)
+        cap.setObjectName("StatLabel")
+        lay.addWidget(self.value)
+        lay.addWidget(cap)
 
 
-BANNER_W, BANNER_H = 300, 140
+def tile_rule() -> QFrame:
+    rule = QFrame()
+    rule.setObjectName("TileRule")
+    rule.setFixedWidth(1)
+    return rule
+
+
+ACH_ICON = 52
+BANNER_W, BANNER_H = 344, 161
 WASH_H = 300
 
 
@@ -452,18 +536,18 @@ class DetailView(QWidget):
         self._sig = None
         self._wash: QPixmap | None = None
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 20, 24, 12)
-        root.setSpacing(14)
+        root.setContentsMargins(28, 24, 28, 18)
+        root.setSpacing(16)
 
         header = QHBoxLayout()
-        header.setSpacing(20)
+        header.setSpacing(24)
         self.banner = QLabel()
         self.banner.setFixedSize(BANNER_W, BANNER_H)
         self.banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header.addWidget(self.banner, 0, Qt.AlignmentFlag.AlignTop)
 
         info = QVBoxLayout()
-        info.setSpacing(6)
+        info.setSpacing(4)
         self.title = QLabel()
         self.title.setObjectName("GameTitle")
         self.title.setWordWrap(True)
@@ -473,66 +557,73 @@ class DetailView(QWidget):
         self.running_dot = Dot(7)
         self.running = QLabel("Playing now")
         self.running.setObjectName("Running")
+        self.subtitle = QLabel()
+        self.subtitle.setObjectName("GameSub")
         playing.addWidget(self.running_dot, 0, Qt.AlignmentFlag.AlignVCenter)
         playing.addWidget(self.running, 0, Qt.AlignmentFlag.AlignVCenter)
-        playing.addStretch(1)
+        playing.addWidget(self.subtitle, 1, Qt.AlignmentFlag.AlignVCenter)
         info.addLayout(playing)
-        info.addSpacing(10)
-        stats = QVBoxLayout()
-        stats.setSpacing(7)
+        info.addStretch(1)
+
+        tiles = QFrame()
+        tiles.setObjectName("Tiles")
+        tiles.setMaximumWidth(620)
+        tile_lay = QHBoxLayout(tiles)
+        tile_lay.setContentsMargins(18, 13, 16, 13)
+        tile_lay.setSpacing(18)
         self.stat_time = Stat("Play time")
         self.stat_last = Stat("Last played")
-        self.stat_ach = Stat("Unlocked")
-        self.stat_genre = Stat("Genre")
-        self.stat_platform = Stat("Platform")
-        for s in (self.stat_time, self.stat_last, self.stat_ach, self.stat_genre, self.stat_platform):
-            stats.addWidget(s)
-        info.addLayout(stats)
-        info.addSpacing(6)
-        prog = QHBoxLayout()
-        prog.setSpacing(12)
-        self.progress = QProgressBar()
-        self.progress.setTextVisible(False)
-        self.progress.setMaximumWidth(460)
-        prog.addWidget(self.progress)
-        self.progress_label = QLabel()
-        self.progress_label.setObjectName("Muted")
-        prog.addWidget(self.progress_label)
-        prog.addStretch(1)
-        info.addLayout(prog)
+        self.stat_ach = Stat("Achievements")
+        self.ring = Ring()
+        tile_lay.addWidget(self.stat_time, 1)
+        tile_lay.addWidget(tile_rule())
+        tile_lay.addWidget(self.stat_last, 1)
+        tile_lay.addWidget(tile_rule())
+        tile_lay.addWidget(self.stat_ach, 1)
+        tile_lay.addWidget(self.ring, 0, Qt.AlignmentFlag.AlignVCenter)
+        info.addWidget(tiles)
         self.save_status = QLabel()
         self.save_status.setObjectName("SaveStatus")
         self.save_status.setWordWrap(True)
+        info.addSpacing(4)
         info.addWidget(self.save_status)
-        info.addStretch(1)
         header.addLayout(info, 1)
         root.addLayout(header)
+        root.addSpacing(4)
 
         bar = QHBoxLayout()
-        self.filter = MenuButton([("All achievements", 0), ("Unlocked", 1), ("Locked", 2)], 0,
-                                 lambda _v: self.refresh(force=True))
+        bar.setSpacing(8)
+        self.filter = Segmented([("All", 0), ("Unlocked", 1), ("Locked", 2)], 0,
+                                lambda _v: self.refresh(force=True))
         bar.addWidget(self.filter)
         self.ach_sort = MenuButton([("Unlocked first", "default"), ("Rarest first", "rarest"),
                                     ("Most common first", "common"), ("Recently unlocked", "recent"),
                                     ("Name (A-Z)", "name")],
-                                   window.cfg.achievement_sort, self._ach_sort_changed)
+                                   window.cfg.achievement_sort, self._ach_sort_changed, flat=True)
         bar.addWidget(self.ach_sort)
-        self.reveal = QCheckBox("Reveal hidden achievements")
-        self.reveal.toggled.connect(lambda _: self.refresh(force=True))
-        bar.addWidget(self.reveal)
         bar.addStretch(1)
         self.search = QLineEdit()
+        self.search.setObjectName("Search")
         self.search.setPlaceholderText("Search achievements")
-        self.search.setMaximumWidth(260)
+        self.search.setClearButtonEnabled(True)
+        self.search.setFixedWidth(220)
         self.search.textChanged.connect(lambda _: self.refresh(force=True))
         bar.addWidget(self.search)
-        review = QPushButton("Review achievements…")
+        review = QPushButton("Review…")
         review.setToolTip("Tick achievements you've earned that weren't recorded")
         review.clicked.connect(lambda: self.appid and self.win.open_review(self.appid))
         bar.addWidget(review)
-        refresh = QPushButton("Refresh from Steam")
-        refresh.clicked.connect(lambda: self.appid and self.win.request_refresh(self.appid))
-        bar.addWidget(refresh)
+        more = QPushButton("•••")
+        more.setObjectName("More")
+        more.setToolTip("More")
+        more_menu = QMenu(more)
+        self.reveal = more_menu.addAction("Reveal hidden achievements")
+        self.reveal.setCheckable(True)
+        self.reveal.toggled.connect(lambda _: self.refresh(force=True))
+        more_menu.addSeparator()
+        more_menu.addAction("Refresh from Steam", lambda: self.appid and self.win.request_refresh(self.appid))
+        more.setMenu(more_menu)
+        bar.addWidget(more)
         root.addLayout(bar)
 
         self.notice = QLabel()
@@ -542,19 +633,15 @@ class DetailView(QWidget):
         self.notice.linkActivated.connect(lambda _: self.win.open_settings())
         root.addWidget(self.notice)
 
-        section = QLabel("ACHIEVEMENTS")
-        section.setObjectName("SectionLabel")
-        root.addWidget(section)
-
         self.list = QListWidget()
         self.list.setObjectName("AchList")
         self.list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.list.setSpacing(3)
         self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._row_menu)
-        root.addWidget(self.list, 1)
+        root.addWidget(self.list, 100)
+        root.addStretch(1)
 
     def _ach_sort_changed(self, value: str) -> None:
         self.win.cfg.achievement_sort = value
@@ -654,16 +741,13 @@ class DetailView(QWidget):
                    (f"Tracked by {APP_NAME}: {fmt_playtime(game['playtime'])}", game["playtime"])]
         shown = [text for text, value in sources if value]
         self.stat_time.setToolTip("\n".join(shown) if len(shown) > 1 else "")
-        self.stat_platform.value.setText(platform_name(game))
-        self.stat_platform.setVisible((game["platform"] or "pc") != "pc")
         last = max(game["last_played"] or 0, game["steam_last_played"] or 0, game["psn_last_played"] or 0)
         self.stat_last.value.setText("Now" if self.appid in self.win.running else fmt_day(last))
         self.stat_ach.value.setText(f"{unlocked} / {total}" if total else "-")
-        self.stat_genre.value.setText(game["genre"] or "")
-        self.stat_genre.setVisible(bool(game["genre"]))
-        self.progress.setRange(0, max(total, 1))
-        self.progress.setValue(unlocked)
-        self.progress_label.setText(f"{unlocked * 100 // total}%" if total else "")
+        about = [game["genre"] or ""] + ([platform_name(game)] if (game["platform"] or "pc") != "pc" else [])
+        about = "  ·  ".join(part for part in about if part)
+        self.subtitle.setText(("  ·  " if about and self.appid in self.win.running else "") + about)
+        self.ring.set(unlocked, total)
         self.save_status.setText(self._save_status(db))
         banner_path = cached_icon(self.appid, game["header_url"] or "")
         art = QPixmap(banner_path) if banner_path else QPixmap()
@@ -671,22 +755,22 @@ class DetailView(QWidget):
             pm = art.scaled(self.banner.size(), Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                             Qt.TransformationMode.SmoothTransformation)
             crop = pm.copy((pm.width() - BANNER_W) // 2, (pm.height() - BANNER_H) // 2, BANNER_W, BANNER_H)
-            self.banner.setPixmap(rounded(crop, 14))
+            self.banner.setPixmap(rounded(crop, 16))
             self._wash = blurred_wash(art, max(self.width(), 600), WASH_H)
         else:
-            self.banner.setPixmap(QPixmap())
+            self.banner.setPixmap(letter_pixmap(game["name"] or "", BANNER_H))
             self._wash = None
         self.update()
 
         sync = db.get_meta("steam_sync") or {}
         if game["steam_owned"] and sync.get("error"):
-            self.notice.setText(f"<span style='color:#e5735c'>Steam sync problem:</span> {sync['error']} "
-                                "<a href='#' style='color:#66c0f4'>Open Settings</a>")
+            self.notice.setText(f"<span style='color:{P['danger']}'>Steam sync problem:</span> {sync['error']} "
+                                f"<a href='#' style='color:{P['text']}'>Open Settings</a>")
             self.notice.show()
         elif not schema_total:
             if not self.win.cfg.steam_api_key:
                 self.notice.setText("Achievement names and icons come from Steam. "
-                                    "<a href='#' style='color:#66c0f4'>Add your free Steam Web API key in Settings</a> "
+                                    f"<a href='#' style='color:{P['text']}'>Add your free Steam Web API key in Settings</a> "
                                     "to see this game's achievements.")
             else:
                 self.notice.setText("No achievement data from Steam yet for this game. "
@@ -695,7 +779,7 @@ class DetailView(QWidget):
         elif (unlocked < total and game["playtime"] >= 1800 and db.sources_for(self.appid)
               and not db.emulator_unlock_count(self.appid)):
             self.notice.setText("This game's crack hasn't recorded any achievements yet, so they won't unlock by "
-                                "themselves. Use <b>Review achievements…</b> or right-click an achievement to add "
+                                "themselves. Use <b>Review…</b> or right-click an achievement to add "
                                 "what you've earned.")
             self.notice.show()
         else:
@@ -746,6 +830,11 @@ class DetailView(QWidget):
             self._add_row(AchievementRow(self.appid, r, reveal or bool(query)), r)
         if hidden_left:
             self._add_row(HiddenSummaryRow(hidden_left))
+        elif self.list.count():
+            last = self.list.itemWidget(self.list.item(self.list.count() - 1))
+            last.setProperty("last", True)
+            _repolish(last)
+        self.list.setVisible(bool(self.list.count()))
         self.list.setUpdatesEnabled(True)
         QTimer.singleShot(0, lambda: self.list.verticalScrollBar().setValue(scroll))
 
@@ -754,7 +843,7 @@ class DetailView(QWidget):
         item.setFlags(Qt.ItemFlag.ItemIsEnabled)
         item.setData(Qt.ItemDataRole.UserRole, data)
         widget.adjustSize()
-        item.setSizeHint(QSize(0, max(widget.sizeHint().height(), 82)))
+        item.setSizeHint(QSize(0, max(widget.sizeHint().height(), 76)))
         self.list.addItem(item)
         self.list.setItemWidget(item, widget)
 
@@ -1326,7 +1415,7 @@ class ShareDialog(QDialog):
         self._page, self._url = status.get("page", ""), status.get("url", "")
         lines = []
         if self._url:
-            link = f'<a href="{self._url}" style="color:{P["accent"]};text-decoration:none">{self._url}</a>'
+            link = f'<a href="{self._url}" style="color:{P['text']}">{self._url}</a>'
             lines.append(f"Anyone with this link can see it:<br>{link}")
         if self._page:
             size = os.path.getsize(self._page) / 1024 if os.path.exists(self._page) else 0
@@ -1985,10 +2074,12 @@ class MainWindow(QMainWindow):
         side = QWidget()
         side.setObjectName("Sidebar")
         side_lay = QVBoxLayout(side)
-        side_lay.setContentsMargins(0, 10, 0, 10)
-        side_lay.setSpacing(8)
+        side_lay.setContentsMargins(0, 12, 0, 8)
+        side_lay.setSpacing(6)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Search games")
+        self.search.setObjectName("Search")
+        self.search.setPlaceholderText("Search")
+        self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(lambda _: self.reload(force=True))
         search_wrap = QHBoxLayout()
         search_wrap.setContentsMargins(10, 0, 10, 0)
@@ -1996,14 +2087,15 @@ class MainWindow(QMainWindow):
         side_lay.addLayout(search_wrap)
         self.sort = MenuButton([("Recently played", "recent"), ("Name (A-Z)", "name"), ("Play time", "playtime"),
                                 ("Completion", "progress"), ("Genre", "genre"), ("Platform", "platform")],
-                               cfg.sort, self._sort_changed)
+                               cfg.sort, self._sort_changed, flat=True)
         self.platform = MenuButton([("All platforms", "all"), ("PC", "pc"), ("PlayStation", "psn")],
-                                   cfg.platform_filter, self._platform_changed)
+                                   cfg.platform_filter, self._platform_changed, flat=True)
         sort_wrap = QHBoxLayout()
         sort_wrap.setContentsMargins(10, 0, 10, 0)
-        sort_wrap.setSpacing(6)
-        sort_wrap.addWidget(self.sort, 1)
-        sort_wrap.addWidget(self.platform, 1)
+        sort_wrap.setSpacing(2)
+        sort_wrap.addWidget(self.sort)
+        sort_wrap.addStretch(1)
+        sort_wrap.addWidget(self.platform)
         side_lay.addLayout(sort_wrap)
         self.games = QListWidget()
         self.games.setObjectName("SidebarList")
@@ -2013,6 +2105,7 @@ class MainWindow(QMainWindow):
         self.games.customContextMenuRequested.connect(self._context_menu)
         side_lay.addWidget(self.games, 1)
         add = QPushButton("＋  Add a game")
+        add.setObjectName("Flat")
         add.clicked.connect(self.add_game)
         add_wrap = QHBoxLayout()
         add_wrap.setContentsMargins(10, 0, 10, 0)

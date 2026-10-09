@@ -8,49 +8,85 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 GRAPHITE = {
     "scheme": "dark",
-    "bg": "#0F0F0F",          # window
-    "side": "#151515",        # sidebar
-    "card": "#181818",        # rows, panels
-    "card_hover": "#1D1D1D",
-    "sel": "#232323",         # selected row
-    "toast": "#1C1C1CF2",     # popup; last two digits are alpha, CSS order
-    "field": "#191919",       # inputs
-    "hair": "#2B2B2B",        # hairline borders
-    "text": "#F6F6F6",
-    "text2": "#D7D7D7",
-    "muted": "#8C8C8C",
-    "accent": "#E0913C",      # amber
-    "accent_soft": "#C67E33",
-    "on_accent": "#1A1206",
-    "track": "#272727",       # progress background
-    "icon_off": "#1F1F1F",
+    "bg": "#111112",          # window
+    "side": "#18181A",        # sidebar
+    "card": "#1C1C1E",        # grouped lists, panels
+    "card_hover": "#232325",
+    "sel": "#2C2C2E",         # selected row
+    "fill": "#2A2A2C",        # buttons, fields
+    "fill_hover": "#343437",
+    "toast": "#1C1C1EF2",     # popup; last two digits are alpha, CSS order
+    "field": "#1F1F21",       # inputs
+    "hair": "#2B2B2E",        # hairline borders
+    "text": "#F5F5F7",
+    "text2": "#D1D1D6",
+    "muted": "#8E8E93",
+    "accent": "#F5F5F7",      # no hue: the artwork brings the colour
+    "accent_soft": "#D1D1D6",
+    "on_accent": "#111112",
+    "live": "#30D158",        # playing now
+    "danger": "#FF6961",
+    "track": "#2C2C2E",       # progress background
+    "icon_off": "#232325",
     "shadow": 110,
 }
 
 PORCELAIN = {
     "scheme": "light",
-    "bg": "#F6F5F3",
-    "side": "#EFEEEB",
+    "bg": "#F5F5F7",
+    "side": "#ECECEE",
     "card": "#FFFFFF",
-    "card_hover": "#FAF9F7",
-    "sel": "#E4E3DF",
+    "card_hover": "#FAFAFB",
+    "sel": "#E2E2E6",
+    "fill": "#E0E0E4",
+    "fill_hover": "#D5D5DA",
     "toast": "#FFFFFFF7",
     "field": "#FFFFFF",
-    "hair": "#DEDCD7",
-    "text": "#1C1C1E",
+    "hair": "#DCDCE0",
+    "text": "#1D1D1F",
     "text2": "#3A3A3C",
-    "muted": "#86847F",
-    "accent": "#B0702C",      # copper
-    "accent_soft": "#9A6126",
+    "muted": "#86868B",
+    "accent": "#1D1D1F",
+    "accent_soft": "#3A3A3C",
     "on_accent": "#FFFFFF",
-    "track": "#E4E2DD",
-    "icon_off": "#E8E6E1",
+    "live": "#248A3D",
+    "danger": "#D70015",
+    "track": "#E2E2E6",
+    "icon_off": "#E8E8EB",
     "shadow": 45,
 }
+
+
+def check_image(p: dict) -> str:
+    """A tick for checked boxes, drawn in the palette's colours; "" when it can't be made."""
+    try:
+        from PySide6.QtCore import QPointF, Qt
+        from PySide6.QtGui import QColor, QImage, QPainter, QPen
+        folder = Path(tempfile.gettempdir()) / "achtrack-ui"
+        folder.mkdir(parents=True, exist_ok=True)
+        base = folder / f"check-{p['scheme']}.png"
+        for path, scale in ((base, 1), (folder / f"check-{p['scheme']}@2x.png", 2)):
+            img = QImage(16 * scale, 16 * scale, QImage.Format.Format_ARGB32_Premultiplied)
+            img.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(img)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.scale(scale, scale)
+            pen = QPen(QColor(p["on_accent"]), 1.9)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.drawPolyline([QPointF(4.2, 8.4), QPointF(7.0, 11.0), QPointF(11.8, 5.2)])
+            painter.end()
+            img.save(str(path))
+        return base.as_posix()
+    except Exception:       # a missing tick must never stop the window opening
+        return ""
+
 
 def colour(value: str):
     """A palette colour as a QColor, reading "#RRGGBBAA" the way CSS does.
@@ -199,14 +235,16 @@ def qt_palette(p: dict, QPalette, QColor):
 
 
 def stylesheet(p: dict, font: str = "") -> str:
+    tick = check_image(p)
+    tick_rule = f"image: url({tick});" if tick else ""
     return font_rule(font) + f"""
 QWidget {{ color: {p['text2']}; font-size: 13px; }}
 QMainWindow, QDialog {{ background: {p['bg']}; }}
 QMenuBar {{ background: {p['bg']}; color: {p['text2']}; padding: 2px 6px; border-bottom: 1px solid {p['hair']}; }}
 QMenuBar::item {{ padding: 5px 10px; border-radius: 6px; }}
 QMenuBar::item:selected {{ background: {p['sel']}; }}
-QMenu {{ background: {p['card']}; border: 1px solid {p['hair']}; border-radius: 10px; padding: 6px; }}
-QMenu::item {{ padding: 7px 24px 7px 14px; border-radius: 6px; }}
+QMenu {{ background: {p['card']}; border: 1px solid {p['hair']}; border-radius: 10px; padding: 5px; }}
+QMenu::item {{ padding: 6px 24px 6px 12px; border-radius: 6px; }}
 QMenu::item:selected {{ background: {p['sel']}; color: {p['text']}; }}
 QMenu::item:disabled {{ color: {p['muted']}; }}
 QMenu::separator {{ height: 1px; background: {p['hair']}; margin: 5px 8px; }}
@@ -214,68 +252,85 @@ QSplitter::handle {{ background: {p['hair']}; }}
 QStatusBar {{ color: {p['muted']}; border-top: 1px solid {p['hair']}; }}
 #Sidebar {{ background: {p['side']}; border-right: 1px solid {p['hair']}; }}
 #SidebarList {{ background: transparent; border: none; outline: 0; }}
-#SidebarList::item {{ border-radius: 10px; margin: 2px 8px; }}
+#SidebarList::item {{ border-radius: 10px; margin: 1px 8px; }}
 #SidebarList::item:selected {{ background: {p['sel']}; }}
 #SidebarList::item:hover:!selected {{ background: {p['card_hover']}; }}
-QLineEdit, QPlainTextEdit, QDoubleSpinBox, QComboBox {{
-    background: {p['field']}; border: 1px solid {p['hair']}; border-radius: 8px; padding: 7px 10px;
-    color: {p['text']}; selection-background-color: {p['accent']}; selection-color: {p['on_accent']}; }}
-QLineEdit:focus, QPlainTextEdit:focus, QDoubleSpinBox:focus, QComboBox:focus {{ border-color: {p['accent']}; }}
+QLineEdit, QPlainTextEdit, QDoubleSpinBox, QComboBox, QDateTimeEdit {{
+    background: {p['field']}; border: 1px solid {p['hair']}; border-radius: 8px; padding: 6px 10px;
+    color: {p['text']}; selection-background-color: {p['muted']}; selection-color: {p['bg']}; }}
+QLineEdit:focus, QPlainTextEdit:focus, QDoubleSpinBox:focus, QComboBox:focus, QDateTimeEdit:focus {{
+    border-color: {p['muted']}; }}
+QLineEdit#Search {{ background: {p['fill']}; border-color: transparent; border-radius: 9px; padding: 6px 12px; }}
+QLineEdit#Search:focus {{ border-color: {p['muted']}; }}
 QComboBox::drop-down {{ border: none; width: 22px; }}
 QComboBox QAbstractItemView {{ background: {p['card']}; border: 1px solid {p['hair']}; border-radius: 8px;
     selection-background-color: {p['sel']}; selection-color: {p['text']}; padding: 4px; }}
-QPushButton {{ background: {p['card']}; border: 1px solid {p['hair']}; border-radius: 8px; padding: 7px 14px;
-    color: {p['text']}; }}
-QPushButton:hover {{ background: {p['card_hover']}; }}
+QPushButton {{ background: {p['fill']}; border: none; border-radius: 8px; padding: 7px 14px;
+    color: {p['text']}; font-weight: 500; }}
+QPushButton:hover {{ background: {p['fill_hover']}; }}
 QPushButton:pressed {{ background: {p['sel']}; }}
 QPushButton:disabled {{ color: {p['muted']}; }}
 QPushButton::menu-indicator {{ width: 0; height: 0; image: none; }}
-QPushButton#Primary {{ background: {p['accent']}; border: none; color: {p['on_accent']}; font-weight: 600; }}
+QPushButton#Primary {{ background: {p['accent']}; color: {p['on_accent']}; font-weight: 600; }}
 QPushButton#Primary:hover {{ background: {p['accent_soft']}; }}
+QPushButton#Primary:disabled {{ background: {p['fill']}; color: {p['muted']}; }}
+QPushButton#Flat {{ background: transparent; color: {p['muted']}; padding: 5px 8px; }}
+QPushButton#Flat:hover {{ background: {p['fill']}; color: {p['text']}; }}
+QPushButton#More {{ padding: 7px 11px; font-weight: 700; letter-spacing: 1px; }}
+#Segmented {{ background: {p['fill']}; border-radius: 9px; }}
+QPushButton#Seg {{ background: transparent; color: {p['muted']}; border-radius: 7px; padding: 5px 13px; }}
+QPushButton#Seg:hover {{ color: {p['text']}; }}
+QPushButton#Seg:checked {{ background: {p['card'] if p['scheme'] == 'light' else p['muted']};
+    color: {p['text'] if p['scheme'] == 'light' else p['bg']}; font-weight: 600; }}
 QProgressBar {{ background: {p['track']}; border: none; border-radius: 2px; max-height: 4px; min-height: 4px; }}
 QProgressBar::chunk {{ background: {p['accent']}; border-radius: 2px; }}
-QScrollBar:vertical {{ background: transparent; width: 12px; margin: 2px; }}
-QScrollBar::handle:vertical {{ background: {p['hair']}; border-radius: 5px; min-height: 36px; }}
+QScrollBar:vertical {{ background: transparent; width: 12px; margin: 3px; }}
+QScrollBar::handle:vertical {{ background: {p['fill_hover']}; border-radius: 3px; min-height: 36px; }}
 QScrollBar::handle:vertical:hover {{ background: {p['muted']}; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background: none; }}
-#AchList {{ background: transparent; border: none; outline: 0; }}
+#AchList {{ background: {p['card']}; border: 1px solid {p['hair']}; border-radius: 14px; outline: 0;
+    padding: 2px 0; }}
 #AchList::item, #AchList::item:selected, #AchList::item:hover {{ background: transparent; }}
 #Muted, #Hint {{ color: {p['muted']}; }}
 #Hint {{ font-size: 12px; }}
-#StatLabel {{ color: {p['muted']}; font-size: 10px; font-weight: 600; letter-spacing: 0.8px; }}
-#StatValue {{ color: {p['text2']}; font-size: 13.5px; font-weight: 500; }}
-#GameTitle {{ color: {p['text']}; font-size: 26px; font-weight: 700; }}
+#Tiles {{ background: {p['card']}; border: 1px solid {p['hair']}; border-radius: 14px; }}
+#TileRule {{ background: {p['hair']}; }}
+#StatLabel {{ color: {p['muted']}; font-size: 11px; font-weight: 500; }}
+#StatValue {{ color: {p['text']}; font-size: 18px; font-weight: 600; }}
+#GameTitle {{ color: {p['text']}; font-size: 28px; font-weight: 700; }}
+#GameSub {{ color: {p['muted']}; font-size: 13px; }}
 #SectionLabel {{ color: {p['muted']}; font-size: 10px; font-weight: 600; letter-spacing: 0.8px; }}
-#AchRow {{ background: {p['card']}; border: 1px solid {p['hair']}; border-radius: 12px; }}
-#AchRow[unlocked="true"] {{ background: {p['card']}; }}
-#AchName {{ color: {p['text2']}; font-size: 14px; font-weight: 500; }}
+#AchRow {{ background: transparent; border: none; border-bottom: 1px solid {p['hair']}; }}
+#AchRow[last="true"] {{ border-bottom: none; }}
+#AchName {{ color: {p['muted']}; font-size: 14px; font-weight: 600; }}
 #AchRow[unlocked="true"] #AchName {{ color: {p['text']}; }}
 #AchDesc {{ color: {p['muted']}; font-size: 12px; }}
-#AchDate {{ color: {p['text2']}; font-size: 11.5px; }}
+#AchDate {{ color: {p['muted']}; font-size: 11.5px; }}
 #AchPct {{ color: {p['muted']}; font-size: 11.5px; }}
-#AchPct[rare="true"] {{ color: {p['accent']}; font-weight: 600; }}
-#Empty {{ color: {p['muted']}; font-size: 15px; }}
-#Running {{ color: {p['accent']}; font-size: 11.5px; font-weight: 500; }}
-#Tag {{ color: {p['muted']}; border: 1px solid {p['hair']}; border-radius: 5px; padding: 1px 6px; font-size: 10px;
+#AchPct[rare="true"] {{ color: {p['text']}; background: {p['fill']}; border-radius: 9px; padding: 2px 8px;
     font-weight: 600; }}
-#Tag[kind="rare"] {{ color: {p['accent']}; border-color: {p['accent']}; }}
+#Empty {{ color: {p['muted']}; font-size: 15px; }}
+#Running {{ color: {p['live']}; font-size: 12px; font-weight: 600; }}
+#Tag {{ color: {p['muted']}; background: {p['fill']}; border-radius: 5px; padding: 1px 6px; font-size: 10px;
+    font-weight: 600; }}
+#Tag[kind="rare"] {{ color: {p['on_accent']}; background: {p['accent']}; }}
 #ReviewRow {{ background: {p['card']}; border: 1px solid {p['hair']}; border-radius: 12px; }}
-#ReviewRow[checked="true"] {{ border-color: {p['accent']}; }}
-#Found {{ color: {p['accent']}; font-size: 11.5px; }}
+#ReviewRow[checked="true"] {{ border-color: {p['muted']}; }}
+#Found {{ color: {p['live']}; font-size: 11.5px; }}
 #SaveStatus {{ color: {p['muted']}; font-size: 11.5px; }}
-QTabWidget::pane {{ border: 1px solid {p['hair']}; border-radius: 12px; top: -1px; background: {p['side']}; }}
+QTabWidget::pane {{ border: 1px solid {p['hair']}; border-radius: 14px; top: -1px; background: {p['card']}; }}
 QTabBar {{ qproperty-drawBase: 0; }}
-QTabBar::tab {{ background: transparent; color: {p['muted']}; padding: 8px 16px; margin-right: 4px;
-    border: 1px solid transparent; border-radius: 9px; }}
-QTabBar::tab:selected {{ background: {p['sel']}; color: {p['text']}; }}
+QTabBar::tab {{ background: transparent; color: {p['muted']}; padding: 6px 14px; margin: 0 2px 8px 0;
+    border: none; border-radius: 8px; font-weight: 500; }}
+QTabBar::tab:selected {{ background: {p['fill']}; color: {p['text']}; }}
 QTabBar::tab:hover:!selected {{ color: {p['text2']}; }}
 QScrollArea {{ background: transparent; border: none; }}
 QScrollArea > QWidget > QWidget {{ background: transparent; }}
 QCheckBox {{ spacing: 8px; }}
 QCheckBox::indicator {{ width: 16px; height: 16px; border-radius: 5px; background: {p['field']};
-    border: 1px solid {p['hair']}; }}
-QCheckBox::indicator:checked {{ background: {p['accent']}; border-color: {p['accent']}; }}
+    border: 1px solid {p['muted']}; }}
+QCheckBox::indicator:checked {{ background: {p['accent']}; border-color: {p['accent']}; {tick_rule} }}
 QToolTip {{ background: {p['card']}; color: {p['text']}; border: 1px solid {p['hair']}; border-radius: 6px;
     padding: 5px; }}
 """

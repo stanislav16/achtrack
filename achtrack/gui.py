@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
                                QTabWidget, QVBoxLayout, QWidget)
 
 from . import __version__, descriptions, desktop, readerkit, readers, savesync, theme, updater
-from .config import APP_ICON, APP_NAME, BACKUP_DIR, DATA_DIR, POPUP_CORNERS, Config
+from .config import APP_ICON, APP_NAME, BACKUP_DIR, DATA_DIR, POPUP_CORNERS, WINDOW_ICON, Config
 from .db import MANUAL, PSN, SAVE, SCREEN, STEAM, Database
 from .engine import build_unlock_event, needs_review
 from .notifier import ToastData, trophy_pixmap
@@ -2055,7 +2055,7 @@ class MainWindow(QMainWindow):
         self._reviews: dict = {}
         self.setWindowTitle(APP_NAME)
         if not (sys.platform == "darwin" and ".app/Contents/MacOS/" in sys.executable):
-            self.setWindowIcon(QIcon(str(APP_ICON)))
+            self.setWindowIcon(QIcon(str(WINDOW_ICON)))
         self.resize(1200, 780)
         self.apply_theme()
         # Follow the desktop switching between light and dark while the app is open.

@@ -33,6 +33,8 @@ SHARE_DIR = DATA_DIR / "share"
 AUTOSTART_FILE = _xdg("XDG_CONFIG_HOME", ".config") / "autostart" / f"{APP_ID}.desktop"
 ASSET_DIR = Path(__file__).resolve().parent / "assets"
 APP_ICON = ASSET_DIR / "achtrack.svg"
+# Windows draws taskbar and title-bar icons from an .ico, with each size drawn for that size.
+WINDOW_ICON = ASSET_DIR / "achtrack.ico" if os.name == "nt" else APP_ICON
 TRAY_ICON = ASSET_DIR / "achtrack-symbolic.svg"   # monochrome, for system trays
 
 POPUP_STYLES = ("steam", "system", "both", "none")

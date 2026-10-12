@@ -12,7 +12,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from .config import APP_ICON, APP_ID, APP_NAME, TRAY_ICON, Config
+from .config import APP_ID, APP_NAME, TRAY_ICON, WINDOW_ICON, Config
 from .db import Database
 from .engine import Engine
 
@@ -98,6 +98,19 @@ def prepare_environment(cfg: Config) -> None:
         os.environ["QT_QPA_PLATFORM"] = "xcb"
 
 
+def _name_process_windows() -> None:
+    """Windows groups taskbar buttons by program, and this program is pythonw.exe - so the button
+    gets Python's icon. Giving the process an identity of its own makes the taskbar use the
+    window's icon instead."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(f"{APP_NAME}.{APP_NAME}")
+    except (OSError, AttributeError):
+        pass
+
+
 def _name_process_macos() -> None:
     """The Python binary carries its own Info.plist saying "Python", which macOS uses for the menu
     bar. Setting the process name before Qt starts makes the menus say AchTrack instead."""
@@ -124,6 +137,7 @@ def _name_process_macos() -> None:
 
 def make_app() -> QApplication:
     _name_process_macos()
+    _name_process_windows()
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setDesktopFileName(APP_ID)
@@ -131,7 +145,7 @@ def make_app() -> QApplication:
         # Inside a .app, macOS draws the dock tile from the bundle - on macOS 26 that is a layered
         # icon the system renders itself, in whatever icon appearance is set. Handing Qt an icon
         # replaces it with a flat picture of our own.
-        app.setWindowIcon(QIcon(str(APP_ICON)))
+        app.setWindowIcon(QIcon(str(WINDOW_ICON)))
     app.setQuitOnLastWindowClosed(False)
     return app
 

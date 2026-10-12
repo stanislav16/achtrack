@@ -10,6 +10,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import winhost
 from .config import _xdg
 
 
@@ -112,6 +113,9 @@ def windows_dirs(prefix: Path) -> dict:
 
 def steam_roots() -> list:
     home = Path.home()
+    if winhost.IS_WINDOWS:
+        root = winhost.steam_root()
+        return [root] if root else []
     return [
         home / ".local/share/Steam",
         home / ".steam/steam",
@@ -157,10 +161,14 @@ HEROIC_CONFIG_DIRS = (
 )
 
 
+def heroic_config_dirs() -> list:
+    if winhost.IS_WINDOWS:
+        return [winhost.appdata() / "heroic"]
+    return [Path.home() / rel for rel in HEROIC_CONFIG_DIRS]
+
+
 def _heroic_json_files():
-    home = Path.home()
-    for rel in HEROIC_CONFIG_DIRS:
-        base = home / rel
+    for base in heroic_config_dirs():
         if not base.is_dir():
             continue
         yield base / "config.json"
@@ -207,10 +215,10 @@ def heroic_installed() -> list:
     us is a name, a folder and an executable. That is enough to track playtime, watch save files
     and, once the name is matched to a Steam AppID, show the real achievement list.
     """
-    home, out, seen = Path.home(), [], set()
-    for rel in HEROIC_CONFIG_DIRS:
+    out, seen = [], set()
+    for base in heroic_config_dirs():
         for name in HEROIC_INSTALLED:
-            path = home / rel / name
+            path = base / name
             try:
                 data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
             except (OSError, ValueError):
@@ -316,6 +324,8 @@ def crossover_bottle_dirs() -> list:
 
 def find_prefixes(extra_dirs=()) -> list:
     home = Path.home()
+    if winhost.IS_WINDOWS:          # games run on Windows itself; there are no prefixes to look in
+        return []
     candidates = [home / ".wine"]
     for lib in steam_libraries():
         compat = lib / "steamapps" / "compatdata"
@@ -383,10 +393,18 @@ def find_state_files(extra_dirs=(), game_dirs=()) -> list:
                     for sf in _match(base, pattern, index, emulator):
                         add(sf)
 
-    linux_data = _xdg("XDG_DATA_HOME", ".local/share")
-    for pattern, index, emulator in LINUX_PATTERNS:
-        for sf in _match(linux_data, pattern, index, emulator):
-            add(sf)
+    if winhost.IS_WINDOWS:
+        # The same folders a prefix imitates, only real.
+        for kind, bases in winhost.emulator_dirs().items():
+            for base in bases:
+                for pattern, index, emulator in WIN_PATTERNS[kind]:
+                    for sf in _match(base, pattern, index, emulator):
+                        add(sf)
+    else:
+        linux_data = _xdg("XDG_DATA_HOME", ".local/share")
+        for pattern, index, emulator in LINUX_PATTERNS:
+            for sf in _match(linux_data, pattern, index, emulator):
+                add(sf)
 
     for game_dir in list(game_dirs) + [str(d) for d in heroic_game_dirs()]:
         if game_dir and os.path.isdir(game_dir):

@@ -1,4 +1,5 @@
-"""Detects running games by inspecting the system's processes - /proc on Linux, libproc on macOS.
+"""Detects running games by inspecting the system's processes - /proc on Linux, libproc on macOS,
+the Toolhelp and PSAPI calls on Windows.
 
 A process counts as a game when any of these hold:
   1. it was launched with ACHTRACK_APPID=<appid> in its environment
@@ -18,6 +19,7 @@ import struct
 import sys
 from dataclasses import dataclass
 
+from . import winhost
 from .scanner import appid_in_dir, crossover_bottle_dirs
 
 STEAM_LIBS = ("steam_api64.dll", "steam_api.dll", "libsteam_api.so")
@@ -192,8 +194,132 @@ class _MacProcesses:
         return []
 
 
+class _WindowsProcesses:
+    """The same on Windows, where a game is an ordinary process: its executable is the game's own
+    .exe, and the list of modules it has loaded shows a Steam library the way /proc/maps does.
+
+    Only your own session's processes are looked at, and only read: a name, a start time, and the
+    paths of the files loaded into it.
+    """
+    QUERY_LIMITED = 0x1000
+    QUERY_AND_READ = 0x0400 | 0x0010
+    SNAP_PROCESS = 0x2
+    LIST_ALL_MODULES = 0x03
+
+    class _Entry(ctypes.Structure):
+        _fields_ = [("dwSize", ctypes.c_uint32), ("cntUsage", ctypes.c_uint32), ("th32ProcessID", ctypes.c_uint32),
+                    ("th32DefaultHeapID", ctypes.c_void_p), ("th32ModuleID", ctypes.c_uint32),
+                    ("cntThreads", ctypes.c_uint32), ("th32ParentProcessID", ctypes.c_uint32),
+                    ("pcPriClassBase", ctypes.c_long), ("dwFlags", ctypes.c_uint32),
+                    ("szExeFile", ctypes.c_wchar * 260)]
+
+    def __init__(self):
+        self.k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.psapi = ctypes.WinDLL("psapi", use_last_error=True)
+        handle, dword, pointer = ctypes.c_void_p, ctypes.c_uint32, ctypes.POINTER
+        self.k32.CreateToolhelp32Snapshot.restype = handle
+        self.k32.CreateToolhelp32Snapshot.argtypes = [dword, dword]
+        self.k32.Process32FirstW.argtypes = self.k32.Process32NextW.argtypes = [handle, pointer(self._Entry)]
+        self.k32.OpenProcess.restype = handle
+        self.k32.OpenProcess.argtypes = [dword, ctypes.c_int, dword]
+        self.k32.CloseHandle.argtypes = [handle]
+        self.k32.QueryFullProcessImageNameW.argtypes = [handle, dword, ctypes.c_wchar_p, pointer(dword)]
+        self.k32.GetProcessTimes.argtypes = [handle] + [pointer(ctypes.c_uint64)] * 4
+        self.k32.GetExitCodeProcess.argtypes = [handle, pointer(dword)]
+        self.k32.ProcessIdToSessionId.argtypes = [dword, pointer(dword)]
+        self.psapi.EnumProcessModulesEx.argtypes = [handle, pointer(handle), dword, pointer(dword), dword]
+        self.psapi.GetModuleFileNameExW.argtypes = [handle, handle, ctypes.c_wchar_p, dword]
+        self.session = self._session(os.getpid())
+
+    @staticmethod
+    def available() -> bool:
+        return os.name == "nt"
+
+    def _session(self, pid: int) -> int | None:
+        out = ctypes.c_uint32()
+        return out.value if self.k32.ProcessIdToSessionId(pid, ctypes.byref(out)) else None
+
+    def _open(self, pid: str, access: int):
+        return self.k32.OpenProcess(access, 0, int(pid)) or None
+
+    def pids(self) -> list:
+        snapshot = self.k32.CreateToolhelp32Snapshot(self.SNAP_PROCESS, 0)
+        if not snapshot or snapshot == ctypes.c_void_p(-1).value:
+            return []
+        out, entry = [], self._Entry()
+        entry.dwSize = ctypes.sizeof(self._Entry)
+        try:
+            more = self.k32.Process32FirstW(snapshot, ctypes.byref(entry))
+            while more:
+                if entry.th32ProcessID > 4:                # 0 and 4 are the kernel's own
+                    out.append(str(entry.th32ProcessID))
+                more = self.k32.Process32NextW(snapshot, ctypes.byref(entry))
+        finally:
+            self.k32.CloseHandle(snapshot)
+        return out
+
+    def status(self, pid: str) -> tuple | None:
+        handle = self._open(pid, self.QUERY_LIMITED)
+        if handle is None:
+            return None
+        try:
+            created, exited, kernel, user = (ctypes.c_uint64() for _ in range(4))
+            if not self.k32.GetProcessTimes(handle, *(ctypes.byref(v) for v in (created, exited, kernel, user))):
+                return None
+            code = ctypes.c_uint32()
+            running = self.k32.GetExitCodeProcess(handle, ctypes.byref(code)) and code.value == 259   # STILL_ACTIVE
+            return ("R" if running else "Z"), created.value
+        finally:
+            self.k32.CloseHandle(handle)
+
+    def uid(self, pid: str) -> int | None:
+        """Not a user id here: the id of the login session, which is what "mine" means on Windows."""
+        return self._session(int(pid))
+
+    def own_uid(self) -> int | None:
+        return self.session
+
+    def describe(self, pid: str) -> tuple:
+        handle = self._open(pid, self.QUERY_LIMITED)
+        if handle is None:
+            return [], "", {}
+        try:
+            buf = ctypes.create_unicode_buffer(32768)
+            size = ctypes.c_uint32(len(buf))
+            if not self.k32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+                return [], "", {}
+            exe = buf.value
+        finally:
+            self.k32.CloseHandle(handle)
+        # Another process's arguments and environment aren't offered the way its path is, and the
+        # path is the part that identifies a game.
+        return [exe], exe, {}
+
+    def cwd(self, pid: str) -> str:
+        return ""
+
+    def mapped(self, pid: str) -> list:
+        handle = self._open(pid, self.QUERY_AND_READ)
+        if handle is None:
+            return []
+        try:
+            needed = ctypes.c_uint32()
+            modules = (ctypes.c_void_p * 1024)()
+            if not self.psapi.EnumProcessModulesEx(handle, modules, ctypes.sizeof(modules), ctypes.byref(needed),
+                                                   self.LIST_ALL_MODULES):
+                return []
+            count = min(needed.value // ctypes.sizeof(ctypes.c_void_p), len(modules))
+            out, buf = [], ctypes.create_unicode_buffer(32768)
+            for module in modules[:count]:
+                if self.psapi.GetModuleFileNameExW(handle, module, buf, len(buf)):
+                    out.append(buf.value)
+            return out
+        finally:
+            self.k32.CloseHandle(handle)
+
+
 def process_source():
-    for source in (_LinuxProcesses, _MacProcesses):
+    for source in (_LinuxProcesses, _MacProcesses, _WindowsProcesses):
         if source.available():
             return source()
     return None
@@ -204,6 +330,10 @@ def _basename(arg: str) -> str:
 
 
 def win_to_linux(arg: str, cwd: str, prefix: str) -> str | None:
+    if winhost.IS_WINDOWS:              # already a real path: there is nothing to translate
+        if os.path.isabs(arg):
+            return arg
+        return os.path.join(cwd, arg) if cwd else None
     path = arg.replace("\\", "/")
     m = re.match(r"^([A-Za-z]):/(.*)$", path)
     if m:
@@ -289,14 +419,15 @@ def _prefix_of(proc: "_Proc") -> str:
 
 def _is_steam_install(path: str) -> bool:
     # Games bought on Steam already get real achievements - leave them alone.
-    return "/steamapps/common/" in path.lower()
+    return "/steamapps/common/" in path.lower().replace("\\", "/")
 
 
 class ProcessMonitor:
     def __init__(self):
         self.src = process_source()
         self.seen: dict = {}
-        self.uid = os.getuid()
+        own = getattr(self.src, "own_uid", None)
+        self.uid = own() if own else os.getuid()
         self.self_pid = str(os.getpid())
         self.cache: dict = {}
         self.dir_cache: dict = {}
@@ -304,7 +435,7 @@ class ProcessMonitor:
 
     @staticmethod
     def available() -> bool:
-        return _LinuxProcesses.available() or _MacProcesses.available()
+        return _LinuxProcesses.available() or _MacProcesses.available() or _WindowsProcesses.available()
 
     def reset(self) -> None:
         self.dir_cache.clear()
@@ -413,7 +544,8 @@ class ProcessMonitor:
         return gone
 
     def _still_loaded(self, pid: str, lib_dir: str) -> bool:
-        return any(path.lower().endswith(STEAM_LIBS) and os.path.dirname(path) == lib_dir
+        return any(path.lower().endswith(STEAM_LIBS)
+                   and os.path.normcase(os.path.dirname(path)) == os.path.normcase(lib_dir)
                    for path in self.src.mapped(pid))
 
     def _detect(self, pid: str, proc: _Proc) -> tuple | None:
@@ -441,13 +573,17 @@ class ProcessMonitor:
         paths = [win_to_linux(a, cwd, prefix) for a in exes]
         if proc.exe and not proc.exe.startswith(SYSTEM_PREFIXES) and not exes:
             paths.append(proc.exe)
+        if winhost.IS_WINDOWS:
+            paths = [p for p in paths if p and not winhost.is_system_path(p)]
         for path in paths:
             if not path or _is_steam_install(path):
                 continue
             directory = os.path.dirname(path)
             for _ in range(3):
                 name = os.path.basename(directory).lower()
-                if not directory or directory in ("/", os.path.expanduser("~")) or name in ("drive_c", "windows", "system32", "syswow64"):
+                if (not directory or directory in ("/", os.path.expanduser("~")) or os.path.dirname(directory) == directory
+                        or name in ("drive_c", "windows", "system32", "syswow64", "program files",
+                                    "program files (x86)")):
                     break
                 appid = self._dir_appid(directory)
                 if appid:

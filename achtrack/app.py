@@ -17,7 +17,8 @@ from .db import Database
 from .engine import Engine
 
 log = logging.getLogger(__name__)
-SOCKET = f"{APP_ID}-{os.getuid()}"
+# One running copy per user: on Windows a local socket's name is already private to the session.
+SOCKET = f"{APP_ID}-{os.getuid() if hasattr(os, 'getuid') else os.environ.get('USERNAME', 'user')}"
 IN_MAC_BUNDLE = sys.platform == "darwin" and ".app/Contents/MacOS/" in sys.executable
 
 

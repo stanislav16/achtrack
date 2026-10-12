@@ -31,7 +31,8 @@ def cmd_scan() -> int:
 
     cfg = Config.load()
     prefixes = find_prefixes(cfg.scan_dirs)
-    print(f"Wine/Proton prefixes ({len(prefixes)}):")
+    print("Windows itself is the host here: emulator folders are read directly." if os.name == "nt"
+          else f"Wine/Proton prefixes ({len(prefixes)}):")
     for p in prefixes:
         print(f"  {p}")
     db = Database()
@@ -609,6 +610,11 @@ def cmd_sync_steam() -> int:
 
 
 def main(argv=None) -> int:
+    # A Windows console may not be able to print every character in a game's name; say "?" for
+    # those rather than stopping. (A windowed app has no console at all, hence the None check.)
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
     parser = argparse.ArgumentParser(prog=APP_ID, description="Steam achievements, popups and playtime for games on Steam emulators.")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--background", action="store_true", help="start hidden in the tray (for autostart)")

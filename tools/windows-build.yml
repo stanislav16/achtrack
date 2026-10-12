@@ -1,0 +1,61 @@
+name: Windows
+
+# Checks AchTrack on a real Windows machine and builds AchTrack.exe.
+# The finished app is on the run's page under "Artifacts".
+#
+# GitHub only runs this from .github/workflows/. It is kept here because adding a file there needs
+# a login with the "workflow" permission: copy it to .github/workflows/windows.yml (on the GitHub
+# website: Add file > Create new file, type that path, paste this in, commit).
+on:
+  push:
+    branches: [main]
+    paths: ["achtrack/**", "tools/**", "pyproject.toml", "install.ps1", ".github/workflows/windows.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: python -m pip install --disable-pip-version-check . pyinstaller
+      - name: Self-test
+        run: python tools/windows_selftest.py selftest
+      - name: The installer script works
+        shell: pwsh
+        run: |
+          ./install.ps1 -Quiet
+          & "$env:LOCALAPPDATA\AchTrack\venv\Scripts\python.exe" -m achtrack --version
+          & "$env:LOCALAPPDATA\AchTrack\venv\Scripts\python.exe" -m achtrack scan
+      - name: Build AchTrack.exe
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --windowed --clean --log-level WARN --name AchTrack `
+            --icon achtrack/assets/achtrack.ico `
+            --add-data "achtrack/assets;achtrack/assets" `
+            --add-data "achtrack/builtin_readers;achtrack/builtin_readers" `
+            tools/mac_entry.py
+          if (-not (Test-Path dist/AchTrack/AchTrack.exe)) { throw "AchTrack.exe wasn't built" }
+      - name: The built app starts
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist/AchTrack/AchTrack.exe -ArgumentList "--version" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "AchTrack.exe --version exited with $($p.ExitCode)" }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: selftest-screenshots
+          path: selftest/
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AchTrack-Windows
+          path: dist/AchTrack/

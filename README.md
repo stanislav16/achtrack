@@ -1,7 +1,8 @@
 # AchTrack
 
 Steam achievements, Steam-style unlock popups and playtime tracking for games that run on a Steam
-emulator (Goldberg / GBE, CODEX, RUNE, EMPRESS, OnlineFix, SKIDROW, 3DM) under Wine or Proton on Linux.
+emulator (Goldberg / GBE, CODEX, RUNE, EMPRESS, OnlineFix, SKIDROW, 3DM) - under Wine or Proton on
+Linux, in CrossOver on macOS, or directly on Windows.
 
 - **Same achievements as Steam**: names, descriptions, icons and hidden flags come from the Steam Web
   API, and global unlock percentages come from Steam too. Anything under 10% counts as rare.
@@ -248,6 +249,39 @@ named in the game's settings.
 Point **Settings → Devices** at the same shared folder on both machines and your PC library, manual
 unlocks included, appears here and stays in step.
 
+## Install (Windows)
+
+You need [Python](https://www.python.org/downloads/) 3.9 or newer (tick *Add python.exe to PATH*
+in its installer) and git:
+
+```powershell
+git clone https://github.com/stanislav16/achtrack.git
+cd achtrack
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
+
+That makes a private Python environment in `%LOCALAPPDATA%\AchTrack` and a Start Menu shortcut;
+nothing needs administrator rights. `uninstall.ps1` removes it again (`-Everything` deletes the
+library too).
+
+To get a ready-made `AchTrack.exe` that needs no Python, copy `tools/windows-build.yml` to
+`.github/workflows/windows.yml` in the repository. GitHub then tests each change on a Windows
+machine and attaches the built app to the run, under **Actions → Windows → Artifacts**.
+
+On Windows a game is an ordinary program, so there are no prefixes to find: the emulator's
+achievement files are read from `%APPDATA%`, Documents, Public Documents and ProgramData, and a
+running game is recognised by its own `.exe` - by the crack config beside it, by the Steam library
+it has loaded, or by the executable name you set for it. Saves are looked for in Documents, Saved
+Games and AppData, but only inside folders named after the game. Backups of saves use the same
+`user/Documents/…` form as on the other machines, so a save made here restores into a Proton prefix
+or a CrossOver bottle and back.
+
+Three things differ from Linux and macOS:
+
+- Unity games that keep progress in the registry aren't read (in a Wine prefix that is a file).
+- A game started with **Run as administrator** can be seen running, but not which libraries it loaded.
+- Popups appear over borderless and windowed games; exclusive fullscreen hides every other window.
+
 ### First run
 
 1. Open **AchTrack**, go to **Library → Settings** and paste a **Steam Web API key**. Keys are free
@@ -322,3 +356,5 @@ Start with `achtrack scan` when something isn't detected. Logs are in
 | Settings | `~/.config/achtrack/config.json` |
 | Library, playtime, unlocks | `~/.local/share/achtrack/achtrack.db` (SQLite) |
 | Icons and sounds cache | `~/.cache/achtrack/` |
+
+On Windows: settings in `%APPDATA%\AchTrack`, everything else in `%LOCALAPPDATA%\AchTrack`.

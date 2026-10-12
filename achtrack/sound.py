@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import os
 import shutil
 import struct
 import subprocess
@@ -58,7 +59,19 @@ def _player() -> list | None:
     return None
 
 
+def _play_windows(kind: str, custom: str) -> None:
+    import winsound
+    try:
+        path = Path(custom).expanduser() if custom and Path(custom).expanduser().is_file() else chime(kind)
+        winsound.PlaySound(str(path), winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
+    except (OSError, RuntimeError):
+        pass
+
+
 def play(kind: str = "unlock", custom: str = "") -> None:
+    if os.name == "nt":
+        _play_windows(kind, custom)
+        return
     player = _player()
     if not player:
         return

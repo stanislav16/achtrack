@@ -27,7 +27,7 @@ import xml.etree.ElementTree as ET
 import zlib
 from pathlib import Path
 
-from . import formats, readers
+from . import formats, readers, winhost
 
 MAX_SAVE_BYTES = 64 * 1024 * 1024
 MAX_FIELDS = 200_000
@@ -640,6 +640,11 @@ def candidate_files(prefix: str | None, game_dir: str | None, names: list | None
     out = []
     root = game_root(game_dir) if game_dir else None
     known = [_name_key(n) for n in (names or []) + ([os.path.basename(root)] if root else []) if _name_key(n)]
+    if winhost.IS_WINDOWS:
+        # No prefix: these are your real folders, shared with every other program, so only the
+        # parts named after the game are searched.
+        for folder in winhost.save_roots():
+            out += list(_walk_personal(folder, known))
     for pfx in related_prefixes(prefix) if prefix else []:
         for folder in prefix_save_roots(pfx):
             if leaves_prefix(folder, pfx):

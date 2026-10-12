@@ -70,12 +70,13 @@ def fmt_day(ts: int | None) -> str:
         return "Today"
     if delta == 1:
         return "Yesterday"
-    return day.strftime("%-d %b %Y") if day.year != today.year else day.strftime("%-d %b")
+    return f"{day.day} {day:%b %Y}" if day.year != today.year else f"{day.day} {day:%b}"
 
 
 def fmt_unlock(ts: int) -> str:
     dt = datetime.fromtimestamp(ts)
-    return f"{dt.strftime('%-d %b %Y')}, {dt.strftime('%-I:%M %p').lower()}"
+    # Not strftime's %-d / %-I: Windows spells "no leading zero" differently.
+    return f"{dt.day} {dt:%b %Y}, {dt.hour % 12 or 12}:{dt:%M} {'am' if dt.hour < 12 else 'pm'}"
 
 
 def load_pixmap(path: str | None, size: int, gray: bool = False) -> QPixmap:
@@ -1057,7 +1058,8 @@ class UpdateDialog(QDialog):
 
     def do_restart(self) -> None:
         subprocess.Popen(updater.relaunch_command(), start_new_session=True,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         self.win.quit_app()
 
     def closeEvent(self, event) -> None:
@@ -1129,7 +1131,8 @@ class RestoreSavesDialog(QDialog):
                 item.setFlags(Qt.ItemFlag.NoItemFlags)
             else:
                 who = "This machine" if entry["device"] == mine else (entry["device_name"] or "Another machine")
-                when = datetime.fromtimestamp(entry["created"]).strftime("%-d %b %Y, %H:%M")
+                made = datetime.fromtimestamp(entry["created"])
+                when = f"{made.day} {made:%b %Y, %H:%M}"
                 note = f"  ·  {entry['note']}" if entry["note"] else ""
                 item = QListWidgetItem(f"{who}  ·  {when}  ·  {entry['files']} files, {fmt_size(entry['bytes'])}{note}")
                 item.setData(Qt.ItemDataRole.UserRole, entry["path"])

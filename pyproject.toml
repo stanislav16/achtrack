@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "achtrack"
 version = "1.0.0"
-description = "Steam achievements, Steam-style unlock popups and playtime tracking for games running on Steam emulators on Linux"
+description = "Steam achievements, Steam-style unlock popups and playtime tracking for games running on Steam emulators on Linux, macOS and Windows"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = ["PySide6-Essentials>=6.5", "cryptography>=41.0"]

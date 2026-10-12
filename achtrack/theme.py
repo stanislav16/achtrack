@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -208,6 +209,8 @@ def system_scheme() -> str:
                 return "light"
     except (ImportError, AttributeError):
         pass
+    if os.name == "nt" or sys.platform == "darwin":
+        return "dark"               # Qt answers for these; the probes below are Linux desktops'
     for probe in (_portal_scheme, _cosmic_scheme, _kde_scheme, _xfce_scheme, _gnome_scheme, _gtk_scheme):
         found = probe()
         if found:

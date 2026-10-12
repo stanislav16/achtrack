@@ -24,7 +24,7 @@ import time
 import zipfile
 from pathlib import Path
 
-from . import savefiles
+from . import savefiles, winhost
 
 log = logging.getLogger(__name__)
 
@@ -65,39 +65,66 @@ def windows_user(prefix: str) -> str:
     return names[0] if names else ""
 
 
+def _under(path: str, base: str) -> bool:
+    path, base = os.path.normcase(path), os.path.normcase(base).rstrip(os.sep)
+    return path == base or path.startswith(base + os.sep)
+
+
 class Layout:
-    """How the anchors map to real folders for one game on this machine."""
+    """How the anchors map to real folders for one game on this machine.
+
+    `mounts` lists (portable start, real folder), most specific first. In a Wine prefix there is
+    one per anchor. On Windows itself Documents and Saved Games can live somewhere else entirely
+    (OneDrive moves them), so they get mounts of their own under the "user" anchor - a backup made
+    there still says user/Documents/…, which is where a prefix on another machine keeps it.
+    """
 
     def __init__(self, prefix: str, game_dir: str | None):
         self.prefix = prefix or ""
         self.root = savefiles.game_root(game_dir) if game_dir else None
-        drive = os.path.join(self.prefix, "drive_c") if self.prefix else ""
-        user = windows_user(self.prefix) if self.prefix else ""
         self.anchors = {}
-        if drive and user:
-            self.anchors["user"] = os.path.join(drive, "users", user)
-        if drive:
-            public = next((n for n in ("Public", "public") if os.path.isdir(os.path.join(drive, "users", n))), "Public")
-            self.anchors["public"] = os.path.join(drive, "users", public)
-            self.anchors["c"] = drive
+        self.mounts = []
         if self.root:
             self.anchors["game"] = self.root
+            self.mounts.append(("game", self.root))
+        if winhost.IS_WINDOWS:
+            home = str(winhost.profile())
+            self.anchors.update(user=home, public=str(winhost.public()),
+                                c=os.environ.get("SystemDrive", "C:") + os.sep)
+            self.mounts += [("user/Documents", str(winhost.documents())),
+                            ("user/Saved Games", str(winhost.saved_games())),
+                            ("user/AppData/LocalLow", str(winhost.locallow())),
+                            ("user/AppData/Local", str(winhost.local_appdata())),
+                            ("user/AppData/Roaming", str(winhost.appdata()))]
+        else:
+            drive = os.path.join(self.prefix, "drive_c") if self.prefix else ""
+            user = windows_user(self.prefix) if self.prefix else ""
+            if drive and user:
+                self.anchors["user"] = os.path.join(drive, "users", user)
+            if drive:
+                public = next((n for n in ("Public", "public") if os.path.isdir(os.path.join(drive, "users", n))),
+                              "Public")
+                self.anchors["public"] = os.path.join(drive, "users", public)
+                self.anchors["c"] = drive
+        self.mounts += [(anchor, self.anchors[anchor]) for anchor in ("user", "public", "c") if anchor in self.anchors]
 
     def portable(self, path: str) -> str | None:
         """A real path as anchor/relative, or None if it sits under none of them."""
-        for anchor in ("game", "user", "public", "c"):       # most specific first
-            base = self.anchors.get(anchor)
-            if base and (path == base or path.startswith(base + os.sep)):
-                return anchor + "/" + os.path.relpath(path, base).replace(os.sep, "/")
+        for start, base in self.mounts:
+            if base and _under(path, base):
+                rest = os.path.relpath(path, base).replace(os.sep, "/")
+                return start if rest == "." else f"{start}/{rest}"
         return None
 
     def real(self, portable: str) -> str | None:
-        anchor, _, rest = portable.partition("/")
-        base = self.anchors.get(anchor)
-        parts = [p for p in rest.split("/") if p]
-        if not base or not parts or any(p in ("..", ".") or "\\" in p or ":" in p for p in parts):
+        parts = [p for p in portable.split("/") if p]
+        if len(parts) < 2 or any(p in ("..", ".") or "\\" in p or ":" in p for p in parts):
             return None
-        return os.path.join(base, *parts)
+        for start, base in self.mounts:
+            head = start.split("/")
+            if base and len(parts) > len(head) and [p.lower() for p in parts[:len(head)]] == [h.lower() for h in head]:
+                return os.path.join(base, *parts[len(head):])
+        return None
 
 
 def find_layout(db, appid: int) -> Layout:
@@ -107,7 +134,8 @@ def find_layout(db, appid: int) -> Layout:
     remembered = (db.get_meta("prefixes") or {}).get(str(appid), "")
     candidates = [remembered] + [prefix_of(p) for p in db.sources_for(appid)] \
         + [prefix_of(r["path"]) for r in db.save_files(appid)] + [prefix_of(game_dir or "")]
-    prefix = next((p for p in candidates if p and os.path.isdir(os.path.join(p, "drive_c"))), "")
+    prefix = "" if winhost.IS_WINDOWS else next(
+        (p for p in candidates if p and os.path.isdir(os.path.join(p, "drive_c"))), "")
     return Layout(prefix, game_dir)
 
 

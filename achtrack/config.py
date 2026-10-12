@@ -14,9 +14,16 @@ def _xdg(var: str, fallback: str) -> Path:
     return Path(value) if value else Path.home() / fallback
 
 
-CONFIG_DIR = _xdg("XDG_CONFIG_HOME", ".config") / APP_ID
-DATA_DIR = _xdg("XDG_DATA_HOME", ".local/share") / APP_ID
-CACHE_DIR = _xdg("XDG_CACHE_HOME", ".cache") / APP_ID
+if os.name == "nt":
+    # Settings roam with the account; the database and the artwork cache stay on this machine.
+    _local = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / APP_NAME
+    CONFIG_DIR = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming") / APP_NAME
+    DATA_DIR = _local
+    CACHE_DIR = _local / "cache"
+else:
+    CONFIG_DIR = _xdg("XDG_CONFIG_HOME", ".config") / APP_ID
+    DATA_DIR = _xdg("XDG_DATA_HOME", ".local/share") / APP_ID
+    CACHE_DIR = _xdg("XDG_CACHE_HOME", ".cache") / APP_ID
 ICON_DIR = CACHE_DIR / "icons"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 DB_FILE = DATA_DIR / "achtrack.db"

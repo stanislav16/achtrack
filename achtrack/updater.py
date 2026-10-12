@@ -24,8 +24,12 @@ def environment() -> dict:
     return {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_SSH_COMMAND": "ssh -o BatchMode=yes", "LC_ALL": "C"}
 
 
+WINDOWS = os.name == "nt"
+INSTALLER = "install.ps1" if WINDOWS else "install.sh"
+
+
 def is_checkout(folder: Path) -> bool:
-    return (folder / "install.sh").is_file() and (folder / "achtrack" / "__init__.py").is_file()
+    return (folder / INSTALLER).is_file() and (folder / "achtrack" / "__init__.py").is_file()
 
 
 def source_dir() -> Path | None:
@@ -46,8 +50,11 @@ def source_dir() -> Path | None:
 
 def problem(folder: Path | None) -> str:
     """Why updating can't work from here - "" when it can."""
+    if getattr(sys, "frozen", False) and WINDOWS:
+        return ("This is the ready-made AchTrack.exe, which can't rebuild itself. Download a newer "
+                "build, or install from the source with install.ps1 to get updates here.")
     if folder is None:
-        return ("Can't find the folder AchTrack was installed from. Run install.sh from it once more "
+        return (f"Can't find the folder AchTrack was installed from. Run {INSTALLER} from it once more "
                 "and it will be remembered.")
     if not shutil.which("git"):
         return "git isn't installed, so there's no way to fetch updates."
@@ -93,6 +100,10 @@ def update_command(folder: Path) -> list:
     It goes through a login shell on purpose: an app started from the dock has a bare PATH, and
     the installer has to find the same python3 the terminal would.
     """
+    if WINDOWS:
+        script = (f"Set-Location -LiteralPath '{str(folder).replace(chr(39), chr(39) * 2)}'; git pull --ff-only; "
+                  "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & .\\install.ps1 -Quiet; exit $LASTEXITCODE")
+        return ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script]
     shell = os.environ.get("SHELL") or ("/bin/zsh" if sys.platform == "darwin" else "/bin/bash")
     script = f"cd {shlex.quote(str(folder))} && git pull --ff-only && bash install.sh"
     return [shell, "-lc", script]
@@ -100,6 +111,14 @@ def update_command(folder: Path) -> list:
 
 def relaunch_command() -> list:
     """How to start AchTrack again once the running copy has quit."""
+    if WINDOWS:
+        from .desktop import windows_program
+        program = windows_program()
+        start = "Start-Process -FilePath '{}'".format(program[0].replace("'", "''"))
+        if program[1:]:
+            start += " -ArgumentList " + ",".join("'{}'".format(a) for a in program[1:])
+        script = f"Wait-Process -Id {os.getpid()} -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500; {start}"
+        return ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script]
     bundle = Path.home() / "Applications" / "AchTrack.app"
     if sys.platform == "darwin" and bundle.is_dir():
         start = f"open -n {shlex.quote(str(bundle))}"

@@ -28,6 +28,26 @@ WINDOWS = os.name == "nt"
 INSTALLER = "install.ps1" if WINDOWS else "install.sh"
 
 
+def git_exe() -> str:
+    """Where git is - "" if it isn't installed.
+
+    On Windows the search path a program sees is the one from when you signed in, so a git
+    installed since then is invisible to an app started from the Start Menu. Look where its
+    installer puts it as well.
+    """
+    found = shutil.which("git")
+    if found or not WINDOWS:
+        return found or ""
+    bases = [os.environ.get("ProgramFiles"), os.environ.get("ProgramW6432"), os.environ.get("ProgramFiles(x86)"),
+             os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs")]
+    for base in bases:
+        for sub in ("cmd", "bin"):
+            candidate = os.path.join(base or "", "Git", sub, "git.exe")
+            if base and os.path.isfile(candidate):
+                return candidate
+    return ""
+
+
 def is_checkout(folder: Path) -> bool:
     return (folder / INSTALLER).is_file() and (folder / "achtrack" / "__init__.py").is_file()
 
@@ -59,7 +79,7 @@ def problem(folder: Path | None) -> str:
         return (f"Can't find the folder AchTrack was installed from - it may have been moved or deleted. "
                 f"Updates are fetched into that folder with git, so it has to stay. Clone the repository "
                 f"somewhere permanent and run {INSTALLER} from there once; it will be remembered.")
-    if not shutil.which("git"):
+    if not git_exe():
         return "git isn't installed, so there's no way to fetch updates."
     if not (folder / ".git").exists():
         return (f"{folder} was downloaded as a ZIP, not cloned with git, so it can't fetch updates. "
@@ -69,8 +89,9 @@ def problem(folder: Path | None) -> str:
 
 def _git(folder: Path, *args: str, timeout: float = 60) -> tuple:
     try:
-        done = subprocess.run(["git", "-C", str(folder), *args], capture_output=True, text=True,
-                              timeout=timeout, env=environment())
+        done = subprocess.run([git_exe() or "git", "-C", str(folder), *args], capture_output=True, text=True,
+                              timeout=timeout, env=environment(),
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except (OSError, subprocess.SubprocessError) as e:
         return 1, str(e)
     return done.returncode, (done.stdout if done.returncode == 0 else done.stderr or done.stdout).strip()
@@ -104,7 +125,8 @@ def update_command(folder: Path) -> list:
     the installer has to find the same python3 the terminal would.
     """
     if WINDOWS:
-        script = (f"Set-Location -LiteralPath '{str(folder).replace(chr(39), chr(39) * 2)}'; git pull --ff-only; "
+        git = (git_exe() or "git").replace("'", "''")
+        script = (f"Set-Location -LiteralPath '{str(folder).replace(chr(39), chr(39) * 2)}'; & '{git}' pull --ff-only; "
                   "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & .\\install.ps1 -Quiet; exit $LASTEXITCODE")
         return ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script]
     shell = os.environ.get("SHELL") or ("/bin/zsh" if sys.platform == "darwin" else "/bin/bash")

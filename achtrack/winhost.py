@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import ctypes
 import os
-import sys
 from pathlib import Path
 
 IS_WINDOWS = os.name == "nt"
@@ -128,7 +127,3 @@ def is_system_path(path: str) -> bool:
     root = os.path.normcase(os.environ.get("SystemRoot") or r"C:\Windows")
     return low.startswith(root + os.sep)
 
-
-def frozen() -> bool:
-    """Running as the ready-made AchTrack.exe rather than from a Python install."""
-    return bool(getattr(sys, "frozen", False))

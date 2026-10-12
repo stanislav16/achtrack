@@ -639,6 +639,7 @@ def main(argv=None) -> int:
     rinstall = sub.add_parser("reader-install", help="check a save reader and install it")
     rinstall.add_argument("file")
     sub.add_parser("readers", help="list installed save readers")
+    sub.add_parser("update-check", help="say whether updating from inside the app can work here, and why not")
     sbackup = sub.add_parser("saves-backup", help="pack a game's save files into the shared folder")
     sbackup.add_argument("game", nargs="?", help="appid or part of the name; default every game")
     srestore = sub.add_parser("saves-restore", help="put a backup of a game's saves in place here")
@@ -673,6 +674,20 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     setup_logging(args.verbose)
+    if args.command == "update-check":
+        from . import updater
+        folder = updater.source_dir()
+        print(f"AchTrack {__version__}")
+        print(f"Installed from: {folder or 'not found'}")
+        try:
+            print(f"  recorded in {updater.SOURCE_NOTE}: {updater.SOURCE_NOTE.read_bytes()[:300]!r}")
+        except OSError as e:
+            print(f"  no record at {updater.SOURCE_NOTE} ({e.__class__.__name__})")
+        print(f"git: {updater.git_exe() or 'not found'}")
+        if folder:
+            print(f"  a git clone: {'yes' if (folder / '.git').exists() else 'no'}")
+        print(f"Verdict: {updater.problem(folder) or 'updating from inside the app can work'}")
+        return 0
     if args.command == "scan":
         return cmd_scan()
     if args.command == "list":

@@ -28,24 +28,56 @@ WINDOWS = os.name == "nt"
 INSTALLER = "install.ps1" if WINDOWS else "install.sh"
 
 
+def _windows_git_places() -> list:
+    """Everywhere git.exe might be on Windows, most likely first."""
+    import glob
+    places = []
+    try:
+        import winreg
+        # The search path as it is now, not as it was when you signed in.
+        for hive, key in ((winreg.HKEY_CURRENT_USER, "Environment"),
+                          (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")):
+            try:
+                with winreg.OpenKey(hive, key) as handle:
+                    value, _kind = winreg.QueryValueEx(handle, "Path")
+                places += [os.path.join(os.path.expandvars(part.strip().strip('"')), "git.exe")
+                           for part in str(value).split(";") if part.strip()]
+            except OSError:
+                pass
+        # Git for Windows says where it was installed.
+        for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+            try:
+                with winreg.OpenKey(hive, r"SOFTWARE\GitForWindows") as handle:
+                    value, _kind = winreg.QueryValueEx(handle, "InstallPath")
+                places.append(os.path.join(str(value), "cmd", "git.exe"))
+            except OSError:
+                pass
+    except ImportError:
+        pass
+    local, home = os.environ.get("LOCALAPPDATA", ""), os.path.expanduser("~")
+    for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramW6432"), os.environ.get("ProgramFiles(x86)"),
+                 os.path.join(local, "Programs") if local else ""):
+        if base:
+            places += [os.path.join(base, "Git", "cmd", "git.exe"), os.path.join(base, "Git", "bin", "git.exe")]
+    places += [os.path.join(home, "scoop", "shims", "git.exe"),
+               os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "chocolatey", "bin", "git.exe")]
+    if local:       # GitHub Desktop carries a git of its own
+        places += sorted(glob.glob(os.path.join(local, "GitHubDesktop", "app-*", "resources", "app", "git", "cmd",
+                                                "git.exe")), reverse=True)
+    return places
+
+
 def git_exe() -> str:
     """Where git is - "" if it isn't installed.
 
     On Windows the search path a program sees is the one from when you signed in, so a git
-    installed since then is invisible to an app started from the Start Menu. Look where its
-    installer puts it as well.
+    installed since then is invisible to an app started from the Start Menu. Look everywhere an
+    installer could have put it as well.
     """
     found = shutil.which("git")
     if found or not WINDOWS:
         return found or ""
-    bases = [os.environ.get("ProgramFiles"), os.environ.get("ProgramW6432"), os.environ.get("ProgramFiles(x86)"),
-             os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs")]
-    for base in bases:
-        for sub in ("cmd", "bin"):
-            candidate = os.path.join(base or "", "Git", sub, "git.exe")
-            if base and os.path.isfile(candidate):
-                return candidate
-    return ""
+    return next((place for place in _windows_git_places() if os.path.isfile(place)), "")
 
 
 def is_checkout(folder: Path) -> bool:

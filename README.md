@@ -264,10 +264,6 @@ That makes a private Python environment in `%LOCALAPPDATA%\AchTrack` and a Start
 nothing needs administrator rights. `uninstall.ps1` removes it again (`-Everything` deletes the
 library too).
 
-To get a ready-made `AchTrack.exe` that needs no Python, copy `tools/windows-build.yml` to
-`.github/workflows/windows.yml` in the repository. GitHub then tests each change on a Windows
-machine and attaches the built app to the run, under **Actions → Windows → Artifacts**.
-
 On Windows a game is an ordinary program, so there are no prefixes to find: the emulator's
 achievement files are read from `%APPDATA%`, Documents, Public Documents and ProgramData, and a
 running game is recognised by its own `.exe` - by the crack config beside it, by the Steam library

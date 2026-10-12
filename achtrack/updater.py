@@ -104,9 +104,6 @@ def source_dir() -> Path | None:
 
 def problem(folder: Path | None) -> str:
     """Why updating can't work from here - "" when it can."""
-    if getattr(sys, "frozen", False) and WINDOWS:
-        return ("This is the ready-made AchTrack.exe, which can't rebuild itself. Download a newer "
-                "build, or install from the source with install.ps1 to get updates here.")
     if folder is None:
         return (f"Can't find the folder AchTrack was installed from - it may have been moved or deleted. "
                 f"Updates are fetched into that folder with git, so it has to stay. Clone the repository "

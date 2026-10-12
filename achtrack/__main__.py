@@ -85,7 +85,54 @@ def cmd_scan() -> int:
         if not running:
             print("  (nothing - if the app still says a game is playing, it is the app's own state,"
                   " not a process)")
+        if os.name == "nt":
+            _print_windows_candidates(monitor, set(running))
     return 0
+
+
+def _print_windows_candidates(monitor, running: set) -> None:
+    """Every program of yours that isn't part of Windows, and why it did or didn't count as a game.
+
+    When a game isn't noticed, it is in this list - and the line says what was missing.
+    """
+    from . import winhost
+    from .playtime import _is_steam_install
+    from .scanner import appid_in_dir
+    rows, seen = [], set()
+    for (pid, _started), proc in monitor.cache.items():
+        exe = proc.exe
+        if proc.ignore or not exe or winhost.is_system_path(exe) or exe.lower() in seen:
+            continue
+        seen.add(exe.lower())
+        if proc.detected and proc.detected[0] in running:
+            continue
+        low = exe.lower()
+        if "\\windowsapps\\" in low or "\\microsoft\\" in low or "\\python" in low or low.endswith("\\achtrack.exe"):
+            continue
+        if _is_steam_install(exe):
+            verdict = "installed through Steam - left alone, Steam records its achievements itself"
+        else:
+            folder, config = os.path.dirname(exe), None
+            for _ in range(3):
+                if appid_in_dir(folder):
+                    config = folder
+                    break
+                folder = os.path.dirname(folder)
+            libs = [m for m in monitor.src.mapped(pid) if m.lower().endswith(("steam_api64.dll", "steam_api.dll"))]
+            if config:
+                verdict = f"crack config found in {config}"
+            elif libs:
+                verdict = (f"uses {libs[0]}, but no steam_appid.txt / steam_settings / emulator .ini "
+                           f"was found beside it")
+            else:
+                verdict = "no Steam library loaded and no crack config beside it"
+        rows.append((exe, verdict))
+    print(f"\nOther programs running ({len(rows)}):")
+    for exe, verdict in sorted(rows)[:60]:
+        print(f"  {exe}\n      {verdict}")
+    if rows:
+        print("\nIf your game is listed above, it can still be tracked: add it in AchTrack (Add a game) "
+              "and set its executable name.")
 
 
 def cmd_list() -> int:

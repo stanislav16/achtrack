@@ -113,9 +113,10 @@ def _print_windows_candidates(monitor, running: set) -> None:
             verdict = "installed through Steam - left alone, Steam records its achievements itself"
         else:
             folder, config = os.path.dirname(exe), None
-            for _ in range(3):
-                if appid_in_dir(folder):
-                    config = folder
+            for _ in range(4):
+                near = [folder] + monitor._library_dirs(folder)
+                config = next((d for d in near if appid_in_dir(d)), None)
+                if config:
                     break
                 folder = os.path.dirname(folder)
             libs = [m for m in monitor.src.mapped(pid) if m.lower().endswith(("steam_api64.dll", "steam_api.dll"))]

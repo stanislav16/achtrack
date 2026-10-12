@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.util
+import glob
 import os
 import re
 import shlex
@@ -532,6 +533,20 @@ class ProcessMonitor:
             self.dir_cache[directory] = appid_in_dir(directory)
         return self.dir_cache[directory]
 
+    def _library_dirs(self, directory: str) -> list:
+        """Where a game engine keeps the Steam library when it isn't beside the executable - and
+        a crack keeps its config beside the library. Unreal puts it deep under Engine/, Unity
+        under <Game>_Data/Plugins."""
+        key = ("libs", directory)
+        if key not in self.dir_cache:
+            found = []
+            for pattern in (("Engine", "Binaries", "ThirdParty", "Steamworks", "*", "Win64"),
+                            ("Engine", "Binaries", "ThirdParty", "Steamworks", "*"),
+                            ("*_Data", "Plugins", "x86_64"), ("*_Data", "Plugins")):
+                found += [d for d in glob.glob(os.path.join(glob.escape(directory), *pattern)) if os.path.isdir(d)]
+            self.dir_cache[key] = found
+        return self.dir_cache[key]
+
     def ignore_matching(self, appid: int) -> int:
         """Stop counting the processes that currently make `appid` look like it's running."""
         pids = {pid for pid, _state, _what, _why in self.seen.get(appid, [])}
@@ -579,7 +594,7 @@ class ProcessMonitor:
             if not path or _is_steam_install(path):
                 continue
             directory = os.path.dirname(path)
-            for _ in range(3):
+            for _ in range(4):
                 name = os.path.basename(directory).lower()
                 if (not directory or directory in ("/", os.path.expanduser("~")) or os.path.dirname(directory) == directory
                         or name in ("drive_c", "windows", "system32", "syswow64", "program files",
@@ -589,5 +604,11 @@ class ProcessMonitor:
                 if appid:
                     proc.reason = f"its Windows executable {path} sits under {directory}"
                     return appid, directory
+                for beside in self._library_dirs(directory):
+                    appid = self._dir_appid(beside)
+                    if appid:
+                        proc.reason = (f"its Windows executable {path} belongs to the game in {directory}, "
+                                       f"whose crack config is in {beside}")
+                        return appid, beside
                 directory = os.path.dirname(directory)
         return None

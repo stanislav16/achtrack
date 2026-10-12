@@ -48,7 +48,8 @@ Say "Installing AchTrack (the first time downloads Qt, about a minute)..."
 if ($LASTEXITCODE -ne 0) { Say "The install failed - see the messages above."; exit 1 }
 
 # Where this copy came from, so the app's own update button can find it again.
-Set-Content -Path (Join-Path $Data "source") -Value $Source -Encoding UTF8 -NoNewline
+# (Written this way because Windows PowerShell's "-Encoding UTF8" adds a byte-order mark.)
+[System.IO.File]::WriteAllText((Join-Path $Data "source"), $Source, (New-Object System.Text.UTF8Encoding $false))
 
 $Icon = & $VenvPython -c "import achtrack, os; print(os.path.join(os.path.dirname(achtrack.__file__), 'assets', 'achtrack.ico'))"
 $Programs = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"

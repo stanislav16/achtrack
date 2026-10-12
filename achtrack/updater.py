@@ -38,7 +38,9 @@ def source_dir() -> Path | None:
     if os.environ.get("ACHTRACK_SOURCE"):
         candidates.append(Path(os.environ["ACHTRACK_SOURCE"]).expanduser())
     try:
-        candidates.append(Path(SOURCE_NOTE.read_text(encoding="utf-8").strip()).expanduser())
+        # utf-8-sig: Windows PowerShell puts a byte-order mark in front of what it writes, and
+        # with it left on the path names a folder that doesn't exist.
+        candidates.append(Path(SOURCE_NOTE.read_text(encoding="utf-8-sig").strip()).expanduser())
     except OSError:
         pass
     candidates += [Path.home() / guess for guess in GUESSES]
@@ -54,8 +56,9 @@ def problem(folder: Path | None) -> str:
         return ("This is the ready-made AchTrack.exe, which can't rebuild itself. Download a newer "
                 "build, or install from the source with install.ps1 to get updates here.")
     if folder is None:
-        return (f"Can't find the folder AchTrack was installed from. Run {INSTALLER} from it once more "
-                "and it will be remembered.")
+        return (f"Can't find the folder AchTrack was installed from - it may have been moved or deleted. "
+                f"Updates are fetched into that folder with git, so it has to stay. Clone the repository "
+                f"somewhere permanent and run {INSTALLER} from there once; it will be remembered.")
     if not shutil.which("git"):
         return "git isn't installed, so there's no way to fetch updates."
     if not (folder / ".git").exists():

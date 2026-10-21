@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import backup, descriptions, export, matcher, psn, savefiles, savesync, scanner, share, steam_api, sync
+from . import backup, descriptions, export, matcher, ports, psn, savefiles, savesync, scanner, share, steam_api, sync
 from .config import BACKUP_DIR, CACHE_DIR, EXPORT_DIR, SHARE_DIR, Config
 from .db import PSN, SAVE, SCREEN, STEAM, Database
 from .emulators import parse_file
@@ -122,6 +122,8 @@ class Engine:
         self._steam_id: str | None = None
         self._steam_thread: threading.Thread | None = None
         self._psn_thread: threading.Thread | None = None
+        self._port_thread: threading.Thread | None = None
+        self._port_tried: dict = {}       # port key -> when linking it to a trophy list was last tried
         self._describe_queue: deque = deque()
         self._describe_thread: threading.Thread | None = None
         self._share_thread: threading.Thread | None = None
@@ -285,6 +287,131 @@ class Engine:
                 log.info("found %s achievements for %s: %s", sf.emulator, sf.appid, sf.path)
                 self.sources[sf.path] = {"path": sf.path, "appid": sf.appid, "emulator": sf.emulator, "mtime": 0.0, "size": -1}
                 self._process(sf.path)
+        self.discover_ports()
+
+    # native ports of PlayStation games ------------------------------------
+
+    def port_game(self, port, db: Database | None = None) -> int | None:
+        """The library entry a port's trophies go to, once it has one."""
+        db = db or self.db
+        appid = (db.get_meta("ports") or {}).get(port.key)
+        return appid if appid is not None and db.game(appid) is not None else None
+
+    def discover_ports(self) -> None:
+        for port in ports.PORTS:
+            if port.data_dir() is None:
+                continue
+            appid = self.port_game(port)
+            if appid is None:
+                if time.time() - self._port_tried.get(port.key, 0) > 1800:
+                    self._port_tried[port.key] = time.time()
+                    self._start_port_link(port)
+                continue
+            for path in port.log_files():
+                if path not in self.sources:
+                    log.info("watching %s's log for trophies: %s", port.name, path)
+                    self.sources[path] = {"path": path, "appid": appid, "emulator": ports.EMULATOR,
+                                          "mtime": 0.0, "size": -1}
+                    self._process(path)
+
+    def _start_port_link(self, port) -> None:
+        if self._port_thread is not None and self._port_thread.is_alive():
+            return
+
+        def work():
+            try:
+                self.link_port(port, Database(self.db.path))
+            except Exception:
+                log.exception("setting up %s's trophy list failed", port.name)
+
+        self._port_thread = threading.Thread(target=work, name="achtrack-port", daemon=True)
+        self._port_thread.start()
+
+    def link_port(self, port, db: Database) -> str:
+        """Gives a port a library entry with the game's PlayStation trophy list. "" when done,
+        otherwise why not."""
+        appid = None
+        wanted = psn.normalize_name(port.name)
+        for row in db.q("SELECT appid, name FROM games WHERE psn_id IS NOT NULL AND psn_id != ''"):
+            if psn.normalize_name(row["name"] or "") == wanted:      # you have it on PlayStation too
+                appid = row["appid"]
+                break
+        if appid is None:
+            npsso = self.cfg.psn_npsso.strip()
+            if not npsso:
+                why = (f"Found {port.name} (the native port). Add your PlayStation login in Settings and "
+                       f"AchTrack can fetch its trophy list.")
+                self._error(why)
+                return why
+            try:
+                tokens = psn.valid_token(db.get_meta("psn_tokens"), npsso)
+                db.set_meta("psn_tokens", tokens)
+                token = tokens["access_token"]
+                sets = []
+                for title_id in port.title_ids:
+                    sets = [s for s in psn.trophy_sets(token, f"{title_id}_00") if s["count"]]
+                    if sets:
+                        break
+                if not sets:
+                    for title_id in psn.search_titles(token, port.name):
+                        sets = [s for s in psn.trophy_sets(token, title_id) if s["count"]]
+                        if sets:
+                            break
+                if not sets:
+                    why = f"PlayStation has no trophy list for {port.name}."
+                    self._error(why)
+                    return why
+                chosen = sets[0]
+                trophies = psn.trophy_list(token, chosen["id"], chosen["service"])
+            except psn.PSNError as e:
+                return f"PlayStation: {e}"
+            if not trophies:
+                return f"PlayStation sent an empty trophy list for {port.name}."
+            game = db.psn_game(chosen["id"])
+            if game is not None:
+                appid = game["appid"]
+            else:
+                appid = db.next_psn_appid()
+                db.ensure_game(appid)
+                db.update_game(appid, psn_id=chosen["id"], platform="ps4", name=chosen["name"] or port.name,
+                               header_url=chosen["icon"])
+                schema = [{"name": f"trophy_{t['id']}", "display_name": t["name"], "description": t["detail"],
+                           "icon": t["icon"], "icon_gray": t["icon"], "hidden": int(t["hidden"]),
+                           "global_pct": None, "kind": t["kind"]} for t in trophies]
+                db.set_schema(appid, schema, {})
+                db.update_game(appid, schema_fetched_at=int(time.time()))
+                self._prefetch_icons(appid, [t["icon"] for t in trophies] + [chosen["icon"]])
+            # The console awards the platinum itself once every trophy of the main game is earned;
+            # the port doesn't, so AchTrack does it the same way.
+            db.set_meta(f"platinum:{appid}", {
+                "platinum": next((f"trophy_{t['id']}" for t in trophies if t["kind"] == "platinum"), ""),
+                "needs": [f"trophy_{t['id']}" for t in trophies if t["kind"] != "platinum" and t["group"] == "default"]})
+        if not db.get_meta(f"platinum:{appid}"):
+            # An entry from your PlayStation account doesn't say which trophies are the main game's,
+            # so ask for all of them: the platinum may come late, but never early.
+            rows = db.q("SELECT name, kind FROM achievements WHERE appid = ?", (appid,))
+            db.set_meta(f"platinum:{appid}", {
+                "platinum": next((r["name"] for r in rows if r["kind"] == "platinum"), ""),
+                "needs": [r["name"] for r in rows if r["kind"] != "platinum"]})
+        game = db.game(appid)
+        exes = [e for e in (game["exe_name"] or "").split(";") if e.strip()]
+        if port.process not in exes:
+            db.x("UPDATE games SET exe_name = ? WHERE appid = ?", (";".join(exes + [port.process]), appid))
+        linked = dict(db.get_meta("ports") or {})
+        linked[port.key] = appid
+        db.set_meta("ports", linked)
+        log.info("%s's trophies now go to library entry %s", port.name, appid)
+        self._force_scan = True
+        self.listener.on_changed()
+        return ""
+
+    def _platinum(self, appid: int, known: set) -> str | None:
+        """The platinum, if a port's game has just earned everything it takes."""
+        rule = self.db.get_meta(f"platinum:{appid}") or {}
+        name, needs = rule.get("platinum"), rule.get("needs") or []
+        if name and needs and name not in known and all(n in known for n in needs):
+            return name
+        return None
 
     def poll(self) -> None:
         for path, src in list(self.sources.items()):
@@ -328,6 +455,12 @@ class Engine:
                     if self.db.add_unlock(appid, name, ts, src["emulator"]):
                         new.append(name)
                         known.add(name)
+            if src["emulator"] == ports.EMULATOR:
+                platinum = self._platinum(appid, known)
+                if platinum and self.db.add_unlock(appid, platinum, int(min(st.st_mtime, time.time())),
+                                                   src["emulator"]):
+                    new.append(platinum)
+                    known.add(platinum)
             self.db.upsert_source(path, appid, src["emulator"], st.st_mtime, st.st_size)
         src["mtime"], src["size"] = st.st_mtime, st.st_size
 

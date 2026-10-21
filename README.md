@@ -91,6 +91,28 @@ and left alone.
 This needs no Epic account and no overlay. Unlocks come from the same places they do for a crack:
 your save files, the review after a session, or marking them yourself.
 
+## Bloodborne's native port
+
+The native Linux port of Bloodborne (bbport) runs the PS4 game's own code, so the game still unlocks
+trophies - and the port prints each one (`Runtime: trophy 12 unlocked`). AchTrack reads that
+output, looks the number up in Bloodborne's PlayStation trophy list and unlocks it with a popup.
+The platinum follows once every main-game trophy is earned, as on the console.
+
+What it needs:
+
+- **Your PlayStation login** in Settings, to fetch the trophy list. If Bloodborne is already in your
+  library from PlayStation, the PC trophies join that entry instead.
+- **The port's output kept in a file** under `~/.local/share/bbport/logs/`. Either tick *Save the log
+  and statistics to a file* in the port's launcher, or end your launch script with:
+
+  ```sh
+  mkdir -p "$HOME/.local/share/bbport/logs"
+  exec ./Bloodborne-bbport.AppImage --play "$@" >> "$HOME/.local/share/bbport/logs/$(date +%Y%m%d_%H%M%S).log" 2>&1
+  ```
+
+Play time and "playing now" come from the port's `bb-probe` process. `achtrack scan` shows whether
+the port was found, which logs are read and which trophies are in them.
+
 ## Hidden achievements
 
 Steam blanks out a hidden achievement's description and never reveals it - not through the Web API,

@@ -194,6 +194,9 @@ def parse_ini(path: Path) -> dict:
 
 
 def parse_file(path: Path) -> dict:
+    if path.suffix.lower() == ".log":                  # a native port's output (ports.py)
+        from .ports import parse_log
+        return parse_log(path)
     if path.suffix.lower() == ".json":
         return parse_json(path)
     return parse_ini(path)

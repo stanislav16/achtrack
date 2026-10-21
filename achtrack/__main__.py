@@ -38,6 +38,24 @@ def cmd_scan() -> int:
     db = Database()
     game_dirs = [r["game_dir"] for r in db.games(include_hidden=True) if r["game_dir"]]
     files = find_state_files(cfg.scan_dirs, game_dirs)
+    from . import ports
+    for port in ports.PORTS:
+        base = port.data_dir()
+        if base is None:
+            continue
+        linked = (db.get_meta("ports") or {}).get(port.key) if db is not None else None
+        logs = port.log_files()
+        print(f"{port.name} (native port) in {base}: "
+              + (f"trophies go to library entry {linked}" if linked is not None
+                 else "not linked to a trophy list yet (needs your PlayStation login)"))
+        print(f"  logs: {len(logs)}" + ("" if logs else " - start the game with BB_SAVE_LOG=1 or its output sent to "
+                                                       f"{base / 'logs'}/<name>.log, or trophies can't be seen"))
+        for path in logs[-3:]:
+            try:
+                found = sorted(ports.trophies_in(path, port))
+            except OSError:
+                found = []
+            print(f"    {path}: trophies {found or 'none yet'}")
     print(f"\nAchievement files ({len(files)}):")
     for sf in files:
         try:

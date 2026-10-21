@@ -417,7 +417,8 @@ class AchievementRow(QFrame):
         if unlocked:
             source = a.get("source")
             tag = {STEAM: "  ·  Steam", PSN: "  ·  PlayStation", MANUAL: "  ·  Added by you",
-                   SAVE: "  ·  Found in your save", SCREEN: "  ·  Seen on screen"}.get(source, "")
+                   SAVE: "  ·  Found in your save", SCREEN: "  ·  Seen on screen",
+                   "port": "  ·  PC port"}.get(source, "")
             date = QLabel(fmt_unlock(a["unlocked_at"]) + tag)
             date.setObjectName("AchDate")
             right.addWidget(date, 0, Qt.AlignmentFlag.AlignRight)

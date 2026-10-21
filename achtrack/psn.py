@@ -214,7 +214,7 @@ def trophy_sets(token: str, np_title_id: str) -> list:
                 continue
             defined = t.get("definedTrophies") or {}
             out.append({"id": t["npCommunicationId"], "service": t.get("npServiceName") or "trophy2",
-                        "name": t.get("trophyTitleName") or "",
+                        "name": t.get("trophyTitleName") or "", "icon": t.get("trophyTitleIconUrl") or "",
                         "count": sum(int(defined.get(k) or 0) for k in TROPHY_KINDS)})
     return out
 
@@ -232,6 +232,26 @@ def trophy_definitions(token: str, np_comm_id: str, service: str = "") -> list:
         return [{"name": t.get("trophyName") or "", "detail": t.get("trophyDetail") or "",
                  "hidden": bool(t.get("trophyHidden")), "kind": (t.get("trophyType") or "").lower()}
                 for t in data.get("trophies") or []]
+    if last:
+        raise last
+    return []
+
+
+def trophy_list(token: str, np_comm_id: str, service: str = "") -> list:
+    """A whole trophy list as the library stores it - for a game played somewhere PlayStation
+    doesn't see, so there is nothing earned to merge in."""
+    last = None
+    for attempt in ([service] if service else []) + [s for s in SERVICES if s != service]:
+        try:
+            data = _get(f"trophy/v1/npCommunicationIds/{np_comm_id}/trophyGroups/all/trophies", token,
+                        {"npServiceName": attempt})
+        except PSNError as e:
+            last = e
+            continue
+        return [{"id": t.get("trophyId"), "name": t.get("trophyName") or "", "detail": t.get("trophyDetail") or "",
+                 "icon": t.get("trophyIconUrl") or "", "kind": (t.get("trophyType") or "").lower(),
+                 "hidden": bool(t.get("trophyHidden")), "group": t.get("trophyGroupId") or "default"}
+                for t in data.get("trophies") or [] if t.get("trophyId") is not None]
     if last:
         raise last
     return []

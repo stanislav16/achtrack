@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -54,6 +55,8 @@ BLOODBORNE = Port(
 
 PORTS = (BLOODBORNE,)
 EMULATOR = "port"
+KEEP_LOGS = 3           # the newest few stay, for looking into a crash; older ones go once read
+QUIET_FOR = 600         # seconds a log must have gone unwritten before it counts as finished
 
 
 def port_for_log(path: str) -> Port | None:
@@ -83,6 +86,32 @@ def trophies_in(path: str, port: Port) -> set:
         ids.add(int(match.group(1)))
     _read[path] = (st.st_ino, offset + end, ids)
     return ids
+
+
+def tidy_logs(port: Port, read: set, running: bool) -> list:
+    """Deletes old logs whose trophies are already in the library. Returns what went.
+
+    `read` holds the logs AchTrack has finished reading. A log is only removed when it is not one
+    of the newest KEEP_LOGS, nobody has written to it for a while, and the game isn't running -
+    so a session AchTrack hasn't read yet always survives until it has been.
+    """
+    if running:
+        return []
+    gone = []
+    now = time.time()
+    for path in port.log_files()[:-KEEP_LOGS]:          # names start with the date: oldest first
+        try:
+            quiet = now - os.stat(path).st_mtime > QUIET_FOR
+        except OSError:
+            continue
+        if path in read and quiet:
+            try:
+                os.remove(path)
+            except OSError:
+                continue
+            _read.pop(path, None)
+            gone.append(path)
+    return gone
 
 
 def parse_log(path: Path) -> dict:

@@ -400,6 +400,9 @@ class Database:
     def sources_for(self, appid: int) -> list:
         return [r["path"] for r in self.q("SELECT path FROM sources WHERE appid = ?", (appid,))]
 
+    def remove_source(self, path: str) -> None:
+        self.x("DELETE FROM sources WHERE path = ?", (path,))
+
     def upsert_source(self, path: str, appid: int, emulator: str, mtime: float, size: int) -> None:
         self.x("INSERT OR REPLACE INTO sources VALUES(?,?,?,?,?)", (path, appid, emulator, mtime, size))
 

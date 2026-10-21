@@ -313,6 +313,14 @@ class Engine:
                     self.sources[path] = {"path": path, "appid": appid, "emulator": ports.EMULATOR,
                                           "mtime": 0.0, "size": -1}
                     self._process(path)
+            # Read means: its trophies are in the library, up to the size it has now.
+            read = {path for path, src in self.sources.items()
+                    if src.get("emulator") == ports.EMULATOR and os.path.exists(path)
+                    and src.get("size") == os.path.getsize(path)}
+            for path in ports.tidy_logs(port, read, appid in self.running):
+                log.info("removed an old %s log, its trophies already recorded: %s", port.name, path)
+                self.sources.pop(path, None)
+                self.db.remove_source(path)
 
     def _start_port_link(self, port) -> None:
         if self._port_thread is not None and self._port_thread.is_alive():

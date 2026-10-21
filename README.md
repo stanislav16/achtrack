@@ -110,6 +110,9 @@ What it needs:
   exec ./Bloodborne-bbport.AppImage --play "$@" >> "$HOME/.local/share/bbport/logs/$(date +%Y%m%d_%H%M%S).log" 2>&1
   ```
 
+A new log is made each time you play. AchTrack keeps the newest three and deletes older ones once
+their trophies are in your library (never while the game is running).
+
 Play time and "playing now" come from the port's `bb-probe` process. `achtrack scan` shows whether
 the port was found, which logs are read and which trophies are in them.
 

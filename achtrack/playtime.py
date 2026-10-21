@@ -105,6 +105,10 @@ class _LinuxProcesses:
                 env[k.decode()] = v.decode("utf-8", "surrogateescape")
         return args, _link(f"/proc/{pid}/exe"), env
 
+    def program(self, pid: str) -> str:
+        """What the process is running now - cheap enough to ask on every scan."""
+        return _link(f"/proc/{pid}/exe")
+
     def cwd(self, pid: str) -> str:
         return _link(f"/proc/{pid}/cwd")
 
@@ -157,10 +161,13 @@ class _MacProcesses:
         info = self._bsdinfo(pid)
         return struct.unpack_from("I", info, 20)[0] if info else None      # pbi_uid
 
-    def describe(self, pid: str) -> tuple:
+    def program(self, pid: str) -> str:
         buf = ctypes.create_string_buffer(4096)
         length = self.libproc.proc_pidpath(int(pid), buf, 4096)
-        exe = buf.raw[:length].decode("utf-8", "replace") if length > 0 else ""
+        return buf.raw[:length].decode("utf-8", "replace") if length > 0 else ""
+
+    def describe(self, pid: str) -> tuple:
+        exe = self.program(pid)
         mib = (ctypes.c_int * 3)(1, 49, int(pid))              # CTL_KERN, KERN_PROCARGS2
         size = ctypes.c_size_t(0)
         if self.libc.sysctl(mib, 3, None, ctypes.byref(size), None, 0) != 0 or not size.value:
@@ -466,6 +473,11 @@ class ProcessMonitor:
             key = (pid, started)
             alive.add(key)
             proc = self.cache.get(key)
+            if proc is not None and proc.exe and getattr(self.src, "program", None) \
+                    and self.src.program(pid) not in ("", proc.exe):
+                # Same process, new program: a launcher script that exec's the game keeps its pid
+                # and start time, so what was learned about the script no longer holds.
+                proc = None
             if proc is None:
                 proc = self.cache[key] = self._load(pid)
             if proc.ignore:

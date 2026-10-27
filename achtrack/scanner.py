@@ -116,6 +116,8 @@ def steam_roots() -> list:
     if winhost.IS_WINDOWS:
         root = winhost.steam_root()
         return [root] if root else []
+    if sys.platform == "darwin":
+        return [home / "Library/Application Support/Steam"]
     return [
         home / ".local/share/Steam",
         home / ".steam/steam",
@@ -241,6 +243,7 @@ def heroic_installed() -> list:
                     continue
                 seen.add(key)
                 out.append({"title": title, "folder": os.path.expanduser(str(folder or "")),
+                            "app_name": str(entry.get("app_name") or entry.get("appName") or entry.get("id") or ""),
                             "exe": os.path.basename(str(exe or "")),
                             "store": name.split("/")[0].replace("_config", "").replace("_store", "")
                                          .replace("_apps", "").replace("Config", "")})

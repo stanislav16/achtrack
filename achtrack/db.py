@@ -119,6 +119,7 @@ MIGRATIONS = {
         "psn_last_played": "INTEGER",
         "edited_at": "INTEGER",   # last time you changed something about this game here
         "trophy_src": "TEXT",  # PlayStation trophy list describing this game's hidden ones, "-" = none found
+        "launch": "TEXT",      # how Play starts it on this machine (launcher.py); never synced
     },
     "unlocks": {
         "note": "TEXT",       # why it unlocked, e.g. the save field that matched
@@ -132,7 +133,7 @@ MIGRATIONS = {
 GAME_FIELDS = {"name", "header_url", "exe_name", "game_dir", "last_played", "schema_fetched_at", "hidden",
                "playtime",   # normally grown by add_playtime, but set directly when merging devices
                "steam_playtime", "steam_last_played", "steam_owned", "review", "genre",
-               "platform", "psn_id", "psn_playtime", "psn_last_played", "edited_at", "trophy_src"}
+               "platform", "psn_id", "psn_playtime", "psn_last_played", "edited_at", "trophy_src", "launch"}
 
 # Unlock sources that don't come from an emulator file.
 PSN = "PlayStation"

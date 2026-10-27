@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
                                QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSplitter, QStackedWidget,
                                QTabWidget, QVBoxLayout, QWidget)
 
-from . import __version__, descriptions, desktop, readerkit, readers, savesync, theme, updater
+from . import __version__, descriptions, desktop, launcher, readerkit, readers, savesync, theme, updater
 from .config import APP_ICON, APP_NAME, BACKUP_DIR, DATA_DIR, POPUP_CORNERS, WINDOW_ICON, Config
 from .db import MANUAL, PSN, SAVE, SCREEN, STEAM, Database
 from .engine import build_unlock_event, needs_review
@@ -565,6 +565,21 @@ class DetailView(QWidget):
         playing.addWidget(self.running, 0, Qt.AlignmentFlag.AlignVCenter)
         playing.addWidget(self.subtitle, 1, Qt.AlignmentFlag.AlignVCenter)
         info.addLayout(playing)
+        actions = QHBoxLayout()
+        actions.setSpacing(6)
+        self.play = QPushButton("▶  Play")
+        self.play.setObjectName("Primary")
+        self.play.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.play.clicked.connect(lambda: self.appid is not None and self.win.play(self.appid))
+        self.play_how = QPushButton("⌄")
+        self.play_how.setObjectName("Flat")
+        self.play_how.setToolTip("How this game starts")
+        self.play_how.clicked.connect(self._launch_menu)
+        actions.addWidget(self.play)
+        actions.addWidget(self.play_how)
+        actions.addStretch(1)
+        info.addSpacing(8)
+        info.addLayout(actions)
         info.addStretch(1)
 
         tiles = QFrame()
@@ -644,6 +659,11 @@ class DetailView(QWidget):
         self.list.customContextMenuRequested.connect(self._row_menu)
         root.addWidget(self.list, 100)
         root.addStretch(1)
+
+    def _launch_menu(self) -> None:
+        if self.appid is not None:
+            menu = self.win.launch_menu(self.appid, self)
+            menu.exec(self.play_how.mapToGlobal(self.play_how.rect().bottomLeft()))
 
     def _ach_sort_changed(self, value: str) -> None:
         self.win.cfg.achievement_sort = value
@@ -735,6 +755,12 @@ class DetailView(QWidget):
         self.title.setText(game["name"] or f"App {self.appid}")
         for widget in (self.running, self.running_dot):
             widget.setVisible(self.appid in self.win.running)
+        playing = self.appid in self.win.running
+        how = launcher.best(db, self.appid)
+        self.play.setEnabled(not playing)
+        self.play.setText("Playing" if playing else "▶  Play")
+        self.play.setToolTip("" if playing else f"Starts {launcher.describe(how)}" if how
+                             else "Choose how this game starts")
         total_time = game["total_playtime"] if "total_playtime" in game.keys() else (
             game["playtime"] + game["steam_playtime"] + game["psn_playtime"])
         self.stat_time.value.setText(fmt_playtime(total_time))
@@ -2496,6 +2522,66 @@ class MainWindow(QMainWindow):
             self.reload(force=True)
             self._select(dialog.saved_appid)
 
+    def play(self, appid: int) -> None:
+        how = launcher.best(self.db, appid)
+        if how is None:
+            how = self.choose_program(appid)
+            if how is None:
+                return
+        try:
+            launcher.start(how, appid)
+        except OSError as e:
+            QMessageBox.warning(self, APP_NAME, f"Couldn't start the game {launcher.describe(how)}:\n{e}\n\n"
+                                "Use the ⌄ next to Play to choose another way.")
+            return
+        self.statusBar().showMessage(f"Starting {self.db.game(appid)['name'] or 'the game'} "
+                                     f"{launcher.describe(how)}…", 8000)
+
+    def choose_program(self, appid: int):
+        game = self.db.game(appid)
+        start_in = game["game_dir"] or os.path.expanduser("~")
+        path, _ = QFileDialog.getOpenFileName(
+            self, f"Choose what starts {game['name'] or 'this game'}", start_in,
+            "Programs and scripts (*)" if os.name != "nt" else "Programs (*.exe *.bat *.cmd *.lnk);;All files (*)")
+        if not path:
+            return None
+        how = launcher.Launch("program", path, os.path.basename(path))
+        self.set_launch(appid, how)
+        return how
+
+    def set_launch(self, appid: int, how) -> None:
+        self.db.update_game(appid, launch=how.stored() if how else None)
+        self.detail.refresh(force=True)
+
+    def launch_menu(self, appid: int, parent) -> QMenu:
+        """The ways this game can start here, with the current one ticked."""
+        game = self.db.game(appid)
+        current = launcher.best(self.db, appid)
+        chosen = bool(game["launch"])
+        menu = QMenu(parent)
+        names = [game["name"] or ""]
+        exes = [e.strip() for e in (game["exe_name"] or "").split(";") if e.strip()]
+        options = []
+        if appid > 0:
+            options.append(launcher.Launch("steam", str(appid), "Steam"))
+        for found in (launcher.heroic_entry(names), launcher.crossover_app(exes, names), launcher.program(game)):
+            if found:
+                options.append(found)
+        if current and current.kind == "program" and all(o.stored() != current.stored() for o in options):
+            options.append(current)
+        for option in options:
+            label = {"steam": "Start through Steam", "heroic": "Start through Heroic",
+                     "app": f"Start through CrossOver ({os.path.basename(option.value)})"}.get(
+                option.kind, f"Start {option.label}")
+            action = menu.addAction(label, lambda o=option: self.set_launch(appid, o))
+            action.setCheckable(True)
+            action.setChecked(bool(current) and current.stored() == option.stored())
+        menu.addAction("Choose a program or script…", lambda: self.choose_program(appid))
+        menu.addSeparator()
+        auto = menu.addAction("Decide automatically", lambda: self.set_launch(appid, None))
+        auto.setEnabled(chosen)
+        return menu
+
     def edit_game(self, appid: int) -> None:
         dialog = GameDialog(self, self.db, appid)
         if dialog.exec():
@@ -2515,6 +2601,12 @@ class MainWindow(QMainWindow):
         appid = item.data(Qt.ItemDataRole.UserRole)
         game = self.db.game(appid)
         menu = QMenu(self)
+        if appid not in self.running:
+            menu.addAction("▶  Play", lambda: self.play(appid))
+        start_with = self.launch_menu(appid, menu)
+        start_with.setTitle("Start with")
+        menu.addMenu(start_with)
+        menu.addSeparator()
         if game["psn_id"]:
             menu.addAction("Sync PlayStation now", self._sync_psn)
             menu.addSeparator()

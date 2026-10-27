@@ -91,6 +91,21 @@ and left alone.
 This needs no Epic account and no overlay. Unlocks come from the same places they do for a crack:
 your save files, the review after a session, or marking them yourself.
 
+## Playing from AchTrack
+
+Each game has a **Play** button. AchTrack doesn't run games itself: it hands them to whatever already
+does, with all of that launcher's settings.
+
+- **Steam** games start through Steam (`steam://rungameid/…`) - on macOS too, with NotProton's
+  Steam running Windows games through CrossOver.
+- Games installed or added in **Heroic** start through Heroic (`heroic://launch?…`).
+- Windows programs in a **CrossOver** bottle start from the launcher app CrossOver made for them.
+- On **Windows** a game's own `.exe` starts directly.
+
+The ⌄ next to Play shows how a game starts and lets you pick another way, or any program or script.
+A program AchTrack starts itself is marked as that game from its first second, so its play time
+can't be missed. The choice is kept per machine.
+
 ## Bloodborne's native port
 
 The native Linux port of Bloodborne (bbport) runs the PS4 game's own code, so the game still unlocks

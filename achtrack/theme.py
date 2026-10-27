@@ -277,6 +277,14 @@ QPushButton::menu-indicator {{ width: 0; height: 0; image: none; }}
 QPushButton#Primary {{ background: {p['accent']}; color: {p['on_accent']}; font-weight: 600; }}
 QPushButton#Primary:hover {{ background: {p['accent_soft']}; }}
 QPushButton#Primary:disabled {{ background: {p['fill']}; color: {p['muted']}; }}
+QPushButton#PlayMain, QPushButton#PlayMore {{ background: {p['accent']}; color: {p['on_accent']};
+    font-size: 14px; font-weight: 600; padding: 8px 18px; margin-top: 6px; }}
+QPushButton#PlayMain {{ border-top-right-radius: 0; border-bottom-right-radius: 0; border-radius: 10px;
+    border-top-right-radius: 0; border-bottom-right-radius: 0; }}
+QPushButton#PlayMore {{ padding: 8px 11px; border-radius: 10px; border-top-left-radius: 0;
+    border-bottom-left-radius: 0; border-left: 1px solid {p['accent_soft']}; }}
+QPushButton#PlayMain:hover, QPushButton#PlayMore:hover {{ background: {p['accent_soft']}; }}
+QPushButton#PlayMain:disabled, QPushButton#PlayMore:disabled {{ background: {p['fill']}; color: {p['muted']}; }}
 QPushButton#Flat {{ background: transparent; color: {p['muted']}; padding: 5px 8px; }}
 QPushButton#Flat:hover {{ background: {p['fill']}; color: {p['text']}; }}
 QPushButton#More {{ padding: 7px 11px; font-weight: 700; letter-spacing: 1px; }}

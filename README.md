@@ -102,7 +102,7 @@ does, with all of that launcher's settings.
 - Windows programs in a **CrossOver** bottle start from the launcher app CrossOver made for them.
 - On **Windows** a game's own `.exe` starts directly.
 
-The ⌄ next to Play shows how a game starts and lets you pick another way, or any program or script.
+The ▾ next to Play shows how a game starts and lets you pick another way, or any program or script.
 A program AchTrack starts itself is marked as that game from its first second, so its play time
 can't be missed. The choice is kept per machine.
 

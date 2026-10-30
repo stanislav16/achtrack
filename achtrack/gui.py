@@ -8,7 +8,7 @@ import sys
 import time
 from datetime import datetime
 
-from PySide6.QtCore import QDateTime, QProcess, QRectF, QSize, Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtCore import QDateTime, QEvent, QObject, QProcess, QRectF, QSize, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import (QAction, QActionGroup, QBrush, QColor, QDesktopServices, QFont, QGuiApplication, QIcon,
                            QImage, QKeySequence, QLinearGradient, QPainter, QPainterPath, QPalette, QPen, QPixmap)
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateTimeEdit, QDialog,
@@ -207,6 +207,30 @@ class MenuButton(QPushButton):
             action.setChecked(v == value)
         self._sync_text()
         self.on_change(value)
+
+
+class _FollowFingers(QObject):
+    """Trackpads report how far the fingers moved, in pixels. Left to itself Qt turns that into
+    wheel steps sized by the list's row height, so a list ran about four times ahead of the fingers
+    and at its own uneven pace. A real mouse wheel reports no pixels and is left alone."""
+
+    def __init__(self, area):
+        super().__init__(area)
+        self.area = area
+
+    def eventFilter(self, _watched, event) -> bool:
+        if event.type() != QEvent.Type.Wheel or event.pixelDelta().isNull():
+            return False
+        moved = event.pixelDelta()
+        horizontal = abs(moved.x()) > abs(moved.y())
+        bar = self.area.horizontalScrollBar() if horizontal else self.area.verticalScrollBar()
+        bar.setValue(bar.value() - (moved.x() if horizontal else moved.y()))
+        event.accept()
+        return True
+
+
+def follow_fingers(area) -> None:
+    area.viewport().installEventFilter(_FollowFingers(area))
 
 
 class Segmented(QFrame):
@@ -658,6 +682,7 @@ class DetailView(QWidget):
         root.addWidget(self.notice)
 
         self.list = QListWidget()
+        follow_fingers(self.list)
         self.list.setObjectName("AchList")
         self.list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
@@ -1131,6 +1156,7 @@ class RestoreSavesDialog(QDialog):
         self.hint.setWordWrap(True)
         lay.addWidget(self.hint)
         self.list = QListWidget()
+        follow_fingers(self.list)
         self.list.setMinimumHeight(190)
         self.list.setStyleSheet(
             f"QListWidget {{ background: {P['field']}; border: 1px solid {P['hair']}; border-radius: 10px;"
@@ -1231,6 +1257,7 @@ class ReadersDialog(QDialog):
         hint.setWordWrap(True)
         lay.addWidget(hint)
         self.list = QListWidget()
+        follow_fingers(self.list)
         self.list.setMinimumHeight(170)
         self.list.setStyleSheet(
             f"QListWidget {{ background: {P['field']}; border: 1px solid {P['hair']}; border-radius: 10px;"
@@ -1515,6 +1542,7 @@ class ReviewDialog(QDialog):
         lay.addWidget(self.search)
 
         self.list = QListWidget()
+        follow_fingers(self.list)
         self.list.setObjectName("AchList")
         self.list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
@@ -1924,6 +1952,7 @@ class SettingsDialog(QDialog):
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         scroll = QScrollArea()
+        follow_fingers(scroll)
         scroll.setWidget(page)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -2135,6 +2164,7 @@ class MainWindow(QMainWindow):
         sort_wrap.addWidget(self.platform)
         side_lay.addLayout(sort_wrap)
         self.games = QListWidget()
+        follow_fingers(self.games)
         self.games.setObjectName("SidebarList")
         self.games.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.games.currentItemChanged.connect(self._on_select)

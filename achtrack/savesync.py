@@ -24,7 +24,7 @@ import time
 import zipfile
 from pathlib import Path
 
-from . import savefiles, winhost
+from . import ports, savefiles, winhost
 
 log = logging.getLogger(__name__)
 
@@ -79,11 +79,14 @@ class Layout:
     there still says user/Documents/…, which is where a prefix on another machine keeps it.
     """
 
-    def __init__(self, prefix: str, game_dir: str | None):
+    def __init__(self, prefix: str, game_dir: str | None, port_saves: str = ""):
         self.prefix = prefix or ""
         self.root = savefiles.game_root(game_dir) if game_dir else None
         self.anchors = {}
         self.mounts = []
+        if port_saves:          # a native port keeps its saves in its own folder
+            self.anchors["port"] = port_saves
+            self.mounts.append(("port", port_saves))
         if self.root:
             self.anchors["game"] = self.root
             self.mounts.append(("game", self.root))
@@ -136,7 +139,9 @@ def find_layout(db, appid: int) -> Layout:
         + [prefix_of(r["path"]) for r in db.save_files(appid)] + [prefix_of(game_dir or "")]
     prefix = "" if winhost.IS_WINDOWS else next(
         (p for p in candidates if p and os.path.isdir(os.path.join(p, "drive_c"))), "")
-    return Layout(prefix, game_dir)
+    port = ports.port_of(db, appid)
+    saves = port.saves_dir() if port else None
+    return Layout(prefix, game_dir, str(saves) if saves else "")
 
 
 # --- what counts as this game's saves -------------------------------------------------------------
@@ -154,6 +159,10 @@ def save_places(db, appid: int) -> list:
     def add(path: str) -> None:
         if path not in places and os.path.exists(path):
             places.append(path)
+
+    port = ports.port_of(db, appid)
+    if port and port.saves_dir():
+        add(str(port.saves_dir()))
 
     for row in db.save_files(appid):                     # files seen changing while the game ran
         path = row["path"]
@@ -199,6 +208,13 @@ def store(cfg, backup_dir: Path) -> Path:
     return (Path(shared).expanduser() if shared else Path(backup_dir)) / FOLDER
 
 
+def identity(db, appid: int) -> str:
+    """What a game's backups are filed under. A PlayStation entry's number differs per machine, so
+    a port's backups go by the port's name."""
+    port = ports.port_of(db, appid)
+    return port.key if port else str(appid)
+
+
 def backup(db, cfg, backup_dir: Path, appid: int, device: tuple, note: str = "", keep: str = "") -> dict:
     """Packs a game's saves into the shared folder. Returns {"path", "files", "bytes"}."""
     game = db.game(appid)
@@ -211,14 +227,15 @@ def backup(db, cfg, backup_dir: Path, appid: int, device: tuple, note: str = "",
                             "and save once, then try again")
     device_id, device_name = device
     created = int(time.time())
-    folder = store(cfg, backup_dir) / str(appid)
+    folder = store(cfg, backup_dir) / identity(db, appid)
     folder.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(created))
     dest, extra = folder / f"{stamp}-{device_id}.zip", 1
     while dest.exists():                    # never write over a backup, even one made this second
         extra += 1
         dest = folder / f"{stamp}-{extra}-{device_id}.zip"
-    manifest = {"app": "achtrack-saves", "version": 1, "appid": appid, "name": game["name"] or "",
+    manifest = {"app": "achtrack-saves", "version": 1, "appid": appid, "game": identity(db, appid),
+                "name": game["name"] or "",
                 "device": device_id, "device_name": device_name, "created": created, "note": note,
                 "files": [{"path": portable, "size": os.path.getsize(path), "mtime": os.path.getmtime(path)}
                           for path, portable in files]}
@@ -251,9 +268,9 @@ def read_manifest(path: Path) -> dict | None:
     return data if isinstance(data, dict) and data.get("app") == "achtrack-saves" else None
 
 
-def backups(cfg, backup_dir: Path, appid: int) -> list:
+def backups(cfg, backup_dir: Path, appid: int, db=None) -> list:
     """Backups of a game from every device, newest first. Ones iCloud hasn't fetched are flagged."""
-    folder = store(cfg, backup_dir) / str(appid)
+    folder = store(cfg, backup_dir) / (identity(db, appid) if db is not None else str(appid))
     out = []
     try:
         entries = sorted(folder.iterdir(), reverse=True)
@@ -269,9 +286,39 @@ def backups(cfg, backup_dir: Path, appid: int) -> list:
                 out.append({"path": str(path), "pending": False, "created": manifest.get("created", 0),
                             "device": manifest.get("device", ""), "device_name": manifest.get("device_name", ""),
                             "files": len(manifest.get("files") or []), "bytes": path.stat().st_size,
-                            "note": manifest.get("note", "")})
+                            "note": manifest.get("note", ""),
+                            "needs": sorted({str(f.get("path", "")).partition("/")[0]
+                                             for f in manifest.get("files") or []}),
+                            "written": max((f.get("mtime") or 0 for f in manifest.get("files") or []), default=0)})
     out.sort(key=lambda b: b.get("created", 0), reverse=True)
     return out
+
+
+SAME_TIME = 60      # seconds: clocks and file systems differ a little between machines
+
+
+def newer_elsewhere(db, cfg, backup_dir: Path, appid: int, device_id: str) -> dict | None:
+    """The newest backup from another machine, if it holds saves newer than the ones here.
+
+    It compares when the saves were written, not when the backup was made. A restore puts files
+    back with their original times, so a save brought over once isn't offered a second time.
+    `here` is when this machine's saves were last written (0 if it has none), and `blocked` says
+    AchTrack doesn't yet know where this game's saves go on this machine.
+    """
+    layout = find_layout(db, appid)
+    here = 0.0
+    for path, _portable in collect(db, appid, layout):
+        try:
+            here = max(here, os.path.getmtime(path))
+        except OSError:
+            pass
+    for entry in backups(cfg, backup_dir, appid, db):
+        if entry["pending"] or entry["device"] == device_id or entry["note"] == "before restore":
+            continue
+        if entry["written"] > here + SAME_TIME:
+            return {**entry, "here": here, "blocked": any(a not in layout.anchors for a in entry["needs"])}
+        return None         # the newest from elsewhere isn't newer, so no older one can be
+    return None
 
 
 def _fetch_from_icloud(placeholder: Path) -> None:
@@ -291,14 +338,15 @@ def restore(db, cfg, backup_dir: Path, appid: int, archive_path: str, device: tu
     manifest = read_manifest(Path(archive_path))
     if manifest is None:
         raise SaveSyncError("that isn't a save backup AchTrack made, or it hasn't finished downloading")
-    if int(manifest.get("appid") or 0) != appid:
+    if str(manifest.get("game") or manifest.get("appid") or "") != identity(db, appid):
         raise SaveSyncError("that backup belongs to a different game")
     layout = find_layout(db, appid)
     wanted = [f["path"] for f in manifest.get("files") or []]
     needs = {p.partition("/")[0] for p in wanted}
     missing = sorted(a for a in needs if a not in layout.anchors)
     if missing:
-        what = {"game": "where the game is installed", "user": "which bottle or prefix the game uses",
+        what = {"game": "where the game is installed", "port": "where the game's port keeps its saves",
+                "user": "which bottle or prefix the game uses",
                 "public": "which bottle or prefix the game uses", "c": "which bottle or prefix the game uses"}
         raise SaveSyncError(f"AchTrack doesn't know {what.get(missing[0], missing[0])} on this machine yet. "
                             f"Start the game here once, quit it, and restore again")

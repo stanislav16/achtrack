@@ -19,13 +19,14 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
                                QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSplitter, QStackedWidget,
                                QTabWidget, QVBoxLayout, QWidget)
 
-from . import __version__, descriptions, desktop, launcher, readerkit, readers, savesync, theme, updater
+from . import __version__, descriptions, desktop, launcher, ports, readerkit, readers, savesync, theme, updater
 from .config import APP_ICON, APP_NAME, BACKUP_DIR, DATA_DIR, POPUP_CORNERS, WINDOW_ICON, Config
 from .db import MANUAL, PSN, SAVE, SCREEN, STEAM, Database
 from .engine import build_unlock_event, needs_review
 from .notifier import ToastData, trophy_pixmap
 from .scanner import detect_appid_in_tree, detect_steam_id
 from .steam_api import cached_icon
+from .sync import device_id
 
 REVIEW_MIN_SECONDS = 120   # don't ask after a game was only opened for a moment
 POPUP_BURST = 5            # manual unlocks beyond this get one summary popup instead
@@ -94,6 +95,14 @@ def fit(art: QPixmap, width: int, height: int, radius: int = 0) -> QPixmap:
     pm = pm.copy((pm.width() - wide) // 2, (pm.height() - tall) // 2, wide, tall)
     pm.setDevicePixelRatio(scale)
     return rounded(pm, radius) if radius else pm
+
+
+def fmt_moment(ts: float) -> str:
+    """"today at 9:48 pm", "yesterday at 7:02 am", "3 Oct at 1:15 pm"."""
+    dt = datetime.fromtimestamp(ts)
+    day = fmt_day(int(ts))
+    return f"{day.lower() if day in ('Today', 'Yesterday') else day} at {dt.hour % 12 or 12}:{dt:%M} " \
+           f"{'am' if dt.hour < 12 else 'pm'}"
 
 
 def load_pixmap(path: str | None, size: int, gray: bool = False) -> QPixmap:
@@ -1198,7 +1207,7 @@ class RestoreSavesDialog(QDialog):
     def load(self) -> None:
         self.list.clear()
         mine = (self.win.db.get_meta("device") or {}).get("id", "")
-        found = savesync.backups(self.win.cfg, BACKUP_DIR, self.appid)
+        found = savesync.backups(self.win.cfg, BACKUP_DIR, self.appid, self.win.db)
         for entry in found:
             if entry["pending"]:
                 item = QListWidgetItem(f"{entry['name']}  ·  still downloading from iCloud")
@@ -1944,6 +1953,11 @@ class SettingsDialog(QDialog):
         self.saves_auto.setToolTip("So the other machine can pick up where you left off. Restoring is "
                                    "always something you ask for - right-click a game.")
         devices.addRow("", self.saves_auto)
+        self.saves_offer = QCheckBox("When I press Play, offer a newer save from my other machine")
+        self.saves_offer.setChecked(cfg.saves_offer_on_play)
+        self.saves_offer.setToolTip("What is on this machine is backed up first, so you can always go back. "
+                                    "Steam games are left to Steam Cloud.")
+        devices.addRow("", self.saves_offer)
         self.device_status = self._status(devices, device_sync_text(parent.db.get_meta("sync")))
         self._status(devices, "Point every machine at the same folder. Unlocks from all of them are combined, "
                               "play time takes the highest per source, and anything you undo stays undone.")
@@ -2034,6 +2048,7 @@ class SettingsDialog(QDialog):
     def _devices_now(self) -> None:
         self.win.cfg.sync_dir = self.sync_dir.text().strip()
         self.win.cfg.saves_auto_backup = self.saves_auto.isChecked()
+        self.win.cfg.saves_offer_on_play = self.saves_offer.isChecked()
         self.win.cfg.sync_pull_command = self.sync_pull.text().strip()
         self.win.cfg.sync_push_command = self.sync_push.text().strip()
         self.win.worker.request("sync")
@@ -2094,6 +2109,7 @@ class SettingsDialog(QDialog):
         cfg.sync_command = self.sync_command.text().strip()
         cfg.sync_dir = self.sync_dir.text().strip()
         cfg.saves_auto_backup = self.saves_auto.isChecked()
+        cfg.saves_offer_on_play = self.saves_offer.isChecked()
         cfg.sync_pull_command = self.sync_pull.text().strip()
         cfg.sync_push_command = self.sync_push.text().strip()
         cfg.scan_dirs = [line.strip() for line in self.dirs.toPlainText().splitlines() if line.strip()]
@@ -2579,6 +2595,43 @@ class MainWindow(QMainWindow):
             how = self.choose_program(appid)
             if how is None:
                 return
+        if self.cfg.saves_offer_on_play and how.kind != "steam":     # Steam has its own cloud saves
+            offer = savesync.newer_elsewhere(self.db, self.cfg, BACKUP_DIR, appid, device_id(self.db))
+            if offer and offer["blocked"]:
+                self.statusBar().showMessage(f"{offer['device_name'] or 'Another machine'} has a newer save, which "
+                                             "can be restored after this game has run here once.", 15000)
+            elif offer:
+                answer = self._ask_about_save(appid, offer)
+                if answer == "cancel":
+                    return
+                if answer == "use":
+                    self._play_after_restore = (appid, how)
+                    self.statusBar().showMessage("Bringing the save over…", 20000)
+                    self.worker.request("saves_restore", appid, offer["path"])
+                    return
+        self._start_game(appid, how)
+
+    def _ask_about_save(self, appid: int, offer: dict) -> str:
+        """"use", "keep" or "cancel"."""
+        where = offer["device_name"] or "your other machine"
+        box = QMessageBox(self)
+        box.setWindowTitle(APP_NAME)
+        box.setText(f"{where} has a newer save of {self.db.game(appid)['name'] or 'this game'}.")
+        here = f"The one on this machine is from {fmt_moment(offer['here'])}." if offer["here"] \
+            else "This machine has no save yet."
+        box.setInformativeText(f"The save on {where} is from {fmt_moment(offer['written'])}. {here}\n\n"
+                               "If you use it, this machine's save is backed up first, so you can go back "
+                               "to it from Restore saves.")
+        use = box.addButton(f"Use the save from {where}", QMessageBox.ButtonRole.AcceptRole)
+        use.setObjectName("Primary")
+        keep = box.addButton("Play with this machine's", QMessageBox.ButtonRole.ActionRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(use)
+        box.exec()
+        clicked = box.clickedButton()
+        return "use" if clicked == use else "keep" if clicked == keep else "cancel"
+
+    def _start_game(self, appid: int, how) -> None:
         try:
             launcher.start(how, appid)
         except OSError as e:
@@ -2660,6 +2713,9 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         if game["psn_id"]:
             menu.addAction("Sync PlayStation now", self._sync_psn)
+            if ports.port_of(self.db, appid):
+                menu.addAction("Back up saves", lambda: self.backup_saves(appid))
+                menu.addAction("Restore saves…", lambda: self.restore_saves(appid))
             menu.addSeparator()
             if game["hidden"]:
                 menu.addAction("Restore to library", lambda: self._set_hidden(appid, False))
@@ -2729,6 +2785,14 @@ class MainWindow(QMainWindow):
             if dialog is not None:
                 dialog.finished_restore(status)
             self.reload(force=True)
+            waiting = getattr(self, "_play_after_restore", None)
+            if waiting and waiting[0] == status["appid"]:
+                self._play_after_restore = None
+                if status["error"]:
+                    QMessageBox.warning(self, APP_NAME, f"The save wasn't brought over, so the game wasn't "
+                                                        f"started: {status['error']}.")
+                else:
+                    self._start_game(*waiting)
             return
         done = status["done"]
         if status["error"]:

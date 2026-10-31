@@ -33,6 +33,11 @@ class Port:
     def data_dir(self) -> Path | None:
         return next((d for d in self.data_dirs if d.is_dir()), None)
 
+    def saves_dir(self) -> Path | None:
+        """The port's saves, without the shader cache kept beside them."""
+        base = self.data_dir()
+        return base / "user" / "savedata" if base is not None else None
+
     def log_files(self) -> list:
         base = self.data_dir()
         if base is None:
@@ -57,6 +62,12 @@ PORTS = (BLOODBORNE,)
 EMULATOR = "port"
 KEEP_LOGS = 3           # the newest few stay, for looking into a crash; older ones go once read
 QUIET_FOR = 600         # seconds a log must have gone unwritten before it counts as finished
+
+
+def port_of(db, appid: int) -> Port | None:
+    """The port whose trophies go to this library entry, if any."""
+    linked = db.get_meta("ports") or {}
+    return next((port for port in PORTS if linked.get(port.key) == appid), None)
 
 
 def port_for_log(path: str) -> Port | None:

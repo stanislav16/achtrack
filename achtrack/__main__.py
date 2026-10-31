@@ -375,7 +375,7 @@ def cmd_saves_restore(target: str, pick: int, listing: bool) -> int:
     game = _one_game(db, target)
     if game is None:
         return 1
-    found = [b for b in savesync.backups(cfg, BACKUP_DIR, game["appid"]) if not b["pending"]]
+    found = [b for b in savesync.backups(cfg, BACKUP_DIR, game["appid"], db) if not b["pending"]]
     if not found:
         print(f"No backups of {game['name']} to restore.")
         return 1

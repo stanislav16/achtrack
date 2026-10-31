@@ -344,7 +344,7 @@ def build(db, cfg, backup_dir: Path, appid: int, out_root: Path) -> dict:
         copied.append(folder / "saves" / target)
 
     history = []
-    for entry in [b for b in savesync.backups(cfg, backup_dir, appid) if not b["pending"]][:6]:
+    for entry in [b for b in savesync.backups(cfg, backup_dir, appid, db) if not b["pending"]][:6]:
         stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(entry["created"]))
         try:
             with zipfile.ZipFile(entry["path"]) as archive:

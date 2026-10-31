@@ -845,7 +845,7 @@ class Engine:
         self.listener.on_changed()      # the library should stop saying "playing now" now
         if self.cfg.export_auto:
             self._start_export()
-        if self.cfg.saves_auto_backup and appid > 0:
+        if self.cfg.saves_auto_backup and (appid > 0 or ports.port_of(self.db, appid)):
             self._start_saves(("backup", appid, "", False))
 
     def end_session(self, appid: int) -> None:
@@ -925,7 +925,7 @@ class Engine:
         targets = [appid] if appid is not None else \
             sorted({r["appid"] for r in db.save_files()} | {r["appid"] for r in db.q("SELECT appid FROM sources")})
         for target in targets:
-            if target is None or target < 0:
+            if target is None or (target < 0 and not ports.port_of(db, target)):
                 continue
             try:
                 result = savesync.backup(db, self.cfg, BACKUP_DIR, target, device)

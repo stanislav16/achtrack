@@ -56,6 +56,24 @@ def cmd_scan() -> int:
             except OSError:
                 found = []
             print(f"    {path}: trophies {found or 'none yet'}")
+    from . import switch
+    for title in switch.TITLES:
+        saves = title.save_folder()
+        if saves is None:
+            continue
+        linked = (db.get_meta("ports") or {}).get(title.key)
+        print(f"{title.name} (Ryubing): " + (f"library entry {linked}" if linked is not None else "not in the library yet"))
+        print(f"  save: {saves}\n  game file: {title.game_file() or 'not in Ryubing game folders'}")
+        for path in switch.log_files()[-3:]:
+            try:
+                report = switch.reports_in(path).get(title.title_id)
+            except OSError:
+                report = None
+            if report is None:
+                print(f"  {path}: no report from this game")
+            else:
+                earned = sum(s.unlocked for s in title.states(report, 0).values())
+                print(f"  {path}: {report.get('TotalRaceNum', 0)} races, {earned}/{len(title.goals)} achievements")
     print(f"\nAchievement files ({len(files)}):")
     for sf in files:
         try:

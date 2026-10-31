@@ -18,6 +18,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import switch
 from .config import _xdg
 
 
@@ -65,9 +66,9 @@ QUIET_FOR = 600         # seconds a log must have gone unwritten before it count
 
 
 def port_of(db, appid: int) -> Port | None:
-    """The port whose trophies go to this library entry, if any."""
+    """The port or Switch game whose achievements go to this library entry, if any."""
     linked = db.get_meta("ports") or {}
-    return next((port for port in PORTS if linked.get(port.key) == appid), None)
+    return next((port for port in PORTS + switch.TITLES if linked.get(port.key) == appid), None)
 
 
 def port_for_log(path: str) -> Port | None:

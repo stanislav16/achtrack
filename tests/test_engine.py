@@ -31,6 +31,9 @@ class Sessions(unittest.TestCase):
             def scan(_self, exe_map):
                 return dict(self.found)
 
+            def files_open_in(_self, programs):
+                return {}
+
             def ignore_matching(_self, appid):
                 return 1
 

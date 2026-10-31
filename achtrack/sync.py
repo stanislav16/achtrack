@@ -50,9 +50,11 @@ def device_name(db: Database) -> str:
 
 
 def game_key(row) -> str:
-    """Stable across devices: Steam AppID, or the PlayStation trophy set."""
+    """Stable across devices: Steam AppID, the PlayStation trophy set, or a Switch game's name."""
     if row["psn_id"]:
         return f"psn:{row['psn_id']}"
+    if row["platform"] == "switch":
+        return f"switch:{row['name']}"
     return f"steam:{row['appid']}"
 
 

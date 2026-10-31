@@ -125,7 +125,7 @@ def detection_key(reason: str) -> str:
     return (reason or "").split(" = ")[0]
 
 
-PLATFORM_LABEL = {"pc": "PC", "ps5": "PS5", "ps4": "PS4", "ps3": "PS3", "psvita": "Vita"}
+PLATFORM_LABEL = {"pc": "PC", "ps5": "PS5", "ps4": "PS4", "ps3": "PS3", "psvita": "Vita", "switch": "Switch"}
 
 
 def platform_name(row) -> str:
@@ -482,7 +482,7 @@ class AchievementRow(QFrame):
             source = a.get("source")
             tag = {STEAM: "  ·  Steam", PSN: "  ·  PlayStation", MANUAL: "  ·  Added by you",
                    SAVE: "  ·  Found in your save", SCREEN: "  ·  Seen on screen",
-                   "port": "  ·  PC port"}.get(source, "")
+                   "port": "  ·  PC port", "ryubing": "  ·  Ryubing"}.get(source, "")
             date = QLabel(fmt_unlock(a["unlocked_at"]) + tag)
             date.setObjectName("AchDate")
             right.addWidget(date, 0, Qt.AlignmentFlag.AlignRight)
@@ -2573,7 +2573,7 @@ class MainWindow(QMainWindow):
         self.sort = MenuButton([("Recently played", "recent"), ("Name (A-Z)", "name"), ("Play time", "playtime"),
                                 ("Completion", "progress"), ("Genre", "genre"), ("Platform", "platform")],
                                cfg.sort, self._sort_changed, flat=True)
-        self.platform = MenuButton([("All platforms", "all"), ("PC", "pc"), ("PlayStation", "psn")],
+        self.platform = MenuButton([("All platforms", "all"), ("PC", "pc"), ("PlayStation", "psn"), ("Switch", "switch")],
                                    cfg.platform_filter, self._platform_changed, flat=True)
         sort_wrap = QHBoxLayout()
         sort_wrap.setContentsMargins(10, 0, 10, 0)
@@ -2766,7 +2766,9 @@ class MainWindow(QMainWindow):
         if chosen == "pc":
             rows = [r for r in rows if (r["platform"] or "pc") == "pc"]
         elif chosen == "psn":
-            rows = [r for r in rows if (r["platform"] or "pc") != "pc"]
+            rows = [r for r in rows if r["psn_id"] or (r["platform"] or "pc") not in ("pc", "switch")]
+        elif chosen == "switch":
+            rows = [r for r in rows if r["platform"] == "switch"]
         rows = sorted(rows, key=self._sort_key(self.cfg.sort))
         sig = tuple((r["appid"], r["name"], self.cfg.sort, self.cfg.platform_filter, self.cfg.show_icons,
                      r["total_playtime"] // 60, r["unlocked"], r["total"], r["hidden"],
@@ -3102,13 +3104,15 @@ class MainWindow(QMainWindow):
         options = []
         if appid > 0:
             options.append(launcher.Launch("steam", str(appid), "Steam"))
-        for found in (launcher.heroic_entry(names), launcher.crossover_app(exes, names), launcher.program(game)):
+        for found in (launcher.ryubing(self.db, appid), launcher.heroic_entry(names),
+                      launcher.crossover_app(exes, names), launcher.program(game)):
             if found:
                 options.append(found)
         if current and current.kind == "program" and all(o.stored() != current.stored() for o in options):
             options.append(current)
         for option in options:
             label = {"steam": "Start through Steam", "heroic": "Start through Heroic",
+                     "ryubing": "Start through Ryubing",
                      "app": f"Start through CrossOver ({os.path.basename(option.value)})"}.get(
                 option.kind, f"Start {option.label}")
             action = menu.addAction(label, lambda o=option: self.set_launch(appid, o))

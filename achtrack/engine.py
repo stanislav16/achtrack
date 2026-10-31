@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import backup, descriptions, export, matcher, ports, psn, savefiles, savesync, scanner, share, steam_api, sync
+from . import backup, descriptions, export, matcher, ports, psn, savefiles, savesync, scanner, share, steam_api, switch, sync
 from .config import BACKUP_DIR, CACHE_DIR, EXPORT_DIR, SHARE_DIR, Config
 from .db import PSN, SAVE, SCREEN, STEAM, Database
 from .emulators import parse_file
@@ -288,6 +288,69 @@ class Engine:
                 self.sources[sf.path] = {"path": sf.path, "appid": sf.appid, "emulator": sf.emulator, "mtime": 0.0, "size": -1}
                 self._process(sf.path)
         self.discover_ports()
+        self.discover_switch()
+
+    # Switch games in Ryubing -----------------------------------------------
+
+    def link_switch(self, title) -> int | None:
+        """The library entry for a Switch game that has run on this machine, with AchTrack's own
+        list of achievements for it - Nintendo has none to fetch."""
+        appid = self.port_game(title)
+        if appid is None:
+            if title.save_folder() is None:
+                return None
+            row = next(iter(self.db.q("SELECT appid FROM games WHERE platform = ? AND name = ?",
+                                      (switch.PLATFORM, title.name))), None)    # from another device
+            appid = row["appid"] if row else self.db.next_psn_appid()
+            self.db.ensure_game(appid)
+            self.db.update_game(appid, platform=switch.PLATFORM, name=title.name, genre=title.genre,
+                                header_url=title.art, schema_fetched_at=int(time.time()))
+            self.db.set_meta("ports", {**(self.db.get_meta("ports") or {}), title.key: appid})
+            self._prefetch_icons(appid, [title.art])
+            log.info("%s now goes to library entry %s", title.name, appid)
+        schema = title.schema()
+        stored = [(r["name"], r["display_name"], r["description"]) for r in self.db.q(
+            "SELECT name, display_name, description FROM achievements WHERE appid = ? ORDER BY sort_order", (appid,))]
+        if stored != [(a["name"], a["display_name"], a["description"]) for a in schema]:
+            self.db.set_schema(appid, schema, {})
+            self.listener.on_changed()
+        return appid
+
+    def discover_switch(self) -> None:
+        for title in switch.TITLES:
+            appid = self.link_switch(title)
+            if appid is None:
+                continue
+            logs = switch.log_files()
+            for path in logs:
+                if path not in self.sources:
+                    log.info("watching Ryubing's log for %s: %s", title.name, path)
+                    self.sources[path] = {"path": path, "appid": appid, "emulator": switch.EMULATOR,
+                                          "mtime": 0.0, "size": -1}
+                    self._process(path)
+            for path, src in list(self.sources.items()):        # Ryubing clears out its old logs itself
+                if src.get("emulator") == switch.EMULATOR and path not in logs:
+                    self.sources.pop(path, None)
+                    self.db.remove_source(path)
+                    switch.forget(path)
+
+    def switch_running(self) -> dict:
+        """{appid: None} for the Switch games open in Ryubing right now."""
+        found: dict = {}
+        files = self.monitor.files_open_in(switch.PROCESSES)
+        if not files:
+            return found
+        for title in switch.TITLES:
+            appid, folder = self.port_game(title), title.save_folder()
+            if appid is None or folder is None:
+                continue
+            lock = str(folder / ".lock")
+            for pid, paths in files.items():
+                if lock in paths:
+                    found[appid] = None
+                    self.monitor.seen.setdefault(appid, []).append(
+                        (pid, "", "Ryubing", f"it has {title.name}'s save open"))
+        return found
 
     # native ports of PlayStation games ------------------------------------
 
@@ -492,7 +555,7 @@ class Engine:
 
     def ensure_meta(self, appid: int, force: bool = False) -> None:
         game = self.db.game(appid)
-        if game is None or game["psn_id"]:      # PlayStation games get their data from PSN
+        if game is None or game["psn_id"] or game["platform"] == switch.PLATFORM:     # no Steam data for these
             return
         if not force and game["schema_fetched_at"] and game["name"] and game["genre"]:
             return
@@ -1466,6 +1529,7 @@ class Engine:
                 if exe.strip():
                     exe_map[os.path.basename(exe.strip()).lower()] = row["appid"]
         found = self.monitor.scan(exe_map)
+        found.update(self.switch_running())
         now = time.time()
         changed = False
 

@@ -178,7 +178,7 @@ const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&":"&amp;
 const hours = s => s >= 3600 ? Math.round(s / 3600).toLocaleString() + " h" : Math.round(s / 60) + " min";
 const when = t => !t ? "" : new Date(t * 1000).toLocaleDateString(undefined, {year:"numeric", month:"short", day:"numeric"});
 const pctOf = g => g.c ? g.u / g.c : 0;
-const PLATFORM = {pc:"PC", ps5:"PS5", ps4:"PS4", ps3:"PS3"};
+const PLATFORM = {pc:"PC", ps5:"PS5", ps4:"PS4", ps3:"PS3", switch:"Switch"};
 
 document.title = D.name ? D.name + " · achievements" : "Achievements";
 document.getElementById("who").textContent = D.name ? D.name + "'s achievements" : "Achievements";

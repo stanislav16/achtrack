@@ -121,6 +121,17 @@ class _LinuxProcesses:
                 out.append(parts[5])
         return out
 
+    def open_files(self, pid: str) -> list:
+        out = []
+        try:
+            for fd in os.listdir(f"/proc/{pid}/fd"):
+                path = _link(f"/proc/{pid}/fd/{fd}")
+                if path.startswith("/"):
+                    out.append(path)
+        except OSError:
+            pass
+        return out
+
 
 class _MacProcesses:
     """The same, from macOS's libproc and sysctl. There is no /proc there, but the kernel will
@@ -200,6 +211,20 @@ class _MacProcesses:
 
     def mapped(self, pid: str) -> list:
         return []
+
+    def open_files(self, pid: str) -> list:
+        size = self.libproc.proc_pidinfo(int(pid), 1, 0, None, 0)   # PROC_PIDLISTFDS
+        if size <= 0:
+            return []
+        listing = ctypes.create_string_buffer(size + 8 * 64)
+        size = self.libproc.proc_pidinfo(int(pid), 1, 0, listing, len(listing))
+        out = []
+        info = ctypes.create_string_buffer(1200)                    # struct vnode_fdinfowithpath
+        for offset in range(0, max(size, 0) - 7, 8):                # struct proc_fdinfo
+            fd, kind = struct.unpack_from("iI", listing.raw, offset)
+            if kind == 1 and self.libproc.proc_pidfdinfo(int(pid), fd, 2, info, 1200) == 1200:      # a file
+                out.append(info.raw[176:176 + 1024].split(b"\0", 1)[0].decode("utf-8", "replace"))
+        return out
 
 
 class _WindowsProcesses:
@@ -558,6 +583,14 @@ class ProcessMonitor:
                 found += [d for d in glob.glob(os.path.join(glob.escape(directory), *pattern)) if os.path.isdir(d)]
             self.dir_cache[key] = found
         return self.dir_cache[key]
+
+    def files_open_in(self, programs: tuple) -> dict:
+        """{pid: the files it has open} for the running programs with these names."""
+        reader = getattr(self.src, "open_files", None)
+        if reader is None:
+            return {}
+        return {key[0]: reader(key[0]) for key, proc in self.cache.items()
+                if not proc.ignore and _basename(proc.exe).lower() in programs}
 
     def ignore_matching(self, appid: int) -> int:
         """Stop counting the processes that currently make `appid` look like it's running."""

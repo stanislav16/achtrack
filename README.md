@@ -131,6 +131,23 @@ their trophies are in your library (never while the game is running).
 Play time and "playing now" come from the port's `bb-probe` process. `achtrack scan` shows whether
 the port was found, which logs are read and which trophies are in them.
 
+## Mario Kart 8 Deluxe in Ryubing
+
+Switch games have no achievements of their own, so the list here is AchTrack's: 27 goals worked out
+from the statistics the game reports, which Ryubing writes to its log. Finishing races, Grand Prix
+trophies, Staff Ghosts, coins, parts and more, with progress where a number is worth showing.
+
+- **Nothing to set up.** Once the game has run in Ryubing on this machine it joins your library.
+- **The game reports its totals when it starts**, so what you earn in a session may appear the next
+  time you start the game. Logs Ryubing has deleted lose nothing: each report has the whole total.
+- **Playing now and play time** follow the game, not the emulator: Ryubing open with no game running
+  doesn't count.
+- **Play** finds the game in Ryubing's game folders by the title id in the file's name, for example
+  `Mario Kart 8 Deluxe [0100152000022000].nsp`.
+- **Back up saves** and **Restore saves…** work as for any other game. Close the game first.
+
+This works on macOS and Linux. On Windows the achievements are read but Playing now isn't detected.
+
 ## Hidden achievements
 
 Steam blanks out a hidden achievement's description and never reveals it - not through the Web API,

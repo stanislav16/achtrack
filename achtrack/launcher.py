@@ -6,6 +6,7 @@ per-game settings. The Play button hands the game to whichever of them it belong
     steam://rungameid/<appid>         Steam, including the Mac's with NotProton
     heroic://launch?appName=…         a game installed or added in Heroic
     a CrossOver launcher app          a Windows program installed in a CrossOver bottle
+    Ryubing                           a Switch game, by the file in Ryubing's game folders
     the program itself                a Windows .exe on Windows, a script, anything you pick
 
 A program AchTrack starts directly carries ACHTRACK_APPID in its environment, so it is counted
@@ -26,7 +27,7 @@ import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import scanner
+from . import scanner, switch
 
 IS_MAC = sys.platform == "darwin"
 IS_WINDOWS = os.name == "nt"
@@ -35,8 +36,8 @@ CROSSOVER_APPS = Path.home() / "Applications" / "CrossOver"
 
 @dataclass
 class Launch:
-    kind: str           # steam | heroic | app | program
-    value: str          # the appid, the Heroic "runner/appName", the .app path or the program path
+    kind: str           # steam | heroic | app | ryubing | program
+    value: str          # the appid, the Heroic "runner/appName", the .app path, the Switch game file or the program path
     label: str          # how the menu describes it
 
     def stored(self) -> str:
@@ -51,7 +52,7 @@ def from_stored(text: str) -> Launch | None:
     kind, sep, value = (text or "").partition(":")
     if not sep or not value:
         return None
-    labels = {"steam": "Steam", "heroic": "Heroic", "app": "CrossOver", "program": os.path.basename(value)}
+    labels = {"steam": "Steam", "heroic": "Heroic", "app": "CrossOver", "ryubing": "Ryubing", "program": os.path.basename(value)}
     return Launch(kind, value, labels.get(kind, value))
 
 
@@ -107,6 +108,13 @@ def program(game) -> Launch | None:
     return None
 
 
+def ryubing(db, appid: int) -> Launch | None:
+    """A Switch game, if Ryubing's game folders have its file."""
+    title = switch.title_of(db, appid)
+    path = title.game_file() if title else ""
+    return Launch("ryubing", path, "Ryubing") if path else None
+
+
 def best(db, appid: int) -> Launch | None:
     """How this game starts on this machine - what you chose, or the best guess."""
     game = db.game(appid)
@@ -115,6 +123,9 @@ def best(db, appid: int) -> Launch | None:
     chosen = from_stored(game["launch"] or "") if "launch" in game.keys() else None
     if chosen:
         return chosen
+    found = ryubing(db, appid)
+    if found:
+        return found
     names = [game["name"] or ""]
     exes = [e.strip() for e in (game["exe_name"] or "").split(";") if e.strip()]
     if steam_installed(appid) or (game["steam_owned"] and appid > 0 and not exes):
@@ -142,6 +153,12 @@ def start(launch: Launch, appid: int) -> None:
         _open("heroic://launch?" + urllib.parse.urlencode({"appName": app_name, "runner": runner}))
     elif launch.kind == "app":
         subprocess.Popen(["open", launch.value], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    elif launch.kind == "ryubing":
+        if not os.path.exists(launch.value):
+            raise OSError(f"{launch.value} isn't there any more")
+        emulator = switch.app()
+        command = ["open", "-a", str(emulator), "--args", launch.value] if emulator else ["Ryujinx", launch.value]
+        subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     elif launch.kind == "program":
         path = launch.value
         if not os.path.exists(path):
@@ -161,5 +178,6 @@ def start(launch: Launch, appid: int) -> None:
 def describe(launch: Launch | None) -> str:
     if launch is None:
         return "not set"
-    return {"steam": "through Steam", "heroic": "through Heroic", "app": "through CrossOver"}.get(
+    return {"steam": "through Steam", "heroic": "through Heroic", "app": "through CrossOver",
+            "ryubing": "through Ryubing"}.get(
         launch.kind, shlex.quote(launch.value) if launch.kind == "program" else launch.label)

@@ -79,6 +79,23 @@ def fmt_unlock(ts: int) -> str:
     return f"{dt.day} {dt:%b %Y}, {dt.hour % 12 or 12}:{dt:%M} {'am' if dt.hour < 12 else 'pm'}"
 
 
+def screen_scale() -> float:
+    """Real pixels per point on the sharpest screen: 2 on a Retina display. Artwork scaled to its
+    size in points would be stretched back up by that much, and look soft."""
+    return max((screen.devicePixelRatio() for screen in QGuiApplication.screens()), default=1.0)
+
+
+def fit(art: QPixmap, width: int, height: int, radius: int = 0) -> QPixmap:
+    """Artwork filling width x height points, cropped from its centre, at the screen's real pixels."""
+    scale = screen_scale()
+    wide, tall = round(width * scale), round(height * scale)
+    pm = art.scaled(wide, tall, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation)
+    pm = pm.copy((pm.width() - wide) // 2, (pm.height() - tall) // 2, wide, tall)
+    pm.setDevicePixelRatio(scale)
+    return rounded(pm, radius) if radius else pm
+
+
 def load_pixmap(path: str | None, size: int, gray: bool = False) -> QPixmap:
     pm = QPixmap(path) if path else QPixmap()
     if pm.isNull():
@@ -86,7 +103,7 @@ def load_pixmap(path: str | None, size: int, gray: bool = False) -> QPixmap:
     if gray:
         img = pm.toImage().convertToFormat(QImage.Format.Format_Grayscale8)
         pm = QPixmap.fromImage(img)
-    return pm.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+    return fit(pm, size, size)
 
 
 def detection_key(reason: str) -> str:
@@ -302,7 +319,9 @@ class Ring(QWidget):
 
 def letter_pixmap(name: str, size: int) -> QPixmap:
     """Stand-in artwork: the game's initial on a plain tile."""
-    pm = QPixmap(size, size)
+    scale = screen_scale()
+    pm = QPixmap(round(size * scale), round(size * scale))
+    pm.setDevicePixelRatio(scale)
     pm.fill(Qt.GlobalColor.transparent)
     p = QPainter(pm)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -323,10 +342,7 @@ def game_thumbnail(appid: int, row, size: int = 40) -> QPixmap:
     art = QPixmap(cached_icon(appid, row["header_url"] or "") or "")
     if art.isNull():
         return letter_pixmap(row["name"] or "", size)
-    scaled = art.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                        Qt.TransformationMode.SmoothTransformation)
-    crop = scaled.copy((scaled.width() - size) // 2, (scaled.height() - size) // 2, size, size)
-    return rounded(crop, int(size * 0.26))
+    return fit(art, size, size, int(size * 0.26))
 
 
 class Dot(QWidget):
@@ -394,7 +410,6 @@ class AchievementRow(QFrame):
         else:
             gray_path = cached_icon(appid, a.get("icon_gray") or "")
             art = load_pixmap(gray_path or cached_icon(appid, a.get("icon") or ""), ACH_ICON, gray=not gray_path)
-        art = art.copy((art.width() - ACH_ICON) // 2, (art.height() - ACH_ICON) // 2, ACH_ICON, ACH_ICON)
         icon.setPixmap(rounded(art, 11))
         pct = a.get("global_pct")
         lay.addWidget(icon, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -504,12 +519,14 @@ WASH_H = 300
 
 
 def rounded(pm: QPixmap, radius: int) -> QPixmap:
+    scale = pm.devicePixelRatio()
     out = QPixmap(pm.size())
+    out.setDevicePixelRatio(scale)
     out.fill(Qt.GlobalColor.transparent)
     p = QPainter(out)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
     path = QPainterPath()
-    path.addRoundedRect(QRectF(0, 0, pm.width(), pm.height()), radius, radius)
+    path.addRoundedRect(QRectF(0, 0, pm.width() / scale, pm.height() / scale), radius, radius)
     p.setClipPath(path)
     p.drawPixmap(0, 0, pm)
     p.end()
@@ -812,10 +829,7 @@ class DetailView(QWidget):
         banner_path = cached_icon(self.appid, game["header_url"] or "")
         art = QPixmap(banner_path) if banner_path else QPixmap()
         if not art.isNull():
-            pm = art.scaled(self.banner.size(), Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                            Qt.TransformationMode.SmoothTransformation)
-            crop = pm.copy((pm.width() - BANNER_W) // 2, (pm.height() - BANNER_H) // 2, BANNER_W, BANNER_H)
-            self.banner.setPixmap(rounded(crop, 16))
+            self.banner.setPixmap(fit(art, BANNER_W, BANNER_H, 16))
             self._wash = blurred_wash(art, max(self.width(), 600), WASH_H)
         else:
             self.banner.setPixmap(letter_pixmap(game["name"] or "", BANNER_H))

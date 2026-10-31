@@ -88,6 +88,7 @@ class Config:
     export_auto: bool = True               # rebuild after each session and with the daily backup
     # Pack a game's save files into the shared folder when you stop playing, so the other machine
     # can pick up where you left off. Restoring is always something you ask for.
+    welcomed: bool = False                 # the first-run welcome has been shown
     saves_auto_backup: bool = True
     saves_offer_on_play: bool = True       # Play offers a newer save from your other machine
     vercel_token: str = ""

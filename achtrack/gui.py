@@ -2379,6 +2379,135 @@ class SettingsDialog(QDialog):
         self.accept()
 
 
+# first run ---------------------------------------------------------------
+
+class WelcomeDialog(QDialog):
+    """The first time AchTrack opens: what it does, and the two things only you can give it."""
+
+    def __init__(self, win: "MainWindow"):
+        super().__init__(win)
+        self.win = win
+        self.setWindowTitle(f"Welcome to {APP_NAME}")
+        self.setFixedSize(520, 390)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(28, 26, 28, 20)
+        root.setSpacing(16)
+        self.pages = QStackedWidget()
+        root.addWidget(self.pages, 1)
+
+        cfg = win.cfg
+        self.key = QLineEdit(cfg.steam_api_key)
+        self.key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.key.setPlaceholderText("Paste your key here")
+        self.psn = QLineEdit(cfg.psn_npsso)
+        self.psn.setEchoMode(QLineEdit.EchoMode.Password)
+        self.psn.setPlaceholderText("Paste the value after \"npsso\" here")
+        self.autostart = QCheckBox(f"Start {APP_NAME} in the background when I log in")
+        self.autostart.setChecked(True)
+
+        self._page(f"Welcome to {APP_NAME}",
+                   "Achievements, popups and play time for your games, including ones Steam doesn't know "
+                   "you're playing.\n\n"
+                   "It notices when a game is running and records what you unlock. There are two optional "
+                   "things to set up, and you can change either later in Settings.")
+        self._page("Your Steam key",
+                   "Achievement names, descriptions and icons come from Steam, and it asks for a free key. "
+                   "On Steam's page, type any domain name, then copy the key it shows.\n\n"
+                   "The key stays on this computer. Without one you still get popups and play time, but "
+                   "achievements show only their internal names.",
+                   self.key, ("Get a key", "https://steamcommunity.com/dev/apikey"))
+        self._page("PlayStation (optional)",
+                   "Brings in your PlayStation games, play time and trophies.\n\n"
+                   "Sign in at playstation.com in your browser, then open the page below. It shows a short "
+                   "text with an \"npsso\" value: copy just that value. It stays on this computer. Skip this "
+                   "if you don't play on PlayStation.",
+                   self.psn, ("Open the page", "https://ca.account.sony.com/api/v1/ssocookie"))
+        last = self._page("You're set",
+                          "Start a game and it appears in your library. Here is what an unlock looks like:")
+        test = QPushButton("Show a popup")
+        test.clicked.connect(lambda: self.win.notifier.test(False))
+        row = QHBoxLayout()
+        row.addWidget(test)
+        row.addStretch(1)
+        last.insertLayout(2, row)
+        last.insertWidget(3, self.autostart)
+
+        for field in (self.key, self.psn):
+            field.textChanged.connect(lambda text: self.next.setText("Continue" if text.strip() else "Skip"))
+        buttons = QHBoxLayout()
+        self.back = QPushButton("Back")
+        self.back.clicked.connect(lambda: self._go(-1))
+        self.next = QPushButton("Continue")
+        self.next.setObjectName("Primary")
+        self.next.setDefault(True)
+        self.next.clicked.connect(lambda: self._go(1))
+        buttons.addWidget(self.back)
+        buttons.addStretch(1)
+        buttons.addWidget(self.next)
+        root.addLayout(buttons)
+        self._go(0)
+
+    def _page(self, title: str, text: str, field: QLineEdit | None = None, link: tuple | None = None) -> QVBoxLayout:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(12)
+        heading = QLabel(title)
+        heading.setObjectName("GameTitle")
+        heading.setWordWrap(True)
+        body = QLabel(text)
+        body.setWordWrap(True)
+        lay.addWidget(heading)
+        lay.addWidget(body)
+        if field is not None:
+            row = QHBoxLayout()
+            row.addWidget(field, 1)
+            button = QPushButton(link[0])
+            button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(link[1])))
+            row.addWidget(button)
+            lay.addLayout(row)
+        lay.addStretch(1)
+        self.pages.addWidget(page)
+        return lay
+
+    def _go(self, step: int) -> None:
+        index = self.pages.currentIndex() + step
+        if index >= self.pages.count():
+            self.finish()
+            return
+        self.pages.setCurrentIndex(index)
+        self.back.setVisible(index > 0)
+        last = index == self.pages.count() - 1
+        filled = {1: self.key, 2: self.psn}.get(index)
+        self.next.setText("Done" if last else "Skip" if filled is not None and not filled.text().strip()
+                          else "Continue")
+
+    def finish(self) -> None:
+        cfg = self.win.cfg
+        cfg.steam_api_key = self.key.text().strip()
+        cfg.psn_npsso = self.psn.text().strip()
+        cfg.welcomed = True
+        cfg.save()
+        try:
+            desktop.set_autostart(self.autostart.isChecked())
+        except OSError as e:
+            QMessageBox.warning(self, APP_NAME, f"Couldn't set up starting at login: {e}")
+        if cfg.steam_api_key:
+            self.win.worker.request("refresh_all")
+            if cfg.steam_sync:
+                self.win.worker.request("steam_sync")
+        if cfg.psn_npsso:
+            self.win.worker.request("psn_sync")
+        self.win.schedule_reload()
+        self.accept()
+
+    def reject(self) -> None:
+        # Closing it counts as seen: Settings has the same fields, and nobody wants to be asked twice.
+        self.win.cfg.welcomed = True
+        self.win.cfg.save()
+        super().reject()
+
+
 # main window -------------------------------------------------------------
 
 class MainWindow(QMainWindow):
@@ -2580,6 +2709,18 @@ class MainWindow(QMainWindow):
         if self._dirty:
             self._dirty = False
             self.reload(force=True)
+        if not self.cfg.welcomed:
+            QTimer.singleShot(300, self._welcome)
+
+    def _welcome(self) -> None:
+        if self.cfg.welcomed or getattr(self, "_welcome_dialog", None) is not None:
+            return
+        if self.cfg.steam_api_key.strip() or self.db.games(include_hidden=True):
+            self.cfg.welcomed = True        # already set up: nothing to welcome anyone to
+            self.cfg.save()
+            return
+        self._welcome_dialog = WelcomeDialog(self)
+        self._welcome_dialog.show()
 
     def _sort_changed(self, value: str) -> None:
         self.cfg.sort = value

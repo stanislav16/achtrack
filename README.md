@@ -143,7 +143,9 @@ trophies, Staff Ghosts, coins, parts and more, with progress where a number is w
 - **Playing now and play time** follow the game, not the emulator: Ryubing open with no game running
   doesn't count.
 - **Play** finds the game in Ryubing's game folders by the title id in the file's name, for example
-  `Mario Kart 8 Deluxe [0100152000022000].nsp`.
+  `Mario Kart 8 Deluxe [0100152000022000].nsp`. A Ryubing already open with no game running is closed
+  and started again with the game, because it can't be handed a game from outside. If it has something
+  open, such as the Mii editor, Play says so and leaves it alone.
 - **Back up saves** and **Restore saves…** work as for any other game. Close the game first.
 
 This works on macOS and Linux. On Windows the achievements are read but Playing now isn't detected.

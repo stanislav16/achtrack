@@ -156,8 +156,10 @@ def start(launch: Launch, appid: int) -> None:
     elif launch.kind == "ryubing":
         if not os.path.exists(launch.value):
             raise OSError(f"{launch.value} isn't there any more")
+        # A Ryubing that is already open would only come to the front and ignore the game.
+        switch.close_emulator()
         emulator = switch.app()
-        command = ["open", "-a", str(emulator), "--args", launch.value] if emulator else ["Ryujinx", launch.value]
+        command = ["open", "-n", "-a", str(emulator), "--args", launch.value] if emulator else ["Ryujinx", launch.value]
         subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     elif launch.kind == "program":
         path = launch.value

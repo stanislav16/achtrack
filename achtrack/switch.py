@@ -25,8 +25,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import struct
+import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -54,6 +57,42 @@ def app() -> Path | None:
         if (folder / "Ryujinx.app").is_dir():
             return folder / "Ryujinx.app"
     return None
+
+
+def emulator_pids() -> list:
+    """Ryubing, if it is running."""
+    try:
+        done = subprocess.run(["pgrep", "-x", "Ryujinx"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [int(pid) for pid in done.stdout.split()]
+
+
+def emulator_idle() -> bool:
+    """Whether a running Ryubing has no game open. It reloads its settings each time one stops."""
+    logs = log_files()
+    if not logs:
+        return True
+    try:
+        data = Path(max(logs, key=os.path.getmtime)).read_bytes()
+    except OSError:
+        return False
+    loaded = data.rfind(b"Application Loaded:")
+    return loaded < 0 or loaded < data.rfind(b"Application ReloadConfig:")
+
+
+def close_emulator() -> None:
+    """Closes an idle Ryubing, so that it can be started with a game. Raises OSError if it can't."""
+    pids = emulator_pids()
+    if pids and not emulator_idle():
+        raise OSError("Ryubing has something open. Close it there first, then press Play again.")
+    for pid in pids:
+        os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + 5
+    while emulator_pids():
+        if time.monotonic() > deadline:
+            raise OSError("Ryubing didn't close. Quit it yourself, then press Play again.")
+        time.sleep(0.1)
 
 
 def log_files() -> list:

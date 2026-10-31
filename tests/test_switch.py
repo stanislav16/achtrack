@@ -222,9 +222,37 @@ class Starting(Sandbox):
         how = launcher.best(engine.db, appid)
         self.assertEqual((how.kind, how.value), ("ryubing", str(nsp)))
         with mock.patch.object(launcher.subprocess, "Popen") as popen, \
+                mock.patch.object(switch, "close_emulator"), \
                 mock.patch.object(switch, "app", return_value=Path("/Applications/Ryujinx.app")):
             launcher.start(how, appid)
-        self.assertEqual(popen.call_args[0][0], ["open", "-a", "/Applications/Ryujinx.app", "--args", str(nsp)])
+        self.assertEqual(popen.call_args[0][0], ["open", "-n", "-a", "/Applications/Ryujinx.app", "--args", str(nsp)])
+
+    def test_ryubing_stopped_after_a_game_counts_as_idle(self):
+        self.log(LOADED + report() + "00:05:54.296 |N| GUI.RenderThread Application ReloadConfig: Loading\n")
+        self.assertTrue(switch.emulator_idle())
+
+    def test_ryubing_just_opened_counts_as_idle(self):
+        self.log("00:00:00.1 |I| Configuration LogValueChange: ResScale set to: 1\n")
+        self.assertTrue(switch.emulator_idle())
+
+    def test_ryubing_with_something_open_isnt_idle(self):
+        self.log("00:00:00.1 |N| Application ReloadConfig: Loading\n" + MII)
+        self.assertFalse(switch.emulator_idle())
+
+    def test_an_idle_ryubing_is_closed_first(self):
+        self.log("00:00:00.1 |N| Application ReloadConfig: Loading\n")
+        with mock.patch.object(switch, "emulator_pids", side_effect=[[42], []]), \
+                mock.patch.object(switch.os, "kill") as kill:
+            switch.close_emulator()
+        kill.assert_called_once_with(42, switch.signal.SIGTERM)
+
+    def test_a_busy_ryubing_is_left_alone(self):
+        self.log(MII)
+        with mock.patch.object(switch, "emulator_pids", return_value=[42]), \
+                mock.patch.object(switch.os, "kill") as kill:
+            with self.assertRaises(OSError):
+                switch.close_emulator()
+        kill.assert_not_called()
 
     def test_no_file_no_launch(self):
         self.install_save()

@@ -205,6 +205,10 @@ Play on one machine, carry on on the other. Right-click a game → **Back up sav
 that has them, and **Restore saves…** on the other. You never point at a folder: AchTrack knows
 which prefix or CrossOver bottle each game runs in on each machine, and which files the game writes.
 
+Pressing **Play** on a game whose newest save is on your other machine offers to bring it over first.
+This machine's save is backed up before anything is replaced, and Steam games are left to Steam
+Cloud. You can turn the offer off in **Settings → Devices**.
+
 - A backup is made automatically each time you stop playing (Settings → Devices), into the folder
   your devices already share, so it travels the same way your library does.
 - Restoring is always something you ask for. The saves already on that machine are backed up first,
@@ -320,11 +324,11 @@ Three things differ from Linux and macOS:
 
 ### First run
 
-1. Open **AchTrack**, go to **Library → Settings** and paste a **Steam Web API key**. Keys are free
-   at <https://steamcommunity.com/dev/apikey> (any domain name works). Without a key you still get
-   popups and playtime, but achievements only show their internal names.
-2. Click **Test popup** to check the popups show up.
-3. Start a game. It appears in the library, and new unlocks pop up as they happen.
+The first time it opens, AchTrack walks you through the two things only you can give it: a free
+**Steam Web API key** (without one you still get popups and playtime, but achievements only show
+their internal names) and, if you want it, your PlayStation login. Both can be changed later in
+**Library → Settings**. Then start a game: it appears in the library, and new unlocks pop up as they
+happen.
 
 Achievements you earned before AchTrack was running are imported quietly without popups.
 
@@ -394,3 +398,15 @@ Start with `achtrack scan` when something isn't detected. Logs are in
 | Icons and sounds cache | `~/.cache/achtrack/` |
 
 On Windows: settings in `%APPDATA%\AchTrack`, everything else in `%LOCALAPPDATA%\AchTrack`.
+
+## Tests
+
+```bash
+python -m unittest discover -s tests -t .
+```
+
+They run against throwaway folders and never touch your library.
+
+## Licence
+
+[MIT](LICENSE).

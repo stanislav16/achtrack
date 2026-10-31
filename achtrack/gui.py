@@ -12,14 +12,15 @@ from PySide6.QtCore import QDateTime, QEvent, QObject, QProcess, QRectF, QSize, 
 from PySide6.QtGui import (QAction, QActionGroup, QBrush, QColor, QDesktopServices, QFont, QGuiApplication, QIcon,
                            QImage, QKeySequence, QLinearGradient, QPainter, QPainterPath, QPalette, QPen, QPixmap)
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateTimeEdit, QDialog,
-                               QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsScene,
+                               QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsScene, QGridLayout,
                                QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout,
                                QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
                                QMenu, QMessageBox,
-                               QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSplitter, QStackedWidget,
+                               QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSplitter,
+                               QStackedWidget,
                                QTabWidget, QVBoxLayout, QWidget)
 
-from . import __version__, descriptions, desktop, launcher, ports, readerkit, readers, savesync, theme, updater
+from . import __version__, descriptions, desktop, launcher, overview, ports, readerkit, readers, savesync, theme, updater
 from .config import APP_ICON, APP_NAME, BACKUP_DIR, DATA_DIR, POPUP_CORNERS, WINDOW_ICON, Config
 from .db import MANUAL, PSN, SAVE, SCREEN, STEAM, Database
 from .engine import build_unlock_event, needs_review
@@ -259,6 +260,21 @@ def follow_fingers(area) -> None:
     area.viewport().installEventFilter(_FollowFingers(area))
 
 
+class Elided(QLabel):
+    """A one-line label that ends in "…" when it doesn't fit, and never widens what holds it."""
+
+    def __init__(self, text: str = ""):
+        super().__init__(text)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setToolTip(text)
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        shown = self.fontMetrics().elidedText(self.text(), Qt.TextElideMode.ElideRight, self.width())
+        self.style().drawItemText(painter, self.rect(), int(self.alignment()), self.palette(), self.isEnabled(), shown,
+                                  QPalette.ColorRole.WindowText)
+
+
 class Segmented(QFrame):
     """A segmented control: a few choices side by side, one of them picked."""
 
@@ -383,7 +399,7 @@ class GameRow(QWidget):
             outer.addWidget(thumb, 0, Qt.AlignmentFlag.AlignVCenter)
         lay = QVBoxLayout()
         lay.setSpacing(2)
-        name = QLabel(row["name"] or f"App {row['appid']}")
+        name = Elided(row["name"] or f"App {row['appid']}")
         name.setStyleSheet(f"color: {P['text']}; font-size: 13.5px; font-weight: 500; background: transparent;")
         lay.addWidget(name)
         parts = []
@@ -929,6 +945,240 @@ class DetailView(QWidget):
         item.setSizeHint(QSize(0, max(widget.sizeHint().height(), 76)))
         self.list.addItem(item)
         self.list.setItemWidget(item, widget)
+
+
+# home page ---------------------------------------------------------------
+
+class HomeRow(QFrame):
+    """A row in one of the home page's groups; clicking it opens the game."""
+
+    def __init__(self, pixmap: QPixmap, title: str, sub: str, tail: str, on_click, rare: bool = False,
+                 last: bool = False):
+        super().__init__()
+        self.setObjectName("HomeRow")
+        self.setProperty("last", last)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.on_click = on_click
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(14, 9, 14, 9)
+        lay.setSpacing(12)
+        icon = QLabel()
+        icon.setFixedSize(40, 40)
+        icon.setPixmap(pixmap)
+        lay.addWidget(icon)
+        texts = QVBoxLayout()
+        texts.setSpacing(1)
+        name = Elided(title)
+        name.setObjectName("HomeRowTitle")
+        below = Elided(sub)
+        below.setObjectName("AchDesc")
+        texts.addWidget(name)
+        texts.addWidget(below)
+        lay.addLayout(texts, 1)
+        if tail:
+            end = QLabel(tail)
+            end.setObjectName("AchPct")
+            end.setProperty("rare", rare)
+            lay.addWidget(end)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if self.rect().contains(event.position().toPoint()):
+            self.on_click()
+
+
+class GameCard(QFrame):
+    """A game's artwork, for the row of what you've been playing."""
+    WIDTH, HEIGHT = 208, 97
+
+    def __init__(self, game: dict, running: bool, on_click):
+        super().__init__()
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedWidth(self.WIDTH)
+        self.on_click = on_click
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(2)
+        art = QLabel()
+        art.setFixedSize(self.WIDTH, self.HEIGHT)
+        picture = QPixmap(cached_icon(game["appid"], game["art"]) or "")
+        art.setPixmap(fit(picture, self.WIDTH, self.HEIGHT, 12) if not picture.isNull()
+                      else fit(letter_pixmap(game["name"], self.WIDTH), self.WIDTH, self.HEIGHT, 12))
+        lay.addWidget(art)
+        lay.addSpacing(5)
+        name = Elided(game["name"])
+        name.setObjectName("HomeRowTitle")
+        lay.addWidget(name)
+        sub = Elided("Playing now" if running else fmt_day(game["last"]))
+        sub.setObjectName("Running" if running else "AchDesc")
+        lay.addWidget(sub)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if self.rect().contains(event.position().toPoint()):
+            self.on_click()
+
+
+class HomeView(QScrollArea):
+    """Where the library stands, and what happened lately."""
+    TWO_COLUMNS_FROM = 760
+
+    def __init__(self, window: "MainWindow"):
+        super().__init__()
+        self.win = window
+        self._sig = None
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        follow_fingers(self)
+        page = QWidget()
+        self.setWidget(page)
+        self.root = QVBoxLayout(page)
+        self.root.setContentsMargins(28, 24, 28, 28)
+        self.root.setSpacing(0)
+        self._asked: set = set()
+        self.cards: list = []
+        self.columns: QGridLayout | None = None
+        self.groups: list = []
+
+    def _section(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("HomeSection")
+        return label
+
+    def _group(self, rows: list) -> QFrame:
+        card = QFrame()
+        card.setObjectName("Tiles")
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(0, 2, 0, 2)
+        lay.setSpacing(0)
+        for row in rows:
+            lay.addWidget(row)
+        return card
+
+    def _trophy_rows(self, trophies: list, tail) -> list:
+        rows = []
+        for i, t in enumerate(trophies):
+            icon = rounded(load_pixmap(cached_icon(t["appid"], t["icon"]), 40), 9)
+            text, rare = tail(t)
+            rows.append(HomeRow(icon, t["name"], t["game"], text, lambda a=t["appid"]: self.win.open_game(a), rare,
+                                i == len(trophies) - 1))
+        return rows
+
+    def refresh(self) -> None:
+        data = overview.collect(self.win.db)
+        icons = tuple(bool(cached_icon(t["appid"], t["icon"])) for t in data["recent"] + data["rare"])
+        art = tuple(bool(cached_icon(g["appid"], g["art"])) for g in data["continue"] + data["almost"])
+        sig = (repr(data), icons, art, tuple(sorted(self.win.running)), P["scheme"])
+        if sig == self._sig:
+            return
+        # A game's icons normally arrive when it is opened; these rows show them before that.
+        for t in data["recent"] + data["rare"]:
+            if t["appid"] not in self._asked and not cached_icon(t["appid"], t["icon"]):
+                self._asked.add(t["appid"])
+                self.win.worker.request("icons", t["appid"])
+        self._sig = sig
+        scroll = self.verticalScrollBar().value()
+        while self.root.count():
+            item = self.root.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.cards, self.groups, self.columns = [], [], None
+
+        title = QLabel("Home")
+        title.setObjectName("GameTitle")
+        self.root.addWidget(title)
+        self.root.addSpacing(14)
+        s = data["stats"]
+        tiles = QFrame()
+        tiles.setObjectName("Tiles")
+        tile_lay = QHBoxLayout(tiles)
+        tile_lay.setContentsMargins(18, 13, 16, 13)
+        tile_lay.setSpacing(18)
+        figures = [(f"{s['unlocked']:,}", f"of {s['total']:,} achievements"),
+                   (f"{s['seconds'] // 3600:,} h", "Time played"),
+                   (f"{s['games']:,}", "Games"),
+                   (f"{s['perfect']:,}", "Completed")]
+        if s["platinums"]:
+            figures.append((f"{s['platinums']:,}", "Platinums"))
+        for i, (value, label) in enumerate(figures):
+            if i:
+                tile_lay.addWidget(tile_rule())
+            stat = Stat(label)
+            stat.value.setText(value)
+            tile_lay.addWidget(stat, 1)
+        ring = Ring()
+        ring.set(s["unlocked"], s["total"])
+        tile_lay.addWidget(ring, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.root.addWidget(tiles)
+
+        if data["continue"]:
+            self.root.addSpacing(26)
+            self.root.addWidget(self._section("Keep playing"))
+            self.root.addSpacing(10)
+            line = QHBoxLayout()
+            line.setSpacing(12)
+            for game in data["continue"]:
+                card = GameCard(game, game["appid"] in self.win.running,
+                                lambda a=game["appid"]: self.win.open_game(a))
+                self.cards.append(card)
+                line.addWidget(card)
+            line.addStretch(1)
+            self.root.addLayout(line)
+
+        recent = self._trophy_rows(data["recent"], lambda t: (fmt_day(t["at"]), False))
+        almost = []
+        for i, g in enumerate(data["almost"]):
+            left = g["total"] - g["unlocked"]
+            almost.append(HomeRow(game_thumbnail(g["appid"], {"header_url": g["art"], "name": g["name"]}), g["name"],
+                                  f"{g['unlocked']} of {g['total']}", f"{left} left",
+                                  lambda a=g["appid"]: self.win.open_game(a), False, i == len(data["almost"]) - 1))
+        rare = self._trophy_rows(data["rare"], lambda t: (f"{t['pct']:.1f}%", True))
+        for name, rows in (("Recently unlocked", recent), ("Almost there", almost), ("Your rarest", rare)):
+            if rows:
+                holder = QWidget()
+                inner = QVBoxLayout(holder)
+                inner.setContentsMargins(0, 0, 0, 0)
+                inner.setSpacing(10)
+                inner.addWidget(self._section(name))
+                inner.addWidget(self._group(rows))
+                inner.addStretch(1)
+                self.groups.append(holder)
+        self.root.addSpacing(26)
+        self.columns = QGridLayout()
+        self.columns.setHorizontalSpacing(16)
+        self.columns.setVerticalSpacing(24)
+        self.root.addLayout(self.columns)
+        self.root.addStretch(1)
+        self._arrange(force=True)
+        QTimer.singleShot(0, lambda: self.verticalScrollBar().setValue(scroll))
+
+    def _arrange(self, force: bool = False) -> None:
+        width = self.viewport().width() - 56
+        for i, card in enumerate(self.cards):
+            card.setVisible((i + 1) * (GameCard.WIDTH + 12) - 12 <= width)
+        if self.columns is None:
+            return
+        two = width >= self.TWO_COLUMNS_FROM
+        if not force and getattr(self, "_two", None) == two:
+            return
+        self._two = two
+        for holder in self.groups:
+            self.columns.removeWidget(holder)
+        if two and len(self.groups) > 1:
+            # The first group on the left, the others stacked on the right.
+            self.columns.addWidget(self.groups[0], 0, 0, max(len(self.groups) - 1, 1), 1)
+            for row, holder in enumerate(self.groups[1:]):
+                self.columns.addWidget(holder, row, 1)
+            self.columns.setColumnStretch(0, 1)
+            self.columns.setColumnStretch(1, 1)
+        else:
+            for row, holder in enumerate(self.groups):
+                self.columns.addWidget(holder, row, 0)
+            self.columns.setColumnStretch(0, 1)
+            self.columns.setColumnStretch(1, 0)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._arrange()
 
 
 # achievement review ------------------------------------------------------
@@ -2181,6 +2431,16 @@ class MainWindow(QMainWindow):
         search_wrap.setContentsMargins(10, 0, 10, 0)
         search_wrap.addWidget(self.search)
         side_lay.addLayout(search_wrap)
+        self.home_shown = True
+        self.nav_home = QPushButton("Home")
+        self.nav_home.setObjectName("NavItem")
+        self.nav_home.setCheckable(True)
+        self.nav_home.setChecked(True)
+        self.nav_home.clicked.connect(self.show_home)
+        nav_wrap = QHBoxLayout()
+        nav_wrap.setContentsMargins(8, 0, 8, 0)
+        nav_wrap.addWidget(self.nav_home)
+        side_lay.addLayout(nav_wrap)
         self.sort = MenuButton([("Recently played", "recent"), ("Name (A-Z)", "name"), ("Play time", "playtime"),
                                 ("Completion", "progress"), ("Genre", "genre"), ("Platform", "platform")],
                                cfg.sort, self._sort_changed, flat=True)
@@ -2240,6 +2500,8 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(empty)
         self.detail = DetailView(self)
         self.stack.addWidget(self.detail)
+        self.home = HomeView(self)
+        self.stack.addWidget(self.home)
         splitter.addWidget(self.stack)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([280, 920])
@@ -2385,18 +2647,49 @@ class MainWindow(QMainWindow):
                 self.games.setItemWidget(item, widget)
                 if r["appid"] == current:
                     select = item
-            if select is None and self.games.count():
+            if select is None and self.games.count() and not self.home_shown:
                 select = self.games.item(0)
             if select is not None:
                 self.games.setCurrentItem(select)
             self.games.blockSignals(False)
         has_games = bool(self.db.games(include_hidden=self.show_hidden.isChecked()))
-        self.stack.setCurrentIndex(1 if has_games and self.games.count() else 0)
-        self.detail.show_game(self.current_appid())
+        if not has_games:
+            self.stack.setCurrentIndex(0)
+        elif self.home_shown:
+            self.stack.setCurrentIndex(2)
+            self.home.refresh()
+        else:
+            self.stack.setCurrentIndex(1 if self.games.count() else 0)
+            self.detail.show_game(self.current_appid())
 
     def _on_select(self, current, _previous) -> None:
         if current is not None:
+            self.home_shown = False
+            self.nav_home.setChecked(False)
+            self.stack.setCurrentIndex(1)
             self.detail.show_game(current.data(Qt.ItemDataRole.UserRole))
+
+    def show_home(self) -> None:
+        self.home_shown = True
+        self.nav_home.setChecked(True)
+        self.games.blockSignals(True)
+        self.games.setCurrentItem(None)
+        self.games.clearSelection()
+        self.games.blockSignals(False)
+        self.reload()
+
+    def open_game(self, appid: int) -> None:
+        """Shows a game, even if the search or a filter was hiding it from the list."""
+        for attempt in range(2):
+            for i in range(self.games.count()):
+                if self.games.item(i).data(Qt.ItemDataRole.UserRole) == appid:
+                    self.games.setCurrentRow(i)
+                    self.games.scrollToItem(self.games.item(i))
+                    return
+            if attempt == 0:
+                self.search.clear()
+                self.platform._choose("all")
+                self.reload(force=True)
 
     # events from the engine ------------------------------------------------
 

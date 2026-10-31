@@ -288,6 +288,15 @@ QPushButton#PlayMain:disabled, QPushButton#PlayMore:disabled {{ background: {p['
 QPushButton#Flat {{ background: transparent; color: {p['muted']}; padding: 5px 8px; }}
 QPushButton#Flat:hover {{ background: {p['fill']}; color: {p['text']}; }}
 QPushButton#More {{ padding: 7px 11px; font-weight: 700; letter-spacing: 1px; }}
+QPushButton#NavItem {{ background: transparent; color: {p['text']}; text-align: left; padding: 8px 12px;
+    border-radius: 9px; font-size: 13.5px; }}
+QPushButton#NavItem:hover {{ background: {p['card_hover']}; }}
+QPushButton#NavItem:checked {{ background: {p['sel']}; font-weight: 600; }}
+#HomeSection {{ color: {p['text']}; font-size: 17px; font-weight: 650; }}
+#HomeRowTitle {{ color: {p['text']}; font-size: 13.5px; font-weight: 600; }}
+#HomeRow {{ background: transparent; border: none; border-bottom: 1px solid {p['hair']}; }}
+#HomeRow[last="true"] {{ border-bottom: none; }}
+#HomeRow:hover {{ background: {p['card_hover']}; }}
 #Segmented {{ background: {p['fill']}; border-radius: 9px; }}
 QPushButton#Seg {{ background: transparent; color: {p['muted']}; border-radius: 7px; padding: 5px 13px; }}
 QPushButton#Seg:hover {{ color: {p['text']}; }}

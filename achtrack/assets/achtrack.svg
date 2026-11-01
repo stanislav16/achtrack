@@ -1,36 +1,36 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <defs>
     <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#34343B"/>
-      <stop offset="0.55" stop-color="#232329"/>
-      <stop offset="1" stop-color="#151519"/>
+      <stop offset="0" stop-color="#323235"/>
+      <stop offset="0.55" stop-color="#1E1E20"/>
+      <stop offset="1" stop-color="#141416"/>
     </linearGradient>
     <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.22"/>
-      <stop offset="0.45" stop-color="#FFFFFF" stop-opacity="0.04"/>
-      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.26"/>
+      <stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.1"/>
     </linearGradient>
-    <!-- userSpaceOnUse: the stem and base are straight lines, and a bounding-box gradient on a
-         zero-width/height shape isn't rendered at all by spec-following renderers. -->
-    <linearGradient id="metal" gradientUnits="userSpaceOnUse" x1="340" y1="280" x2="700" y2="800">
-      <stop offset="0" stop-color="#F6BE72"/>
-      <stop offset="0.5" stop-color="#E0913C"/>
-      <stop offset="1" stop-color="#C2762B"/>
+    <!-- userSpaceOnUse: the handles are strokes, and these two have to meet at the fold. -->
+    <linearGradient id="light" gradientUnits="userSpaceOnUse" x1="280" y1="250" x2="512" y2="770">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#D4D4D8"/>
+    </linearGradient>
+    <linearGradient id="dark" gradientUnits="userSpaceOnUse" x1="512" y1="250" x2="744" y2="770">
+      <stop offset="0" stop-color="#ABABB0"/>
+      <stop offset="1" stop-color="#68686D"/>
     </linearGradient>
   </defs>
 
   <!-- macOS leaves a margin around the tile, and the corners stay transparent -->
   <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#tile)"/>
-  <rect x="100.75" y="100.75" width="822.5" height="822.5" rx="184.25" fill="none" stroke="url(#rim)" stroke-width="1.5"/>
+  <rect x="102" y="102" width="820" height="820" rx="183" fill="none" stroke="url(#rim)" stroke-width="4"/>
 
-  <g fill="none" stroke="url(#metal)" stroke-width="38" stroke-linecap="round" stroke-linejoin="round">
-    <!-- cup -->
-    <path d="M378 312h268v108c0 104-60 164-134 164s-134-60-134-164z"/>
-    <!-- handles: smooth arcs off the rim, not hooks -->
-    <path d="M378 356c-52 0-74 34-62 74 9 30 34 48 62 54"/>
-    <path d="M646 356c52 0 74 34 62 74-9 30-34 48-62 54"/>
-    <!-- stem and base -->
-    <path d="M512 584v104"/>
-    <path d="M414 724h196"/>
-  </g>
+  <path d="M344 318H312C254 318 234 370 250 414C264 454 310 482 376 496" fill="none" stroke="url(#light)" stroke-width="42" stroke-linecap="round"/>
+  <path d="M680 318H712C770 318 790 370 774 414C760 454 714 482 648 496" fill="none" stroke="url(#dark)" stroke-width="42" stroke-linecap="round"/>
+  <!-- the dark half runs a little under the light one, so no seam shows at the fold when scaled -->
+  <path d="M508 258H658Q680 258 680 280V392C680 492 620 556 540 582V652C540 682 568 694 600 700Q640 708 640 736Q640 762 614 762H508Z" fill="url(#dark)"/>
+  <path d="M512 258H366Q344 258 344 280V392C344 492 404 556 484 582V652C484 682 456 694 424 700Q384 708 384 736Q384 762 410 762H512Z" fill="url(#light)"/>
+  <!-- the star swaps tone across the fold -->
+  <path d="M512 324.0L494.4 377.7L437.8 377.9L483.5 411.3L466.2 465.1L512 432.0Z" fill="url(#dark)"/>
+  <path d="M512 324.0L529.6 377.7L586.2 377.9L540.5 411.3L557.8 465.1L512 432.0Z" fill="url(#light)"/>
 </svg>

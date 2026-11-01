@@ -1,10 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <!-- Monochrome version for system trays, which tint icons themselves. -->
-  <g fill="none" stroke="#FFFFFF" stroke-width="58" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M340 236h344v138c0 134-77 210-172 210s-172-76-172-210z"/>
-    <path d="M340 280h-74c0 98 44 149 110 165"/>
-    <path d="M684 280h74c0 98-44 149-110 165"/>
-    <path d="M512 584v134"/>
-    <path d="M386 788h252"/>
+  <g fill="none" stroke="#FFFFFF" stroke-width="54" stroke-linecap="round">
+    <path d="M344 318H312C254 318 234 370 250 414C264 454 310 482 376 496"/>
+    <path d="M680 318H712C770 318 790 370 774 414C760 454 714 482 648 496"/>
   </g>
+  <path fill="#FFFFFF" d="M366 258H658Q680 258 680 280V392C680 492 620 556 540 582V652C540 682 568 694 600 700Q640 708 640 736Q640 762 614 762H410Q384 762 384 736Q384 708 424 700C456 694 484 682 484 652V582C404 556 344 492 344 392V280Q344 258 366 258Z"/>
 </svg>

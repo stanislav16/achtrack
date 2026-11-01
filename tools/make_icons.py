@@ -1,4 +1,4 @@
-"""Renders the app icon from the SVG: .icns for macOS, PNGs for Linux.
+"""Renders the app icon from the SVG: .icns for macOS, PNGs for Linux, .ico for Windows.
 
 Run through the installed virtualenv (it uses Qt's SVG renderer):
     ~/.local/share/achtrack/venv/bin/python tools/make_icons.py [outdir]
@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -20,10 +21,11 @@ SVG = ROOT / "achtrack" / "assets" / "achtrack.svg"
 GLYPH = ROOT / "achtrack" / "assets" / "achtrack-glyph.svg"     # the trophy with no tile behind it
 # macOS 26 and later draw the tile, the material and the shading themselves from a layered
 # ".icon" document; all we hand over is the artwork and the colour behind it.
-TILE_COLOUR = "extended-srgb:0.13725,0.13725,0.15294,1.00000"
+TILE_COLOUR = "extended-srgb:0.11765,0.11765,0.12549,1.00000"
 # macOS wants each size as 1x and 2x inside an .iconset folder.
 ICNS_SIZES = (16, 32, 128, 256, 512)
 PNG_SIZES = (16, 32, 48, 64, 128, 256, 512)
+ICO_SIZES = (16, 24, 32, 48, 64, 128, 256)
 
 
 def render(svg: Path, size: int, dest: Path) -> None:
@@ -62,6 +64,24 @@ def make_pngs(out_dir: Path) -> list:
     return made
 
 
+def make_ico(out_dir: Path) -> Path:
+    """Windows draws taskbar and title-bar icons from this; AchTrack ships it in assets/."""
+    pngs = []
+    for size in ICO_SIZES:
+        dest = out_dir / f"ico-{size}.png"
+        render(SVG, size, dest)
+        pngs.append(dest.read_bytes())
+        dest.unlink()
+    offset = 6 + 16 * len(pngs)
+    head = struct.pack("<HHH", 0, 1, len(pngs))
+    for size, png in zip(ICO_SIZES, pngs):
+        head += struct.pack("<BBBBHHII", size % 256, size % 256, 0, 0, 1, 32, len(png), offset)
+        offset += len(png)
+    ico = out_dir / "achtrack.ico"
+    ico.write_bytes(head + b"".join(pngs))
+    return ico
+
+
 def make_icon_document(out_dir: Path) -> Path:
     """Writes AchTrack.icon - the source Xcode's actool compiles into a layered icon."""
     document = out_dir / "AchTrack.icon"
@@ -75,7 +95,7 @@ def make_icon_document(out_dir: Path) -> Path:
 
 
 def main() -> int:
-    """make_icons.py [outdir] [--icns] [--pngs] [--icon]; without flags, whatever this system uses."""
+    """make_icons.py [outdir] [--icns] [--pngs] [--icon] [--ico]; without flags, whatever this system uses."""
     QGuiApplication(["make_icons", "-platform", "offscreen"])
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     flags = {a for a in sys.argv[1:] if a.startswith("--")}
@@ -89,6 +109,8 @@ def main() -> int:
     if want_pngs:
         made = make_pngs(out_dir)
         print(f"pngs: {len(made)} sizes in {out_dir}")
+    if "--ico" in flags:
+        print(f"ico: {make_ico(out_dir)}")
     if "--icon" in flags or (not flags and sys.platform == "darwin"):
         print(f"icon: {make_icon_document(out_dir)}")
     return 0

@@ -2,19 +2,24 @@
   <!-- The trophy on its own, with no tile behind it: macOS draws the rounded square, the
        material and the shading itself for a layered (Icon Composer) icon. -->
   <defs>
-    <linearGradient id="metal" gradientUnits="userSpaceOnUse" x1="300" y1="230" x2="740" y2="820">
-      <stop offset="0" stop-color="#F6BE72"/>
-      <stop offset="0.5" stop-color="#E0913C"/>
-      <stop offset="1" stop-color="#C2762B"/>
+    <!-- userSpaceOnUse: the handles are strokes, and these two have to meet at the fold. -->
+    <linearGradient id="light" gradientUnits="userSpaceOnUse" x1="280" y1="250" x2="512" y2="770">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#D4D4D8"/>
+    </linearGradient>
+    <linearGradient id="dark" gradientUnits="userSpaceOnUse" x1="512" y1="250" x2="744" y2="770">
+      <stop offset="0" stop-color="#ABABB0"/>
+      <stop offset="1" stop-color="#68686D"/>
     </linearGradient>
   </defs>
-  <g transform="translate(512 528) scale(1.32) translate(-512 -518)">
-    <g fill="none" stroke="url(#metal)" stroke-width="38" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M378 312h268v108c0 104-60 164-134 164s-134-60-134-164z"/>
-      <path d="M378 356c-52 0-74 34-62 74 9 30 34 48 62 54"/>
-      <path d="M646 356c52 0 74 34 62 74-9 30-34 48-62 54"/>
-      <path d="M512 584v104"/>
-      <path d="M414 724h196"/>
-    </g>
+  <g transform="translate(512 512) scale(1.12) translate(-512 -510)">
+    <path d="M344 318H312C254 318 234 370 250 414C264 454 310 482 376 496" fill="none" stroke="url(#light)" stroke-width="42" stroke-linecap="round"/>
+    <path d="M680 318H712C770 318 790 370 774 414C760 454 714 482 648 496" fill="none" stroke="url(#dark)" stroke-width="42" stroke-linecap="round"/>
+    <!-- the dark half runs a little under the light one, so no seam shows at the fold when scaled -->
+    <path d="M508 258H658Q680 258 680 280V392C680 492 620 556 540 582V652C540 682 568 694 600 700Q640 708 640 736Q640 762 614 762H508Z" fill="url(#dark)"/>
+    <path d="M512 258H366Q344 258 344 280V392C344 492 404 556 484 582V652C484 682 456 694 424 700Q384 708 384 736Q384 762 410 762H512Z" fill="url(#light)"/>
+    <!-- the star swaps tone across the fold -->
+    <path d="M512 324.0L494.4 377.7L437.8 377.9L483.5 411.3L466.2 465.1L512 432.0Z" fill="url(#dark)"/>
+    <path d="M512 324.0L529.6 377.7L586.2 377.9L540.5 411.3L557.8 465.1L512 432.0Z" fill="url(#light)"/>
   </g>
 </svg>

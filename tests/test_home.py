@@ -73,6 +73,11 @@ class Navigation(unittest.TestCase):
         self.assertIsNone(self.win.current_appid())
         self.assertTrue(self.win.nav_home.isChecked())
 
+    def test_nothing_is_waiting_for_typing_when_it_opens(self):
+        self.assertFalse(self.win.search.hasFocus())
+        self.assertIs(self.win.focusWidget(), self.win)
+        self.assertIsNone(self.win.games.currentItem())
+
     def test_a_game_and_back(self):
         self.win.open_game(20)
         self.assertIs(self.win.stack.currentWidget(), self.win.detail)

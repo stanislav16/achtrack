@@ -34,6 +34,7 @@ GRAPHITE = {
     "danger": "#FF6961",
     "track": "#2C2C2E",       # progress background
     "icon_off": "#232325",
+    "thumb": "#515155",       # the selected part of a segmented control
     "shadow": 110,
 }
 
@@ -51,7 +52,7 @@ PORCELAIN = {
     "hair": "#DCDCE0",
     "text": "#1D1D1F",
     "text2": "#3A3A3C",
-    "muted": "#86868B",
+    "muted": "#6E6E73",       # #86868B is too faint for small text on these backgrounds
     "accent": "#1D1D1F",
     "accent_soft": "#3A3A3C",
     "on_accent": "#FFFFFF",
@@ -59,6 +60,7 @@ PORCELAIN = {
     "danger": "#D70015",
     "track": "#E2E2E6",
     "icon_off": "#E8E8EB",
+    "thumb": "#FFFFFF",
     "shadow": 45,
 }
 
@@ -299,16 +301,14 @@ QPushButton#NavItem:checked {{ background: {p['sel']}; font-weight: 600; }}
 #PageTitle {{ color: {p['text']}; font-size: 19px; font-weight: 650; letter-spacing: -0.2px; }}
 #HomeSection {{ color: {p['text']}; font-size: 17px; font-weight: 650; letter-spacing: -0.15px; }}
 #HomeRowTitle {{ color: {p['text']}; font-size: 13.5px; font-weight: 600; }}
-#HomeRow {{ background: transparent; border: none; border-bottom: 1px solid {p['hair']}; }}
-#HomeRow[last="true"] {{ border-bottom: none; }}
+#HomeRow {{ background: transparent; border: none; border-radius: 12px; }}
 #HomeRow:hover {{ background: {p['card_hover']}; }}
 #HomeRow[pressed="true"] {{ background: {p['sel']}; }}
 #Segmented {{ background: {p['fill']}; border-radius: 9px; }}
 QPushButton#Seg {{ background: transparent; color: {p['muted']}; border-radius: 7px; padding: 5px 13px; }}
 QPushButton#Seg:hover {{ color: {p['text']}; }}
 QPushButton#Seg:pressed {{ background: {p['fill_hover']}; }}
-QPushButton#Seg:checked {{ background: {p['card'] if p['scheme'] == 'light' else p['muted']};
-    color: {p['text'] if p['scheme'] == 'light' else p['bg']}; font-weight: 600; }}
+QPushButton#Seg:checked {{ background: {p['thumb']}; color: {p['text']}; font-weight: 600; }}
 QProgressBar {{ background: {p['track']}; border: none; border-radius: 2px; max-height: 4px; min-height: 4px; }}
 QProgressBar::chunk {{ background: {p['accent']}; border-radius: 2px; }}
 QScrollBar:vertical {{ background: transparent; width: 12px; margin: 3px; }}
@@ -328,8 +328,7 @@ QScrollBar::add-page, QScrollBar::sub-page {{ background: none; }}
 #GameTitle {{ color: {p['text']}; font-size: 28px; font-weight: 700; letter-spacing: -0.4px; }}
 #GameSub {{ color: {p['muted']}; font-size: 13px; }}
 #SectionLabel {{ color: {p['muted']}; font-size: 10px; font-weight: 600; letter-spacing: 0.8px; }}
-#AchRow {{ background: transparent; border: none; border-bottom: 1px solid {p['hair']}; }}
-#AchRow[last="true"] {{ border-bottom: none; }}
+#AchRow {{ background: transparent; border: none; }}
 #AchName {{ color: {p['muted']}; font-size: 14px; font-weight: 600; }}
 #AchRow[unlocked="true"] #AchName {{ color: {p['text']}; }}
 #AchDesc {{ color: {p['muted']}; font-size: 12px; }}

@@ -50,7 +50,7 @@ def accent() -> QColor:
 
 def fmt_playtime(seconds: int) -> str:
     if seconds < 60:
-        return "Never" if seconds <= 0 else "< 1 minute"
+        return "None yet" if seconds <= 0 else "< 1 minute"
     if seconds < 3600:
         m = seconds // 60
         return f"{m} minute{'s' if m != 1 else ''}"
@@ -79,7 +79,8 @@ def fmt_day(ts: int | None) -> str:
 def fmt_unlock(ts: int) -> str:
     dt = datetime.fromtimestamp(ts)
     # Not strftime's %-d / %-I: Windows spells "no leading zero" differently.
-    return f"{dt.day} {dt:%b %Y}, {dt.hour % 12 or 12}:{dt:%M} {'am' if dt.hour < 12 else 'pm'}"
+    day = f"{dt.day} {dt:%b}" if dt.year == datetime.now().year else f"{dt.day} {dt:%b %Y}"
+    return f"{day}, {dt.hour % 12 or 12}:{dt:%M} {'am' if dt.hour < 12 else 'pm'}"
 
 
 def screen_scale() -> float:
@@ -386,6 +387,15 @@ class Dot(QWidget):
         p.drawEllipse(self.rect())
 
 
+def paint_separator(row: QWidget, inset: int) -> None:
+    """The line under a row of a group. It starts at the text, as in the system's own grouped
+    lists, so the icons read as one column rather than as boxes in a table."""
+    if not row.property("last"):
+        painter = QPainter(row)
+        painter.setPen(theme.colour(P["hair"]))
+        painter.drawLine(inset, row.height() - 1, row.width(), row.height() - 1)
+
+
 class GameRow(QWidget):
     def __init__(self, row, running: bool, icon: bool = True):
         super().__init__()
@@ -406,12 +416,13 @@ class GameRow(QWidget):
         parts = []
         if (row["platform"] or "pc") != "pc":
             parts.append(platform_name(row))
-        parts.append(fmt_short_playtime(row["total_playtime"]))
+        if row["total_playtime"]:
+            parts.append(fmt_short_playtime(row["total_playtime"]))
         if row["total"]:
             parts.append(f"{min(row['unlocked'], row['total'])}/{row['total']}")
         elif row["unlocked"]:
             parts.append(str(row["unlocked"]))
-        sub = QLabel("  ·  ".join(parts))
+        sub = QLabel("  ·  ".join(parts) or "Not played yet")
         sub.setStyleSheet(f"color: {P['muted']}; font-size: 11.5px; background: transparent;")
         lay.addWidget(sub)
         outer.addLayout(lay, 1)
@@ -496,6 +507,10 @@ class AchievementRow(QFrame):
             right.addWidget(label, 0, Qt.AlignmentFlag.AlignRight)
         right.addStretch(1)
         lay.addLayout(right)
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        paint_separator(self, 16 + ACH_ICON + 14)
 
 
 class HiddenSummaryRow(QFrame):
@@ -1003,7 +1018,11 @@ class HomeRow(Pressable):
             end = QLabel(tail)
             end.setObjectName("AchPct")
             end.setProperty("rare", rare)
-            lay.addWidget(end)
+            lay.addWidget(end, 0, Qt.AlignmentFlag.AlignVCenter)
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        paint_separator(self, 14 + 40 + 12)
 
 
 class GameCard(Pressable):
@@ -2631,12 +2650,18 @@ class MainWindow(QMainWindow):
         icon.setPixmap(QIcon(str(APP_ICON)).pixmap(96, 96))
         icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         empty_lay.addWidget(icon)
-        msg = QLabel("No games yet.\n\nLaunch a game that uses a Steam emulator (Goldberg, CODEX, RUNE, EMPRESS, "
-                     "OnlineFix…) and it will show up here automatically,\nor add one by hand.")
+        empty_lay.addSpacing(14)
+        heading = QLabel("No games yet")
+        heading.setObjectName("PageTitle")
+        heading.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_lay.addWidget(heading)
+        empty_lay.addSpacing(6)
+        msg = QLabel("Start a game and it shows up here by itself, or add one by hand.")
         msg.setObjectName("Empty")
         msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
         msg.setWordWrap(True)
         empty_lay.addWidget(msg)
+        empty_lay.addSpacing(16)
         row = QHBoxLayout()
         row.addStretch(1)
         add2 = QPushButton("Add a game")
@@ -2659,6 +2684,9 @@ class MainWindow(QMainWindow):
         splitter.setSizes([280, 920])
         self.setCentralWidget(splitter)
         self._build_menu()
+        # Or the search box opens focused, ringed and with a blinking caret. Not the game list:
+        # focus there selects its first game, and the window would open on that instead of Home.
+        self.setFocus()
 
     def apply_theme(self) -> None:
         global P

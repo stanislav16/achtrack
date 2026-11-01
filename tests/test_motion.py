@@ -185,6 +185,13 @@ class Rows(unittest.TestCase):
         self.assertFalse(self.row.property("pressed"))
         self.assertEqual(self.clicks, [1])
 
+    def test_a_hover_is_not_a_press(self):
+        # macOS delivers moves with no button held, so this is what pointing at a row looks like.
+        self.row.mouseMoveEvent(QMouseEvent(QEvent.Type.MouseMove, QPointF(10, 10), QPointF(10, 10),
+                                            Qt.MouseButton.NoButton, Qt.MouseButton.NoButton,
+                                            Qt.KeyboardModifier.NoModifier))
+        self.assertFalse(self.row.property("pressed"))
+
     def test_moving_off_and_letting_go_does_nothing(self):
         self.row.mousePressEvent(self.press(QEvent.Type.MouseButtonPress))
         self.row.mouseMoveEvent(self.press(QEvent.Type.MouseMove, 500))

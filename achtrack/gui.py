@@ -976,15 +976,20 @@ class Pressable(QFrame):
             self.setProperty("pressed", pressed)
             _repolish(self)
 
+    held = False
+
     def mousePressEvent(self, event) -> None:
+        self.held = True
         self.show_pressed(True)
 
     def mouseMoveEvent(self, event) -> None:
-        self.show_pressed(self.rect().contains(event.position().toPoint()))
+        if self.held:       # macOS sends moves with no button down too: those are only a hover
+            self.show_pressed(self.rect().contains(event.position().toPoint()))
 
     def mouseReleaseEvent(self, event) -> None:
+        held, self.held = self.held, False
         self.show_pressed(False)
-        if self.rect().contains(event.position().toPoint()):
+        if held and self.rect().contains(event.position().toPoint()):
             self.activate()
 
 

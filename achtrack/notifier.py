@@ -1,18 +1,19 @@
-"""Steam-style achievement popups."""
+"""Achievement popups."""
 from __future__ import annotations
 
 import shutil
 import subprocess
+import time
 from collections import deque
 from dataclasses import dataclass
 
-from PySide6.QtCore import (QEasingCurve, QObject, QParallelAnimationGroup, QPoint, QPropertyAnimation, QRectF, Qt,
-                            QTimer, Signal)
+from PySide6.QtCore import QObject, QPoint, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QFont, QFontMetrics, QGuiApplication, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 
-from . import sound, theme
+from . import motion, sound, theme
 from .config import APP_ICON, APP_NAME, Config
+from .motion import Spring
 
 CARD_W, CARD_H = 360, 88
 SHADOW = 18
@@ -21,6 +22,7 @@ ICON = 60
 MAX_VISIBLE = 3
 EDGE_MARGIN = 18
 SPACING = 10
+DRAG_SLOP = 8           # how far a press has to move before it counts as a drag
 
 P = theme.palette()
 
@@ -47,10 +49,11 @@ class ToastData:
     sound_file: str = ""
 
 
-def _font(px: float, weight=QFont.Weight.Normal, spacing: float = 0.0) -> QFont:
-    f = QFont()
-    f.setFamilies(["Motiva Sans", "Inter", "Noto Sans", "Cantarell", "Ubuntu", "DejaVu Sans", "Arial"])
-    f.setPixelSize(int(px))
+def _font(px: int, weight=QFont.Weight.Normal, spacing: float = 0.0, family: str = "") -> QFont:
+    f = QFont()         # the desktop's own UI font, unless Settings names one
+    if family:
+        f.setFamily(family)
+    f.setPixelSize(px)
     f.setWeight(weight)
     if spacing:
         f.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, spacing)
@@ -103,7 +106,7 @@ def trophy_pixmap(size: int, color: QColor | None = None) -> QPixmap:
 class Toast(QWidget):
     finished = Signal(object)
 
-    def __init__(self, data: ToastData, seconds: float):
+    def __init__(self, data: ToastData, seconds: float, family: str = "", outward: int = 1):
         flags = (Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool
                  | Qt.WindowType.WindowDoesNotAcceptFocus | Qt.WindowType.X11BypassWindowManagerHint
                  | Qt.WindowType.NoDropShadowWindowHint)
@@ -115,9 +118,25 @@ class Toast(QWidget):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.data = data
         self.seconds = max(1.5, seconds)
+        self.family = family
+        self.outward = outward      # the way to the nearer screen edge: +1 right, -1 left
         self.closing = False
         self.icon = self._load_icon()
-        self._anims: list = []
+        self._calm = motion.reduced()
+        self._for_good = False      # clicked or thrown away, as opposed to timing out
+        self._slot = self._away = QPoint()
+        self._x = Spring(parent=self)
+        self._y = Spring(parent=self)
+        self._shown = Spring(response=0.3, precision=0.003, parent=self)
+        self._press = Spring(response=0.12, precision=0.003, parent=self)
+        self._x.changed.connect(self._moved)
+        self._y.changed.connect(self._moved)
+        self._shown.changed.connect(self._redraw)
+        self._press.changed.connect(self._redraw)
+        self._shown.settled.connect(self._shown_settled)
+        self._grab: QPoint | None = None
+        self._dragging = False
+        self._trail: deque = deque(maxlen=6)
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self.dismiss)
@@ -137,71 +156,127 @@ class Toast(QWidget):
 
     # animation -----------------------------------------------------------
 
-    @staticmethod
-    def _can_fade() -> bool:
-        # Only the X11 backend supports window opacity; elsewhere Qt warns on every frame.
-        return QGuiApplication.platformName() == "xcb"
+    def _moved(self) -> None:
+        self.move(round(self._x.value), round(self._y.value))
+
+    def _redraw(self) -> None:
+        self.update()
+
+    def _head_for(self, point: QPoint, velocity: float | None = None) -> None:
+        self._x.go(point.x(), velocity=velocity)
+        self._y.go(point.y())
 
     def present(self, start: QPoint, end: QPoint) -> None:
+        if self._calm:
+            start = end         # a plain fade: nothing travels when the system asks for less motion
+        self._slot, self._away = end, start - end
+        self._x.value, self._y.value = start.x(), start.y()
         self.move(start)
-        if self._can_fade():
-            self.setWindowOpacity(0.0)
         self.show()
         self.raise_()
-        group = QParallelAnimationGroup(self)
-        slide = QPropertyAnimation(self, b"pos")
-        slide.setDuration(420)
-        slide.setStartValue(start)
-        slide.setEndValue(end)
-        slide.setEasingCurve(QEasingCurve.Type.OutCubic)
-        fade = QPropertyAnimation(self, b"windowOpacity")
-        fade.setDuration(260)
-        fade.setStartValue(0.0)
-        fade.setEndValue(1.0)
-        group.addAnimation(slide)
-        if self._can_fade():
-            group.addAnimation(fade)
-        group.start()
-        self._anims.append(group)
+        self._head_for(end)
+        self._shown.go(1.0)
         self._timer.start(int(self.seconds * 1000))
 
     def move_to(self, end: QPoint) -> None:
-        anim = QPropertyAnimation(self, b"pos", self)
-        anim.setDuration(260)
-        anim.setEndValue(end)
-        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        anim.start()
-        self._anims.append(anim)
+        self._slot = end
+        if self.closing:
+            return
+        self._y.go(end.y())
+        if not self._dragging:
+            self._x.go(end.x())
 
-    def dismiss(self) -> None:
+    def dismiss(self, for_good: bool = False) -> None:
         if self.closing:
             return
         self.closing = True
+        self._for_good = for_good
         self._timer.stop()
-        if not self._can_fade():
+        self._head_for(self._slot + self._away)     # back the way it came
+        self._shown.go(0.0)
+
+    def _bring_back(self) -> None:
+        self.closing = False
+        self._head_for(self._slot)
+        self._shown.go(1.0)
+
+    def _shown_settled(self) -> None:
+        if self.closing:
             self._finish()
-            return
-        fade = QPropertyAnimation(self, b"windowOpacity", self)
-        fade.setDuration(320)
-        fade.setStartValue(self.windowOpacity())
-        fade.setEndValue(0.0)
-        fade.finished.connect(self._finish)
-        fade.start()
-        self._anims.append(fade)
 
     def _finish(self) -> None:
+        for spring in (self._x, self._y, self._shown, self._press):
+            spring.stop()
         self.hide()
         self.finished.emit(self)
 
+    # the pointer: the press shows at once, and a drag sideways takes it away -----
+
     def mousePressEvent(self, event) -> None:
-        self.dismiss()
+        self._grab = event.globalPosition().toPoint()
+        self._dragging = False
+        self._trail.clear()
+        self._press.go(1.0)
+        self._timer.stop()
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._grab is None or self.closing:
+            return
+        where = event.globalPosition().toPoint()
+        moved = where.x() - self._grab.x()
+        if not self._dragging:
+            if abs(moved) < DRAG_SLOP:
+                return
+            self._dragging = True
+            self._grab.setX(self._grab.x() + (DRAG_SLOP if moved > 0 else -DRAG_SLOP))
+            moved = where.x() - self._grab.x()
+            self._press.go(0.0)
+        self._trail.append((time.monotonic(), moved))
+        outward = moved * self.outward
+        if outward < 0:         # towards the middle of the screen, where there's nowhere to go
+            moved = motion.rubberband(moved, CARD_W)
+        self._x.snap(self._slot.x() + moved)
+        self._shown.snap(1.0 - 0.7 * min(max(outward, 0) / CARD_W, 1.0))
+
+    def _release_speed(self) -> float:
+        """Pixels a second over the last moments of a drag, since the final event alone is noise."""
+        recent = [(t, x) for t, x in self._trail if self._trail[-1][0] - t < 0.1]
+        if len(recent) < 2 or recent[-1][0] == recent[0][0]:
+            return 0.0
+        return (recent[-1][1] - recent[0][1]) / (recent[-1][0] - recent[0][0])
+
+    def mouseReleaseEvent(self, event) -> None:
+        grabbed, self._grab = self._grab, None
+        if grabbed is None or self.closing:
+            return
+        self._press.go(0.0)
+        if not self._dragging:
+            if self.rect().contains(event.position().toPoint()):
+                self.dismiss(for_good=True)
+            else:
+                self._timer.start(2000)
+            return
+        self._dragging = False
+        speed = self._release_speed()
+        pulled = (self._x.value - self._slot.x()) * self.outward
+        ahead = pulled + motion.project(speed) * self.outward
+        if ahead > CARD_W / 2 and speed * self.outward >= 0:
+            self.closing = self._for_good = True
+            self._x.go(self._slot.x() + self.outward * (CARD_W + 2 * SHADOW), velocity=speed)
+            self._shown.go(0.0)
+        else:
+            self._x.go(self._slot.x(), velocity=speed)
+            self._shown.go(1.0)
+            self._timer.start(2000)
 
     def enterEvent(self, event) -> None:
+        if self.closing and not self._for_good:
+            self._bring_back()      # caught on its way out
         if not self.closing:
             self._timer.stop()
 
     def leaveEvent(self, event) -> None:
-        if not self.closing:
+        if not self.closing and self._grab is None:
             self._timer.start(2000)
 
     # painting ------------------------------------------------------------
@@ -212,6 +287,13 @@ class Toast(QWidget):
                          | QPainter.RenderHint.TextAntialiasing)
         rare = self.data.rare
         card = QRectF(SHADOW, SHADOW, CARD_W, CARD_H)
+        shown = min(max(self._shown.value, 0.0), 1.0)
+        p.setOpacity(shown)
+        if not self._calm:      # it arrives a little small and settles, and gives slightly under a press
+            scale = 1.0 - 0.03 * (1.0 - shown) - 0.015 * self._press.value
+            p.translate(card.center())
+            p.scale(scale, scale)
+            p.translate(-card.center())
 
         # one soft shadow, nothing else
         p.setPen(Qt.PenStyle.NoPen)
@@ -238,13 +320,13 @@ class Toast(QWidget):
 
         x = icon_rect.right() + 16
         width = int(card.right() - 16 - x)
-        kicker = _font(9.5, QFont.Weight.DemiBold, 0.6)
+        kicker = _font(10, QFont.Weight.DemiBold, 0.4, self.family)
         p.setFont(kicker)
         p.setPen(_c("accent"))
         p.drawText(QRectF(x, card.top() + 13, width, 13), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                    QFontMetrics(kicker).elidedText(self.data.kicker, Qt.TextElideMode.ElideRight, width))
 
-        title = _font(14.5, QFont.Weight.DemiBold)
+        title = _font(15, QFont.Weight.DemiBold, -0.1, self.family)
         p.setFont(title)
         p.setPen(_c("text"))
         p.drawText(QRectF(x, card.top() + 30, width, 20), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
@@ -253,13 +335,13 @@ class Toast(QWidget):
         line = self.data.body
         if self.data.footer_right:
             line = f"{line}    {self.data.footer_right}" if line else self.data.footer_right
-        body_font = _font(11.5)
+        body_font = _font(12, family=self.family)
         p.setFont(body_font)
         p.setPen(_c("muted"))
         p.drawText(QRectF(x, card.top() + 52, width, 16), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                    QFontMetrics(body_font).elidedText(line, Qt.TextElideMode.ElideRight, width))
         if self.data.footer:
-            foot = _font(10.5)
+            foot = _font(11, family=self.family)
             p.setFont(foot)
             p.setPen(_c("muted"))
             p.drawText(QRectF(x, card.bottom() - 21, width, 13),
@@ -282,7 +364,8 @@ class ToastManager(QObject):
     def _pump(self) -> None:
         while self.queue and len(self.active) < MAX_VISIBLE:
             data = self.queue.popleft()
-            toast = Toast(data, self.cfg.popup_seconds)
+            toast = Toast(data, self.cfg.popup_seconds, self.cfg.font_family,
+                          1 if self.cfg.popup_corner.endswith("right") else -1)
             toast.finished.connect(self._done)
             self.active.append(toast)
             end = self._slot(len(self.active) - 1)

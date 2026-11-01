@@ -276,6 +276,7 @@ QPushButton:disabled {{ color: {p['muted']}; }}
 QPushButton::menu-indicator {{ width: 0; height: 0; image: none; }}
 QPushButton#Primary {{ background: {p['accent']}; color: {p['on_accent']}; font-weight: 600; }}
 QPushButton#Primary:hover {{ background: {p['accent_soft']}; }}
+QPushButton#Primary:pressed {{ background: {p['muted']}; }}
 QPushButton#Primary:disabled {{ background: {p['fill']}; color: {p['muted']}; }}
 QPushButton#PlayMain, QPushButton#PlayMore {{ background: {p['accent']}; color: {p['on_accent']};
     font-size: 14px; font-weight: 600; padding: 8px 18px; margin-top: 6px; }}
@@ -284,22 +285,28 @@ QPushButton#PlayMain {{ border-top-right-radius: 0; border-bottom-right-radius: 
 QPushButton#PlayMore {{ padding: 8px 11px; border-radius: 10px; border-top-left-radius: 0;
     border-bottom-left-radius: 0; border-left: 1px solid {p['accent_soft']}; }}
 QPushButton#PlayMain:hover, QPushButton#PlayMore:hover {{ background: {p['accent_soft']}; }}
+QPushButton#PlayMain:pressed, QPushButton#PlayMore:pressed {{ background: {p['muted']}; }}
 QPushButton#PlayMain:disabled, QPushButton#PlayMore:disabled {{ background: {p['fill']}; color: {p['muted']}; }}
 QPushButton#Flat {{ background: transparent; color: {p['muted']}; padding: 5px 8px; }}
 QPushButton#Flat:hover {{ background: {p['fill']}; color: {p['text']}; }}
+QPushButton#Flat:pressed {{ background: {p['sel']}; }}
 QPushButton#More {{ padding: 7px 11px; font-weight: 700; letter-spacing: 1px; }}
 QPushButton#NavItem {{ background: transparent; color: {p['text']}; text-align: left; padding: 8px 12px;
     border-radius: 9px; font-size: 13.5px; }}
 QPushButton#NavItem:hover {{ background: {p['card_hover']}; }}
+QPushButton#NavItem:pressed {{ background: {p['sel']}; }}
 QPushButton#NavItem:checked {{ background: {p['sel']}; font-weight: 600; }}
-#HomeSection {{ color: {p['text']}; font-size: 17px; font-weight: 650; }}
+#PageTitle {{ color: {p['text']}; font-size: 19px; font-weight: 650; letter-spacing: -0.2px; }}
+#HomeSection {{ color: {p['text']}; font-size: 17px; font-weight: 650; letter-spacing: -0.15px; }}
 #HomeRowTitle {{ color: {p['text']}; font-size: 13.5px; font-weight: 600; }}
 #HomeRow {{ background: transparent; border: none; border-bottom: 1px solid {p['hair']}; }}
 #HomeRow[last="true"] {{ border-bottom: none; }}
 #HomeRow:hover {{ background: {p['card_hover']}; }}
+#HomeRow[pressed="true"] {{ background: {p['sel']}; }}
 #Segmented {{ background: {p['fill']}; border-radius: 9px; }}
 QPushButton#Seg {{ background: transparent; color: {p['muted']}; border-radius: 7px; padding: 5px 13px; }}
 QPushButton#Seg:hover {{ color: {p['text']}; }}
+QPushButton#Seg:pressed {{ background: {p['fill_hover']}; }}
 QPushButton#Seg:checked {{ background: {p['card'] if p['scheme'] == 'light' else p['muted']};
     color: {p['text'] if p['scheme'] == 'light' else p['bg']}; font-weight: 600; }}
 QProgressBar {{ background: {p['track']}; border: none; border-radius: 2px; max-height: 4px; min-height: 4px; }}
@@ -317,8 +324,8 @@ QScrollBar::add-page, QScrollBar::sub-page {{ background: none; }}
 #Tiles {{ background: {p['card']}; border: 1px solid {p['hair']}; border-radius: 14px; }}
 #TileRule {{ background: {p['hair']}; }}
 #StatLabel {{ color: {p['muted']}; font-size: 11px; font-weight: 500; }}
-#StatValue {{ color: {p['text']}; font-size: 18px; font-weight: 600; }}
-#GameTitle {{ color: {p['text']}; font-size: 28px; font-weight: 700; }}
+#StatValue {{ color: {p['text']}; font-size: 18px; font-weight: 600; letter-spacing: -0.15px; }}
+#GameTitle {{ color: {p['text']}; font-size: 28px; font-weight: 700; letter-spacing: -0.4px; }}
 #GameSub {{ color: {p['muted']}; font-size: 13px; }}
 #SectionLabel {{ color: {p['muted']}; font-size: 10px; font-weight: 600; letter-spacing: 0.8px; }}
 #AchRow {{ background: transparent; border: none; border-bottom: 1px solid {p['hair']}; }}
@@ -337,6 +344,7 @@ QScrollBar::add-page, QScrollBar::sub-page {{ background: none; }}
 #Tag[kind="rare"] {{ color: {p['on_accent']}; background: {p['accent']}; }}
 #ReviewRow {{ background: {p['card']}; border: 1px solid {p['hair']}; border-radius: 12px; }}
 #ReviewRow[checked="true"] {{ border-color: {p['muted']}; }}
+#ReviewRow[pressed="true"] {{ background: {p['card_hover']}; }}
 #Found {{ color: {p['live']}; font-size: 11.5px; }}
 #SaveStatus {{ color: {p['muted']}; font-size: 11.5px; }}
 QTabWidget::pane {{ border: 1px solid {p['hair']}; border-radius: 14px; top: -1px; background: {p['card']}; }}

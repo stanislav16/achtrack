@@ -375,6 +375,9 @@ automatically too. Add any other prefix folders under **Settings → Extra folde
 
 ## Popups over games
 
+Click a popup to close it, drag it toward the screen edge to throw it away, or point at one on its
+way out to bring it back. It follows the system's reduced-motion setting.
+
 Popups are borderless always-on-top windows. They show over windowed and borderless-fullscreen
 games. Notes:
 

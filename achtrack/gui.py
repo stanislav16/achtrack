@@ -12,7 +12,8 @@ from PySide6.QtCore import QDateTime, QEvent, QObject, QProcess, QRectF, QSize, 
 from PySide6.QtGui import (QAction, QActionGroup, QBrush, QColor, QDesktopServices, QFont, QGuiApplication, QIcon,
                            QImage, QKeySequence, QLinearGradient, QPainter, QPainterPath, QPalette, QPen, QPixmap)
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateTimeEdit, QDialog,
-                               QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsScene, QGridLayout,
+                               QGraphicsBlurEffect, QGraphicsOpacityEffect, QGraphicsPixmapItem, QGraphicsScene,
+                               QGridLayout,
                                QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout,
                                QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
                                QMenu, QMessageBox,
@@ -949,7 +950,30 @@ class DetailView(QWidget):
 
 # home page ---------------------------------------------------------------
 
-class HomeRow(QFrame):
+class Pressable(QFrame):
+    """Shows a press the moment it lands and acts on release, so dragging off cancels it."""
+
+    def activate(self) -> None:
+        self.on_click()
+
+    def show_pressed(self, pressed: bool) -> None:
+        if bool(self.property("pressed")) != pressed:
+            self.setProperty("pressed", pressed)
+            _repolish(self)
+
+    def mousePressEvent(self, event) -> None:
+        self.show_pressed(True)
+
+    def mouseMoveEvent(self, event) -> None:
+        self.show_pressed(self.rect().contains(event.position().toPoint()))
+
+    def mouseReleaseEvent(self, event) -> None:
+        self.show_pressed(False)
+        if self.rect().contains(event.position().toPoint()):
+            self.activate()
+
+
+class HomeRow(Pressable):
     """A row in one of the home page's groups; clicking it opens the game."""
 
     def __init__(self, pixmap: QPixmap, title: str, sub: str, tail: str, on_click, rare: bool = False,
@@ -981,12 +1005,8 @@ class HomeRow(QFrame):
             end.setProperty("rare", rare)
             lay.addWidget(end)
 
-    def mouseReleaseEvent(self, event) -> None:
-        if self.rect().contains(event.position().toPoint()):
-            self.on_click()
 
-
-class GameCard(QFrame):
+class GameCard(Pressable):
     """A game's artwork, for the row of what you've been playing."""
     WIDTH, HEIGHT = 208, 97
 
@@ -1011,10 +1031,13 @@ class GameCard(QFrame):
         sub = Elided("Playing now" if running else fmt_day(game["last"]))
         sub.setObjectName("Running" if running else "AchDesc")
         lay.addWidget(sub)
+        self._dim = QGraphicsOpacityEffect(self)
+        self._dim.setOpacity(0.7)
+        self._dim.setEnabled(False)
+        self.setGraphicsEffect(self._dim)
 
-    def mouseReleaseEvent(self, event) -> None:
-        if self.rect().contains(event.position().toPoint()):
-            self.on_click()
+    def show_pressed(self, pressed: bool) -> None:
+        self._dim.setEnabled(pressed)       # artwork fills the card, so a background wouldn't show
 
 
 class HomeView(QScrollArea):
@@ -1195,7 +1218,7 @@ def _tag(text: str, kind: str) -> QLabel:
     return tag
 
 
-class ReviewRow(QFrame):
+class ReviewRow(Pressable):
     """One locked achievement with a checkbox; clicking anywhere on the row toggles it."""
 
     def __init__(self, appid: int, a: dict, found: str | None = None):
@@ -1255,7 +1278,7 @@ class ReviewRow(QFrame):
         self.setProperty("checked", checked)
         _repolish(self)
 
-    def mousePressEvent(self, event) -> None:
+    def activate(self) -> None:
         self.check.toggle()
 
 
@@ -1287,7 +1310,7 @@ class UpdateDialog(QDialog):
         lay.setSpacing(12)
 
         self.title = QLabel("Checking for updates…")
-        self.title.setStyleSheet("font-size: 19px; font-weight: 650;")
+        self.title.setObjectName("PageTitle")
         lay.addWidget(self.title)
         self.detail = QLabel("")
         self.detail.setWordWrap(True)
@@ -1421,7 +1444,7 @@ class RestoreSavesDialog(QDialog):
         lay.setContentsMargins(22, 20, 22, 16)
         lay.setSpacing(12)
         title = QLabel(f"Restore saves for {self.name}")
-        title.setStyleSheet("font-size: 19px; font-weight: 650;")
+        title.setObjectName("PageTitle")
         title.setWordWrap(True)
         lay.addWidget(title)
         self.hint = QLabel("")
@@ -1520,7 +1543,7 @@ class ReadersDialog(QDialog):
         lay.setContentsMargins(22, 20, 22, 16)
         lay.setSpacing(12)
         title = QLabel("Save readers")
-        title.setStyleSheet("font-size: 19px; font-weight: 650;")
+        title.setObjectName("PageTitle")
         lay.addWidget(title)
         hint = QLabel("A reader teaches AchTrack one game's save format, so achievements can unlock from the "
                       "save when the game itself records nothing. Only the ones you install are used. To get "
@@ -1685,7 +1708,7 @@ class ShareDialog(QDialog):
         lay.setSpacing(12)
 
         title = QLabel("Share my statistics")
-        title.setStyleSheet("font-size: 19px; font-weight: 650;")
+        title.setObjectName("PageTitle")
         lay.addWidget(title)
         blurb = QLabel("One page with your totals, rarest finds, most played games and recent "
                        "unlocks. Send it as a file and it opens by itself, or publish it and send "
@@ -1790,7 +1813,7 @@ class ReviewDialog(QDialog):
         lay.setSpacing(10)
 
         title = QLabel("Did you earn any of these?")
-        title.setStyleSheet("color: white; font-size: 22px; font-weight: 700;")
+        title.setStyleSheet("color: white; font-size: 22px; font-weight: 700; letter-spacing: -0.3px;")
         lay.addWidget(title)
         parts = [name]
         if session_seconds:

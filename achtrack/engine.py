@@ -290,7 +290,7 @@ class Engine:
         self.discover_ports()
         self.discover_switch()
 
-    # Switch games in Ryubing -----------------------------------------------
+    # Switch games in Ryubing, or natively on this Mac ------------------------
 
     def link_switch(self, title) -> int | None:
         """The library entry for a Switch game that has run on this machine, with AchTrack's own
@@ -321,6 +321,14 @@ class Engine:
             appid = self.link_switch(title)
             if appid is None:
                 continue
+            if isinstance(title, switch.NativeTitle):
+                for what, path in (("reports", str(title.reports_file())), ("save", str(title.save_file()))):
+                    if path not in self.sources and os.path.exists(path):
+                        log.info("watching %s's %s: %s", title.name, what, path)
+                        self.sources[path] = {"path": path, "appid": appid, "emulator": switch.NATIVE_EMULATOR,
+                                              "mtime": 0.0, "size": -1}
+                        self._process(path)
+                continue
             logs = switch.log_files()
             for path in logs:
                 if path not in self.sources:
@@ -335,12 +343,21 @@ class Engine:
                     switch.forget(path)
 
     def switch_running(self) -> dict:
-        """{appid: None} for the Switch games open in Ryubing right now."""
+        """{appid: None} for the Switch games open right now, in Ryubing or as their own app."""
         found: dict = {}
+        for title in switch.TITLES:
+            program = title.program() if isinstance(title, switch.NativeTitle) else None
+            appid = self.port_game(title)
+            if program and appid is not None:
+                for pid in self.monitor.pids_of(program):
+                    found[appid] = None
+                    self.monitor.seen.setdefault(appid, []).append((pid, "", title.name, "its app is running"))
         files = self.monitor.files_open_in(switch.PROCESSES)
         if not files:
             return found
         for title in switch.TITLES:
+            if isinstance(title, switch.NativeTitle):
+                continue
             appid, folder = self.port_game(title), title.save_folder()
             if appid is None or folder is None:
                 continue

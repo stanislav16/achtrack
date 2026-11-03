@@ -592,6 +592,10 @@ class ProcessMonitor:
         return {key[0]: reader(key[0]) for key, proc in self.cache.items()
                 if not proc.ignore and _basename(proc.exe).lower() in programs}
 
+    def pids_of(self, program: str) -> list:
+        """The running copies of the program at this path."""
+        return [key[0] for key, proc in self.cache.items() if not proc.ignore and proc.exe == program]
+
     def ignore_matching(self, appid: int) -> int:
         """Stop counting the processes that currently make `appid` look like it's running."""
         pids = {pid for pid, _state, _what, _why in self.seen.get(appid, [])}

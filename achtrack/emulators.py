@@ -194,6 +194,13 @@ def parse_ini(path: Path) -> dict:
 
 
 def parse_file(path: Path) -> dict:
+    if path.suffix.lower() == ".jsonl":                # a Switch game running natively (switch.py)
+        from . import switch
+        return switch.parse_reports(path)
+    if path.suffix.lower() == ".sav":
+        from . import switch
+        if switch.is_native_save(str(path)):           # its save, for what the reports don't say (switch.py)
+            return switch.parse_save(path)
     if path.suffix.lower() == ".log":                  # a native port's output (ports.py) or Ryubing's (switch.py)
         from . import switch
         if switch.is_log(str(path)):

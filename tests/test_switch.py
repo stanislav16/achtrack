@@ -29,6 +29,211 @@ LOADED = "00:00:00.562 |I| Loader Start: Application Loaded: Mario Kart 8 Deluxe
 MII = "00:00:00.376 |I| Loader Start: Application Loaded: Firmware Application miiEdit v1.0.0 [0100000000001009] [64-bit]\n"
 
 
+def packed(fields: dict) -> str:
+    """A report's fields as the game writes them: MessagePack, in hex."""
+    def pack(value) -> bytes:
+        if isinstance(value, bool):
+            return b"\xc3" if value else b"\xc2"
+        if isinstance(value, int):
+            return b"\xce" + value.to_bytes(4, "big")
+        if isinstance(value, str):
+            return bytes([0xd9, len(value)]) + value.encode()
+        if isinstance(value, list):
+            return bytes([0x90 | len(value)]) + b"".join(pack(v) for v in value)
+        return bytes([0x80 | len(value)]) + b"".join(pack(k) + pack(v) for k, v in value.items())
+    return pack(fields).hex()
+
+
+class World(unittest.TestCase):
+    def setUp(self):
+        self.home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.home, True)
+        patcher = mock.patch.object(Path, "home", return_value=self.home)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        folders = mock.patch.object(switch, "app_folders", return_value=(self.home / "Applications",))
+        folders.start()
+        self.addCleanup(folders.stop)
+        self.title = switch.MARIO_KART_WORLD
+        self.title.data_folder().mkdir(parents=True)
+
+    def write(self, *reports) -> Path:
+        path = self.title.reports_file()
+        lines = [json.dumps({"time": when, "event": event, "data": packed(fields)}) for when, event, fields in reports]
+        path.write_text("\n".join(lines) + "\n")
+        return path
+
+    def race(self, when=100, rank=2, course="Race_FirstCircuit_A_00", driver=1, vehicle=1, coins=16, retired=False):
+        return (when, "game_repo_race_finalize", {"CourseName": course, "Rank": rank, "CoinNum": coins, "DriverId": driver,
+                                                  "VehicleId": vehicle, "IsRetire": retired})
+
+    def install_app(self) -> Path:
+        app = self.home / "Applications" / "Mario Kart World.app"
+        app.mkdir(parents=True)
+        return app
+
+    def test_rank_counts_from_zero(self):
+        states = emulators.parse_file(self.write(self.race(rank=1)))
+        self.assertTrue(states["race_1"].unlocked)
+        self.assertFalse(states["win_1"].unlocked)
+        self.assertTrue(emulators.parse_file(self.write(self.race(rank=0)))["win_1"].unlocked)
+
+    def test_a_goal_is_dated_by_the_report_that_earned_it(self):
+        states = emulators.parse_file(self.write(self.race(when=100, rank=3), self.race(when=200, rank=0), self.race(when=300, rank=0)))
+        self.assertEqual(states["race_1"].unlocked_at, 100)
+        self.assertEqual(states["win_1"].unlocked_at, 200)
+
+    def test_a_race_you_quit_earns_nothing(self):
+        states = emulators.parse_file(self.write(self.race(rank=0, retired=True)))
+        self.assertFalse(states["race_1"].unlocked)
+
+    def test_progress_adds_up_across_reports(self):
+        states = emulators.parse_file(self.write(self.race(coins=16, driver=1), self.race(coins=4, driver=2), self.race(coins=1, driver=2)))
+        self.assertEqual((states["coin_1000"].cur, states["coin_1000"].max), (21.0, 1000.0))
+        self.assertEqual(states["driver_5"].cur, 2.0)
+
+    def test_a_course_counts_once_however_it_is_run(self):
+        states = emulators.parse_file(self.write(self.race(course="Race_PeachBeach_A_00"), self.race(course="Race_PeachBeach_B_00"),
+                                                 self.race(course="LongRally_Central_00")))
+        self.assertEqual(states["course_5"].cur, 1.0)
+
+    def test_a_connected_race_counts_for_the_course_it_ends_on(self):
+        states = emulators.parse_file(self.write(self.race(course="InterStageEx1_FirstCircuitToWestCity_B_00"),
+                                                 self.race(course="InterStageEx2_WestCityToCoaster_A_00"),
+                                                 self.race(course="Race_WestCity_A_00")))
+        self.assertEqual(states["course_5"].cur, 2.0)
+
+    def test_a_cup_counts_first_place_from_one(self):
+        cup = lambda rank, points, cup_id=7: (200, "game_repo_grandprix_finalize", {"CupId": cup_id, "Class": 0, "MaxPoint": points, "MaxRank": rank})
+        states = emulators.parse_file(self.write(cup(1, 57), cup(1, 57), cup(1, 60, 8), cup(2, 40, 9)))
+        self.assertEqual(states["cup_25"].cur, 4.0)
+        self.assertEqual(states["gold_8"].cur, 2.0)
+        self.assertTrue(states["gold_1"].unlocked)
+        self.assertTrue(states["perfect"].unlocked)
+        self.assertFalse(emulators.parse_file(self.write(cup(2, 57)))["gold_1"].unlocked)
+
+    def test_last_to_first_needs_the_win_and_the_start_from_24th(self):
+        from_last = (101, "game_repo_rank_change_in_race", {"RankChangeInfos": [{"BeforeRank": 24, "AfterRank": 23}]})
+        self.assertTrue(emulators.parse_file(self.write(self.race(rank=0), from_last))["comeback"].unlocked)
+        self.assertFalse(emulators.parse_file(self.write(self.race(rank=4), from_last))["comeback"].unlocked)
+
+    def test_a_half_written_line_and_other_reports_are_skipped(self):
+        path = self.write((50, "erepo_region", {"Region": 1}), self.race())
+        with open(path, "a") as f:
+            f.write('{"time":300,"event":"game_repo_race_fin')
+        self.assertTrue(emulators.parse_file(path)["race_1"].unlocked)
+        self.assertEqual(emulators.parse_file(path)["race_25"].cur, 1.0)
+
+    def engine(self):
+        return E.Engine(Config(), Database(self.home / "t.db"))
+
+    def test_it_joins_the_library_once_its_app_is_installed(self):
+        engine = self.engine()
+        with mock.patch.object(switch, "TITLES", (self.title,)):
+            engine.discover_switch()
+            self.assertEqual(engine.db.games(include_hidden=True), [])
+            self.install_app()
+            engine.discover_switch()
+        games = engine.db.games(include_hidden=True)
+        self.assertEqual([g["name"] for g in games], ["Mario Kart World"])
+        self.assertEqual(games[0]["platform"], switch.PLATFORM)
+        self.assertEqual(len(engine.db.achievement_names(games[0]["appid"])), len(switch.MARIO_KART_WORLD_GOALS))
+
+    def test_its_reports_unlock_goals_in_the_library(self):
+        self.install_app()
+        self.write(self.race(rank=0))
+        engine = self.engine()
+        with mock.patch.object(switch, "TITLES", (self.title,)):
+            engine.discover_switch()
+        appid = engine.db.games(include_hidden=True)[0]["appid"]
+        self.assertIn("win_1", engine.db.unlocked_names(appid))
+
+    def write_save(self, medallions=(), panels=(), missions=()) -> Path:
+        """A Mario Kart World save holding just the lists AchTrack reads. missions: (name hash, times cleared)."""
+        lists = [(switch._UINT_ARRAY, switch._MISSION_IDS, "I", [m for m, _ in missions]),
+                 (switch._UINT_ARRAY, switch._MISSION_CLEARS, "I", [n for _, n in missions]),
+                 (switch._UINT64_ARRAY, switch._MEDALLION_IDS, "Q", list(medallions)),
+                 (switch._UINT64_ARRAY, switch._PANEL_IDS, "Q", list(panels))]
+        table_end = 0x28 + 8 * (len(lists) + 2)
+        pairs, blobs, at, kind = [], b"", table_end, None
+        for list_kind, name, fmt, values in lists:
+            if list_kind != kind:
+                pairs.append((0, list_kind))
+                kind = list_kind
+            values = values + [0] * (10 - len(values))      # the game's lists are fixed-size, padded with zeros
+            blob = struct.pack("<I%d%s" % (len(values), fmt), len(values), *values)
+            pairs.append((name, at))
+            blobs += blob
+            at += len(blob)
+        data = b"\x04\x03\x02\x01" + struct.pack("<II", 1, table_end) + bytes(0x28 - 12)
+        data += b"".join(struct.pack("<II", *p) for p in pairs) + blobs
+        path = self.title.save_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return path
+
+    def test_the_save_counts_collectables_and_only_cleared_missions(self):
+        path = self.write_save(medallions=(11, 12, 12), panels=(21,), missions=((31, 1), (32, 0), (33, 2)))
+        tally = switch.read_world_save(path)
+        self.assertEqual((tally.medallions, tally.panels, tally.p_switches), (2, 1, 2))
+        states = emulators.parse_file(path)
+        self.assertTrue(states["medal_1"].unlocked)
+        self.assertEqual((states["medal_25"].cur, states["medal_25"].max), (2.0, 25.0))
+        self.assertTrue(states["panel_1"].unlocked)
+        self.assertTrue(states["clear_1"].unlocked)
+        self.assertNotIn("race_1", states)                 # the reports' goals are the reports' to say
+
+    def test_the_reports_leave_the_save_goals_alone(self):
+        states = emulators.parse_file(self.write(self.race()))
+        self.assertNotIn("medal_1", states)
+
+    def test_a_file_that_is_not_a_save_is_refused(self):
+        path = self.title.save_file()
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"not a save")
+        with self.assertRaises(ValueError):
+            emulators.parse_file(path)
+
+    def test_its_save_unlocks_collectables_in_the_library(self):
+        self.install_app()
+        self.write(self.race(rank=0))
+        self.write_save(medallions=(1,), missions=((5, 1),))
+        engine = self.engine()
+        with mock.patch.object(switch, "TITLES", (self.title,)):
+            engine.discover_switch()
+        appid = engine.db.games(include_hidden=True)[0]["appid"]
+        self.assertTrue({"win_1", "medal_1", "clear_1"} <= engine.db.unlocked_names(appid))
+        self.assertNotIn("panel_1", engine.db.unlocked_names(appid))
+
+    def test_play_opens_the_app_past_its_settings_window(self):
+        app = self.install_app()
+        engine = self.engine()
+        with mock.patch.object(switch, "TITLES", (self.title,)):
+            appid = engine.link_switch(self.title)
+            found = launcher.best(engine.db, appid)
+            self.assertEqual(found.stored(), f"native:{app}")
+            self.assertEqual(launcher.describe(found), "natively")
+            with mock.patch.object(launcher.subprocess, "Popen") as popen:
+                launcher.start(found, appid)
+        self.assertEqual(popen.call_args[0][0], ["open", str(app), "--args", "--no-launcher"])
+
+    def test_play_says_so_when_the_app_is_gone(self):
+        with self.assertRaises(OSError):
+            launcher.start(launcher.Launch("native", str(self.home / "gone.app"), "Native app"), 1)
+
+    def test_it_is_playing_only_while_the_game_itself_runs(self):
+        app = self.install_app()
+        engine = self.engine()
+        host = str(app / "Contents" / "MacOS" / "dmhost")
+        launcher_program = str(app / "Contents" / "MacOS" / "nxnative")
+        with mock.patch.object(switch, "TITLES", (self.title,)):
+            appid = engine.link_switch(self.title)
+            engine.monitor.cache = {("1", 0): mock.Mock(ignore=False, exe=launcher_program)}
+            self.assertEqual(engine.switch_running(), {})
+            engine.monitor.cache[("2", 0)] = mock.Mock(ignore=False, exe=host)
+            self.assertEqual(engine.switch_running(), {appid: None})
+
+
 class Sandbox(unittest.TestCase):
     def setUp(self):
         self.home = Path(tempfile.mkdtemp())
@@ -36,6 +241,9 @@ class Sandbox(unittest.TestCase):
         self.logs = self.home / "Logs"
         self.logs.mkdir()
         self.data = self.home / "Ryujinx"
+        titles = mock.patch.object(switch, "TITLES", (TITLE,))
+        titles.start()
+        self.addCleanup(titles.stop)
         for target, value in (("data_dir", lambda: self.data), ("logs_dirs", lambda: (self.logs,))):
             patcher = mock.patch.object(switch, target, value)
             patcher.start()

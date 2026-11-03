@@ -12,7 +12,7 @@ from PySide6.QtCore import QDateTime, QEvent, QObject, QProcess, QRectF, QSize, 
 from PySide6.QtGui import (QAction, QActionGroup, QBrush, QColor, QDesktopServices, QFont, QGuiApplication, QIcon,
                            QImage, QKeySequence, QLinearGradient, QPainter, QPainterPath, QPalette, QPen, QPixmap)
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QDateTimeEdit, QDialog,
-                               QGraphicsBlurEffect, QGraphicsOpacityEffect, QGraphicsPixmapItem, QGraphicsScene,
+                               QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsScene,
                                QGridLayout,
                                QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout,
                                QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
@@ -494,7 +494,7 @@ class AchievementRow(QFrame):
             source = a.get("source")
             tag = {STEAM: "  ·  Steam", PSN: "  ·  PlayStation", MANUAL: "  ·  Added by you",
                    SAVE: "  ·  Found in your save", SCREEN: "  ·  Seen on screen",
-                   "port": "  ·  PC port", "ryubing": "  ·  Ryubing"}.get(source, "")
+                   "port": "  ·  PC port", "ryubing": "  ·  Ryubing", "nxnative": "  ·  Native"}.get(source, "")
             date = QLabel(fmt_unlock(a["unlocked_at"]) + tag)
             date.setObjectName("AchDate")
             right.addWidget(date, 0, Qt.AlignmentFlag.AlignRight)
@@ -965,6 +965,19 @@ class DetailView(QWidget):
 
 # home page ---------------------------------------------------------------
 
+def clear_layout(layout) -> None:
+    """Empties a layout, along with the widgets in layouts nested inside it: taking those layouts out
+    alone would leave their widgets on screen, under whatever is built next."""
+    while layout.count():
+        item = layout.takeAt(0)
+        if item.widget():
+            item.widget().hide()
+            item.widget().deleteLater()
+        elif item.layout():
+            clear_layout(item.layout())
+            item.layout().deleteLater()
+
+
 class Pressable(QFrame):
     """Shows a press the moment it lands and acts on release, so dragging off cancels it."""
 
@@ -1042,12 +1055,14 @@ class GameCard(Pressable):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(2)
-        art = QLabel()
-        art.setFixedSize(self.WIDTH, self.HEIGHT)
+        self.art = QLabel()
+        self.art.setFixedSize(self.WIDTH, self.HEIGHT)
         picture = QPixmap(cached_icon(game["appid"], game["art"]) or "")
-        art.setPixmap(fit(picture, self.WIDTH, self.HEIGHT, 12) if not picture.isNull()
-                      else fit(letter_pixmap(game["name"], self.WIDTH), self.WIDTH, self.HEIGHT, 12))
-        lay.addWidget(art)
+        self._picture = fit(picture, self.WIDTH, self.HEIGHT, 12) if not picture.isNull() \
+            else fit(letter_pixmap(game["name"], self.WIDTH), self.WIDTH, self.HEIGHT, 12)
+        self._dimmed = None
+        self.art.setPixmap(self._picture)
+        lay.addWidget(self.art)
         lay.addSpacing(5)
         name = Elided(game["name"])
         name.setObjectName("HomeRowTitle")
@@ -1055,13 +1070,19 @@ class GameCard(Pressable):
         sub = Elided("Playing now" if running else fmt_day(game["last"]))
         sub.setObjectName("Running" if running else "AchDesc")
         lay.addWidget(sub)
-        self._dim = QGraphicsOpacityEffect(self)
-        self._dim.setOpacity(0.7)
-        self._dim.setEnabled(False)
-        self.setGraphicsEffect(self._dim)
 
     def show_pressed(self, pressed: bool) -> None:
-        self._dim.setEnabled(pressed)       # artwork fills the card, so a background wouldn't show
+        # Artwork fills the card, so a background wouldn't show. A QGraphicsOpacityEffect here crashed
+        # inside PySide while the home page rebuilt its cards as a game started.
+        if pressed and self._dimmed is None:
+            self._dimmed = QPixmap(self._picture.size())
+            self._dimmed.setDevicePixelRatio(self._picture.devicePixelRatio())
+            self._dimmed.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(self._dimmed)
+            painter.setOpacity(0.7)
+            painter.drawPixmap(0, 0, self._picture)
+            painter.end()
+        self.art.setPixmap(self._dimmed if pressed else self._picture)
 
 
 class HomeView(QScrollArea):
@@ -1124,10 +1145,7 @@ class HomeView(QScrollArea):
                 self.win.worker.request("icons", t["appid"])
         self._sig = sig
         scroll = self.verticalScrollBar().value()
-        while self.root.count():
-            item = self.root.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        clear_layout(self.root)
         self.cards, self.groups, self.columns = [], [], None
 
         title = QLabel("Home")
@@ -3160,7 +3178,7 @@ class MainWindow(QMainWindow):
         options = []
         if appid > 0:
             options.append(launcher.Launch("steam", str(appid), "Steam"))
-        for found in (launcher.ryubing(self.db, appid), launcher.heroic_entry(names),
+        for found in (launcher.ryubing(self.db, appid), launcher.native(self.db, appid), launcher.heroic_entry(names),
                       launcher.crossover_app(exes, names), launcher.program(game)):
             if found:
                 options.append(found)
@@ -3168,7 +3186,7 @@ class MainWindow(QMainWindow):
             options.append(current)
         for option in options:
             label = {"steam": "Start through Steam", "heroic": "Start through Heroic",
-                     "ryubing": "Start through Ryubing",
+                     "ryubing": "Start through Ryubing", "native": "Start natively",
                      "app": f"Start through CrossOver ({os.path.basename(option.value)})"}.get(
                 option.kind, f"Start {option.label}")
             action = menu.addAction(label, lambda o=option: self.set_launch(appid, o))

@@ -7,6 +7,7 @@ per-game settings. The Play button hands the game to whichever of them it belong
     heroic://launch?appName=…         a game installed or added in Heroic
     a CrossOver launcher app          a Windows program installed in a CrossOver bottle
     Ryubing                           a Switch game, by the file in Ryubing's game folders
+    the game's own app                a Switch game built to run natively on this Mac
     the program itself                a Windows .exe on Windows, a script, anything you pick
 
 A program AchTrack starts directly carries ACHTRACK_APPID in its environment, so it is counted
@@ -36,7 +37,7 @@ CROSSOVER_APPS = Path.home() / "Applications" / "CrossOver"
 
 @dataclass
 class Launch:
-    kind: str           # steam | heroic | app | ryubing | program
+    kind: str           # steam | heroic | app | ryubing | native | program
     value: str          # the appid, the Heroic "runner/appName", the .app path, the Switch game file or the program path
     label: str          # how the menu describes it
 
@@ -52,7 +53,8 @@ def from_stored(text: str) -> Launch | None:
     kind, sep, value = (text or "").partition(":")
     if not sep or not value:
         return None
-    labels = {"steam": "Steam", "heroic": "Heroic", "app": "CrossOver", "ryubing": "Ryubing", "program": os.path.basename(value)}
+    labels = {"steam": "Steam", "heroic": "Heroic", "app": "CrossOver", "ryubing": "Ryubing", "native": "Native app",
+              "program": os.path.basename(value)}
     return Launch(kind, value, labels.get(kind, value))
 
 
@@ -111,8 +113,15 @@ def program(game) -> Launch | None:
 def ryubing(db, appid: int) -> Launch | None:
     """A Switch game, if Ryubing's game folders have its file."""
     title = switch.title_of(db, appid)
-    path = title.game_file() if title else ""
+    path = title.game_file() if title and not isinstance(title, switch.NativeTitle) else ""
     return Launch("ryubing", path, "Ryubing") if path else None
+
+
+def native(db, appid: int) -> Launch | None:
+    """A Switch game's own Mac app, if it is installed."""
+    title = switch.title_of(db, appid)
+    path = title.game_file() if isinstance(title, switch.NativeTitle) else ""
+    return Launch("native", path, "Native app") if path else None
 
 
 def best(db, appid: int) -> Launch | None:
@@ -123,7 +132,7 @@ def best(db, appid: int) -> Launch | None:
     chosen = from_stored(game["launch"] or "") if "launch" in game.keys() else None
     if chosen:
         return chosen
-    found = ryubing(db, appid)
+    found = ryubing(db, appid) or native(db, appid)
     if found:
         return found
     names = [game["name"] or ""]
@@ -161,6 +170,12 @@ def start(launch: Launch, appid: int) -> None:
         emulator = switch.app()
         command = ["open", "-n", "-a", str(emulator), "--args", launch.value] if emulator else ["Ryujinx", launch.value]
         subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    elif launch.kind == "native":
+        if not os.path.exists(launch.value):
+            raise OSError(f"{launch.value} isn't there any more")
+        # Its own settings window would make you press Play twice.
+        subprocess.Popen(["open", launch.value, "--args", "--no-launcher"], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
     elif launch.kind == "program":
         path = launch.value
         if not os.path.exists(path):
@@ -181,5 +196,5 @@ def describe(launch: Launch | None) -> str:
     if launch is None:
         return "not set"
     return {"steam": "through Steam", "heroic": "through Heroic", "app": "through CrossOver",
-            "ryubing": "through Ryubing"}.get(
+            "ryubing": "through Ryubing", "native": "natively"}.get(
         launch.kind, shlex.quote(launch.value) if launch.kind == "program" else launch.label)

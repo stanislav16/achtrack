@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -173,7 +174,8 @@ class Toast(QWidget):
         self._x.value, self._y.value = start.x(), start.y()
         self.move(start)
         self.show()
-        self.raise_()
+        if sys.platform != "darwin":    # on a Mac this activates all of AchTrack, pulling you out of the game; the popup stays on top anyway
+            self.raise_()
         self._head_for(end)
         self._shown.go(1.0)
         self._timer.start(int(self.seconds * 1000))

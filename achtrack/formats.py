@@ -297,6 +297,11 @@ def _bson_doc(data: bytes, pos: int, as_list: bool = False):
 
 # --- MessagePack --------------------------------------------------------------------------------------
 
+def msgpack_value(data: bytes):
+    """One MessagePack value, whatever it is. parse_msgpack also judges whether it looks like a save."""
+    return _mp(data, 0, 0)[0]
+
+
 def parse_msgpack(data: bytes):
     value, pos = _mp(data, 0, 0)
     if pos < len(data) * 0.98 or not isinstance(value, (dict, list)):

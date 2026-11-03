@@ -150,6 +150,32 @@ trophies, Staff Ghosts, coins, parts and more, with progress where a number is w
 
 This works on macOS and Linux. On Windows the achievements are read but Playing now isn't detected.
 
+## Mario Kart World, running natively
+
+Mario Kart World is a Switch 2 game, so Ryubing can't run it. It can run as its own Mac app, built with
+[kartnative](https://github.com/pahorema/kartnative) from a dump of your copy, and AchTrack treats that
+app like any other game. It needs an app built with the one change described below.
+
+- **Nothing to set up.** Once `Mario Kart World.app` is in `/Applications` or `~/Applications`, the game
+  joins your library, even before you've played it.
+- **Achievements are AchTrack's own**: 44 goals covering races finished and won, Grand Prix cups, overtakes,
+  courses, characters, vehicles, coins, Time Trials, Free Roam, P-Switch missions cleared, ? Panels hit and
+  Peach Medallions collected.
+- **They come from the game's play reports.** The game writes one when a race or a mode ends. Stock
+  kartnative throws them away, so `PlayReport::Save` in `dm/host/hle_offline.c` has to write each one
+  to `playreports.jsonl`, beside the save in `~/Library/Application Support/nxnative/<title id>/`.
+  A goal unlocks soon after the race that earned it, dated by that race. Keep the file: it is the only
+  record of the running totals.
+- **Collectables come from the save.** The reports don't mention them, so P-Switch clears, ? Panels and
+  medallions are read from `save/Play/account.sav` in the same folder, the numbers the game's Free Roam
+  map shows. Two-player Free Roam writes to the same save.
+- **Play** opens the app directly, skipping its own settings window. To change those settings, open
+  the app from Finder.
+- **Playing now and play time** follow the game's own program inside the app.
+- **Back up saves** and **Restore saves…** work as for any other game. Close the game first.
+
+This works on Apple silicon Macs only.
+
 ## Hidden achievements
 
 Steam blanks out a hidden achievement's description and never reveals it - not through the Web API,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import logging
 import os
 import logging.handlers
@@ -19,6 +20,8 @@ def setup_logging(verbose: bool) -> None:
         handlers.append(logging.StreamHandler())
     logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO, handlers=handlers,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    # A crash inside Qt never reaches the log above. This writes which Python line it came from.
+    faulthandler.enable(open(DATA_DIR / "crash.log", "a"))
 
 
 def cmd_scan() -> int:
@@ -62,6 +65,10 @@ def cmd_scan() -> int:
         if saves is None:
             continue
         linked = (db.get_meta("ports") or {}).get(title.key)
+        if isinstance(title, switch.NativeTitle):
+            print(f"{title.name} (native): " + (f"library entry {linked}" if linked is not None else "not in the library yet"))
+            print(f"  save: {saves}\n  app: {title.game_file() or 'not installed'}\n  reports: {title.reports_file()}")
+            continue
         print(f"{title.name} (Ryubing): " + (f"library entry {linked}" if linked is not None else "not in the library yet"))
         print(f"  save: {saves}\n  game file: {title.game_file() or 'not in Ryubing game folders'}")
         for path in switch.log_files()[-3:]:

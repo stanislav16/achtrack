@@ -3,7 +3,8 @@ import time
 import unittest
 from pathlib import Path
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QEvent
+from PySide6.QtWidgets import QApplication, QWidget
 
 from achtrack import overview
 from achtrack.config import Config
@@ -67,6 +68,24 @@ class Navigation(unittest.TestCase):
 
     def tearDown(self):
         self.win.hide()
+
+    def test_rebuilding_home_leaves_no_old_cards_behind(self):
+        for running in ({10}, set(), {10}):
+            self.win.running = running
+            self.win.home.refresh()
+        app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        app.processEvents()
+        found = [c for c in self.win.home.findChildren(QWidget) if type(c).__name__ == "GameCard"]
+        self.assertEqual(len(found), len(self.win.home.cards))
+
+    def test_a_pressed_card_dims_its_artwork_and_comes_back(self):
+        card = self.win.home.cards[0]
+        normal = card.art.pixmap().toImage()
+        card.show_pressed(True)
+        self.assertNotEqual(card.art.pixmap().toImage(), normal)
+        card.show_pressed(False)
+        self.assertEqual(card.art.pixmap().toImage(), normal)
+        self.assertIsNone(card.graphicsEffect())
 
     def test_opens_on_home(self):
         self.assertIs(self.win.stack.currentWidget(), self.win.home)

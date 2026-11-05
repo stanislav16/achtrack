@@ -113,9 +113,10 @@ def _float_over_fullscreen(widget: QWidget) -> None:
     if sys.platform != "darwin":
         return
     try:
-        from ctypes import c_void_p, cdll
+        from ctypes import c_char_p, c_void_p, cdll
         objc = cdll.LoadLibrary("/usr/lib/libobjc.dylib")
         objc.sel_registerName.restype = c_void_p
+        objc.objc_getClass.restype = c_void_p
         objc.objc_msgSend.restype = c_void_p
         objc.objc_msgSend.argtypes = [c_void_p, c_void_p, c_void_p]
 
@@ -125,12 +126,99 @@ def _float_over_fullscreen(widget: QWidget) -> None:
         window = send(int(widget.winId()), "window")      # winId is the NSView
         if not window:
             return
+        objc.object_getClassName.restype = c_char_p
+        objc.object_getClassName.argtypes = [c_void_p]
+        log.debug("popup window class %s", objc.object_getClassName(c_void_p(window)))
+        if send(window, "isKindOfClass:", c_void_p(objc.objc_getClass(b"NSPanel"))):
+            # a panel that doesn't activate its app is the one kind of window macOS lets into another app's
+            # fullscreen Space
+            style = send(window, "styleMask") or 0
+            send(window, "setStyleMask:", c_void_p(style | (1 << 7)))      # NSWindowStyleMaskNonactivatingPanel
+            send(window, "setFloatingPanel:", c_void_p(1))
+            send(window, "setBecomesKeyOnlyIfNeeded:", c_void_p(1))
         can_join_all_spaces, stationary, ignores_cycle, full_screen_auxiliary = 1 << 0, 1 << 4, 1 << 6, 1 << 8
         send(window, "setCollectionBehavior:", c_void_p(can_join_all_spaces | stationary | ignores_cycle | full_screen_auxiliary))
         send(window, "setLevel:", c_void_p(25))           # NSStatusWindowLevel
         send(window, "setHidesOnDeactivate:", c_void_p(0))
     except Exception as e:      # the popup still shows on ordinary desktops without this
         log.debug("couldn't float the popup over fullscreen apps: %s", e)
+
+
+def _front_window_center() -> QPoint | None:
+    """On a Mac, the middle of the frontmost app's biggest window: the screen you're looking at. A game hides the
+    pointer and leaves it wherever it was, often on another display, so the pointer alone can't say."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        from ctypes import POINTER, Structure, byref, c_bool, c_char_p, c_double, c_int, c_long, c_uint32, c_void_p, cdll
+
+        class CGRect(Structure):
+            _fields_ = [("x", c_double), ("y", c_double), ("w", c_double), ("h", c_double)]
+
+        objc = cdll.LoadLibrary("/usr/lib/libobjc.dylib")
+        cf = cdll.LoadLibrary("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+        cg = cdll.LoadLibrary("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+        cdll.LoadLibrary("/System/Library/Frameworks/AppKit.framework/AppKit")
+        objc.objc_getClass.restype = c_void_p
+        objc.sel_registerName.restype = c_void_p
+        objc.objc_msgSend.restype = c_void_p
+        objc.objc_msgSend.argtypes = [c_void_p, c_void_p]
+
+        def send(target, selector):
+            return objc.objc_msgSend(c_void_p(target), c_void_p(objc.sel_registerName(selector.encode())))
+
+        front_app = send(send(objc.objc_getClass(b"NSWorkspace"), "sharedWorkspace"), "frontmostApplication")
+        if not front_app:
+            return None
+        objc.objc_msgSend.restype = c_int
+        pid = objc.objc_msgSend(c_void_p(front_app), c_void_p(objc.sel_registerName(b"processIdentifier")))
+        objc.objc_msgSend.restype = c_void_p
+
+        cf.CFStringCreateWithCString.restype = c_void_p
+        cf.CFStringCreateWithCString.argtypes = [c_void_p, c_char_p, c_uint32]
+        cf.CFArrayGetCount.restype = c_long
+        cf.CFArrayGetCount.argtypes = [c_void_p]
+        cf.CFArrayGetValueAtIndex.restype = c_void_p
+        cf.CFArrayGetValueAtIndex.argtypes = [c_void_p, c_long]
+        cf.CFDictionaryGetValue.restype = c_void_p
+        cf.CFDictionaryGetValue.argtypes = [c_void_p, c_void_p]
+        cf.CFNumberGetValue.restype = c_bool
+        cf.CFNumberGetValue.argtypes = [c_void_p, c_int, c_void_p]
+        cf.CFRelease.argtypes = [c_void_p]
+        cg.CGWindowListCopyWindowInfo.restype = c_void_p
+        cg.CGWindowListCopyWindowInfo.argtypes = [c_uint32, c_uint32]
+        cg.CGRectMakeWithDictionaryRepresentation.restype = c_bool
+        cg.CGRectMakeWithDictionaryRepresentation.argtypes = [c_void_p, POINTER(CGRect)]
+
+        def key(name):
+            return c_void_p(cf.CFStringCreateWithCString(None, name, 0x08000100))   # UTF-8
+
+        k_pid, k_layer, k_bounds = key(b"kCGWindowOwnerPID"), key(b"kCGWindowLayer"), key(b"kCGWindowBounds")
+
+        def number(d, k):
+            v = c_int(0)
+            ref = cf.CFDictionaryGetValue(c_void_p(d), k)
+            return v.value if ref and cf.CFNumberGetValue(c_void_p(ref), 3, byref(v)) else None   # kCFNumberSInt32Type
+
+        windows = cg.CGWindowListCopyWindowInfo(1 | 16, 0)     # on screen only, no desktop elements
+        best, best_area = None, 0.0
+        try:
+            for i in range(cf.CFArrayGetCount(c_void_p(windows))):
+                d = cf.CFArrayGetValueAtIndex(c_void_p(windows), i)
+                if number(d, k_pid) != pid or number(d, k_layer) != 0:
+                    continue
+                rect = CGRect()
+                ref = cf.CFDictionaryGetValue(c_void_p(d), k_bounds)
+                if ref and cg.CGRectMakeWithDictionaryRepresentation(c_void_p(ref), byref(rect)) and rect.w * rect.h > best_area:
+                    best_area, best = rect.w * rect.h, QPoint(int(rect.x + rect.w / 2), int(rect.y + rect.h / 2))
+        finally:
+            cf.CFRelease(c_void_p(windows))
+            for k in (k_pid, k_layer, k_bounds):
+                cf.CFRelease(k)
+        return best
+    except Exception as e:
+        log.debug("couldn't find the frontmost window: %s", e)
+        return None
 
 
 class Toast(QWidget):
@@ -204,8 +292,9 @@ class Toast(QWidget):
         self._slot, self._away = end, start - end
         self._x.value, self._y.value = start.x(), start.y()
         self.move(start)
+        _float_over_fullscreen(self)    # before show: a window only joins the Space it is shown on
         self.show()
-        _float_over_fullscreen(self)
+        _float_over_fullscreen(self)    # and again, as showing can reset the level
         if sys.platform != "darwin":    # on a Mac this activates all of AchTrack, pulling you out of the game; the popup stays on top anyway
             self.raise_()
         self._head_for(end)
@@ -409,7 +498,9 @@ class ToastManager(QObject):
                 sound.play(data.sound, data.sound_file)
 
     def _slot(self, index: int) -> QPoint:
-        screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
+        front = _front_window_center()
+        screen = ((front and QGuiApplication.screenAt(front)) or QGuiApplication.screenAt(QCursor.pos())
+                  or QGuiApplication.primaryScreen())
         geo = screen.availableGeometry()
         corner = self.cfg.popup_corner
         step = CARD_H + SPACING

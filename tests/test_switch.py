@@ -1,3 +1,7 @@
+try:
+    from . import _isolated  # noqa: F401  (before AchTrack: throwaway folders)
+except ImportError:
+    import _isolated  # noqa: F401
 import json
 import os
 import shutil
@@ -205,6 +209,26 @@ class World(unittest.TestCase):
         self.assertTrue({"win_1", "medal_1", "clear_1"} <= engine.db.unlocked_names(appid))
         self.assertNotIn("panel_1", engine.db.unlocked_names(appid))
 
+    def test_every_goal_has_its_own_icon(self):
+        for title in switch.TITLES:
+            icons = [a["icon"] for a in title.schema()]
+            self.assertTrue(all(icons) and all(os.path.isfile(i) for i in icons), title.name)
+            self.assertEqual(len(set(icons)), len(icons))
+
+    def test_a_library_entry_without_icons_gets_them(self):
+        self.install_app()
+        engine = self.engine()
+        with mock.patch.object(switch, "TITLES", (self.title,)):
+            appid = engine.link_switch(self.title)
+            engine.db.set_schema(appid, [{**a, "icon": ""} for a in self.title.schema()], {})
+            engine.link_switch(self.title)
+        self.assertTrue(all(a["icon"] for a in engine.db.achievements(appid)))
+
+    def test_published_pages_leave_local_icons_out(self):
+        from achtrack import export
+        self.assertEqual(export.web_icon("/Users/me/achtrack/assets/switch/mkw/race_1.png"), "")
+        self.assertEqual(export.web_icon("https://cdn.example/x.jpg"), "https://cdn.example/x.jpg")
+
     def test_play_opens_the_app_past_its_settings_window(self):
         app = self.install_app()
         engine = self.engine()
@@ -232,6 +256,101 @@ class World(unittest.TestCase):
             self.assertEqual(engine.switch_running(), {})
             engine.monitor.cache[("2", 0)] = mock.Mock(ignore=False, exe=host)
             self.assertEqual(engine.switch_running(), {appid: None})
+
+
+class Bananza(unittest.TestCase):
+    """Donkey Kong Bananza: collectables from its save (one flag per object), layers from its stage_in reports."""
+
+    def setUp(self):
+        self.home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.home, True)
+        patcher = mock.patch.object(Path, "home", return_value=self.home)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        folders = mock.patch.object(switch, "app_folders", return_value=(self.home / "Applications",))
+        folders.start()
+        self.addCleanup(folders.stop)
+        self.title = switch.DONKEY_KONG_BANANZA
+        self.title.data_folder().mkdir(parents=True)
+        self.map = json.loads(switch._BANANZA_MAP.read_text())
+
+    write = World.write
+    engine = World.engine
+
+    def write_save(self, bananas=0, fossils=0, chests=0, skills=0, cleared=False, unset_bananas=0, emerald_rush=None) -> Path:
+        """A Bananza save with the first n bananas', fossils' and chests' flags set (and unset_bananas more present but
+        false), skills skill levels above 0 and IsClear."""
+        names = self.map["names"]
+        bools = [(h, 1) for h in self.map["bananas"][:bananas]] + [(h, 0) for h in self.map["bananas"][bananas:bananas + unset_bananas]]
+        bools += [(h, 1) for h in self.map["fossils"][:fossils]] + [(h, 1) for h in self.map["chests"][:chests]]
+        bools.append((names["IsClear"], int(cleared)))
+        table_end = 0x28 + 8 * (len(bools) + 3)
+        levels = [1] * skills + [0] * (switch.SKILLS - skills)
+        blob = struct.pack("<I%di" % len(levels), len(levels), *levels)
+        pairs = [(0, 0)] + bools + [(0, switch._INT_ARRAY), (names["SkillLevel"], table_end)]
+        data = b"\x04\x03\x02\x01" + struct.pack("<II", 1, table_end) + bytes(0x28 - 12)
+        data += b"".join(struct.pack("<II", *p) for p in pairs) + blob
+        path = self.title.save_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        if emerald_rush is not None:
+            dlc = b"\x04\x03\x02\x01" + struct.pack("<II", 1, 0x28 + 16) + bytes(0x28 - 12)
+            dlc += struct.pack("<IIII", 0, 0, names["IsClearEmerush"], int(emerald_rush))
+            path.with_name("emerush.sav").write_bytes(dlc)
+        return path
+
+    def stage(self, name, when=100):
+        return (when, "stage_in", {"StageName": name, "ScenarioNo": 1, "BananamondTotal": 0})
+
+    def test_the_map_holds_every_collectable(self):
+        self.assertEqual((len(self.map["bananas"]), len(self.map["fossils"]), len(self.map["chests"])),
+                         (switch.BANANAS, switch.FOSSILS, switch.CHESTS))
+
+    def test_only_collected_flags_count(self):
+        save = switch.read_bananza_save(self.write_save(bananas=3, unset_bananas=5, fossils=2, chests=1, skills=4))
+        self.assertEqual((save.bananas, save.fossils, save.chests, save.skills, save.cleared), (3, 2, 1, 4, 0))
+
+    def test_the_save_unlocks_its_goals(self):
+        states = emulators.parse_file(self.write_save(bananas=50, fossils=1, cleared=True))
+        self.assertTrue(states["dk_banana_50"].unlocked)
+        self.assertEqual((states["dk_banana_150"].cur, states["dk_banana_150"].max), (50.0, 150.0))
+        self.assertTrue(states["dk_fossil_1"].unlocked and states["dk_clear"].unlocked)
+        self.assertFalse(states["dk_chest_1"].unlocked)
+        self.assertNotIn("dk_layer_3", states)              # the reports' goals are the reports' to say
+
+    def test_every_banana_is_every_last_banana(self):
+        self.assertTrue(emulators.parse_file(self.write_save(bananas=switch.BANANAS))["dk_banana_all"].unlocked)
+
+    def test_emerald_rush_comes_from_its_own_save(self):
+        self.assertFalse(emulators.parse_file(self.write_save())["dk_emerald_rush"].unlocked)
+        self.assertTrue(emulators.parse_file(self.write_save(emerald_rush=True))["dk_emerald_rush"].unlocked)
+
+    def test_layers_count_once_and_only_main_stages(self):
+        states = emulators.parse_file(self.write(self.stage("GroundLevelStage"), self.stage("ArenaLevelStage", 200),
+                                                 self.stage("ArenaLevelStage", 300), self.stage("ForestTrialStage", 400),
+                                                 self.stage("WildLevelStage", 500)))
+        self.assertEqual(states["dk_layer_3"].cur, 2.0)
+        self.assertFalse(states["dk_core"].unlocked)
+
+    def test_the_core_and_the_island(self):
+        states = emulators.parse_file(self.write(self.stage("CoreLevelStage", 700), self.stage("IslandLevelStage", 800)))
+        self.assertEqual(states["dk_core"].unlocked_at, 700)
+        self.assertTrue(states["dk_island"].unlocked)
+
+    def test_its_files_are_told_apart_from_mario_kart_worlds(self):
+        self.assertIs(switch.native_title_of(self.title.reports_file()), self.title)
+        self.assertIs(switch.native_title_of(switch.MARIO_KART_WORLD.save_file()), switch.MARIO_KART_WORLD)
+
+    def test_its_save_unlocks_collectables_in_the_library(self):
+        (self.home / "Applications" / "Donkey Kong Bananza.app").mkdir(parents=True)
+        self.write(self.stage("ArenaLevelStage"))
+        self.write_save(bananas=1)
+        engine = self.engine()
+        with mock.patch.object(switch, "TITLES", (self.title,)):
+            engine.discover_switch()
+        appid = engine.db.games(include_hidden=True)[0]["appid"]
+        self.assertIn("dk_banana_1", engine.db.unlocked_names(appid))
+        self.assertNotIn("dk_fossil_1", engine.db.unlocked_names(appid))
 
 
 class Sandbox(unittest.TestCase):

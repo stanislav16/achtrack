@@ -39,7 +39,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import formats
-from .config import _xdg
+from .config import ASSET_DIR, _xdg
 from .emulators import AchState
 
 EMULATOR = "ryubing"
@@ -316,30 +316,47 @@ class _WorldSave:
         self.medallions, self.panels, self.p_switches = medallions, panels, p_switches
 
 
+class _GameData:
+    """A save in the GameData format of Nintendo's recent games (Mario Kart World, Donkey Kong Bananza): after a 0x28-byte
+    header, (name hash, value) pairs up to the offset at byte 8, in runs by type, each run opened by a pair with hash 0 and
+    the type number as its value. A scalar's value is the pair's own word; an array's is the file offset of a u32 count
+    followed by the elements."""
+
+    def __init__(self, path: Path):
+        self.data = Path(path).read_bytes()
+        if len(self.data) < 0x28 or self.data[:4] != b"\x04\x03\x02\x01":
+            raise ValueError("not a GameData save")
+        end = min(struct.unpack_from("<I", self.data, 8)[0], len(self.data))
+        self.found: dict = {}
+        kind = 0
+        for pos in range(0x28, end - 7, 8):
+            name, value = struct.unpack_from("<II", self.data, pos)
+            if name == 0:
+                kind = value
+            else:
+                self.found[name] = (kind, value)
+
+    def array(self, name: int, want: int, fmt: str = "I") -> list:
+        kind, at = self.found.get(name, (None, 0))
+        if kind != want or at + 4 > len(self.data):
+            raise ValueError(f"no list {name:#x} in the save")
+        count = struct.unpack_from("<I", self.data, at)[0]
+        layout = "<%d%s" % (count, fmt)
+        if at + 4 + struct.calcsize(layout) > len(self.data):
+            raise ValueError(f"list {name:#x} runs past the end of the save")
+        return list(struct.unpack_from(layout, self.data, at + 4))
+
+    def flags_set(self, names) -> int:
+        """How many of these Bool entries are true (ones the save doesn't hold count as false)."""
+        return sum(1 for name in names if self.found.get(name) == (0, 1))
+
+
 def read_world_save(path: Path) -> _WorldSave:
     """Counts the collectables in a Mario Kart World save. Raises ValueError if it isn't one."""
-    data = Path(path).read_bytes()
-    if len(data) < 0x28 or data[:4] != b"\x04\x03\x02\x01":
-        raise ValueError("not a GameData save")
-    end = min(struct.unpack_from("<I", data, 8)[0], len(data))
-    found: dict = {}
-    kind = 0
-    for pos in range(0x28, end - 7, 8):
-        name, value = struct.unpack_from("<II", data, pos)
-        if name == 0:
-            kind = value
-        else:
-            found[name] = (kind, value)
+    save = _GameData(path)
 
     def array(name: int, want: int) -> list:
-        kind, at = found.get(name, (None, 0))
-        if kind != want or at + 4 > len(data):
-            raise ValueError(f"no list {name:#x} in the save")
-        count = struct.unpack_from("<I", data, at)[0]
-        fmt = "<%dQ" % count if want == _UINT64_ARRAY else "<%dI" % count
-        if at + 4 + struct.calcsize(fmt) > len(data):
-            raise ValueError(f"list {name:#x} runs past the end of the save")
-        return list(struct.unpack_from(fmt, data, at + 4))
+        return save.array(name, want, "Q" if want == _UINT64_ARRAY else "I")
 
     clears = array(_MISSION_CLEARS, _UINT_ARRAY)
     missions = {m for m, n in zip(array(_MISSION_IDS, _UINT_ARRAY), clears) if m and n > 0}
@@ -407,6 +424,102 @@ MARIO_KART_WORLD_GOALS = (
 )
 
 
+# --- Donkey Kong Bananza ----------------------------------------------------------------------------------
+#
+# Its save is the same GameData format, with every entry named by the MurmurHash3 of its name. Collectables sit in
+# structures keyed by each object's id, and the flag that says one is collected has a hash of its own per object: a world
+# banana's IsBroken (the game's play report bananamond_broken fires with that banana's id), a fossil's or treasure chest's
+# IsGet. Those hashes come from the game's data list (GameDataList.Product.320) and are kept in save_map.json, which
+# DonkeyKongBananza-Native/tools/make_save_map.py writes. The totals are the game's own lists: 763 bananas lie in the
+# world (the official 777 also counts the 14 bought with banana chips, which the save keeps no flag for) and 696 fossils.
+
+_BANANZA_MAP = ASSET_DIR / "switch" / "dkb" / "save_map.json"
+BANANAS, FOSSILS, CHESTS = 763, 696, 50
+_INT_ARRAY = 3
+_MAIN_LAYERS = ("Arena", "Wild", "Forest", "Branch", "KeepOut", "Under", "Hill", "Desert", "Ice", "Resort", "Lake",
+                "Race", "Melt", "Core", "Sound", "Storm", "Fort")    # each layer's main stage is <name>LevelStage
+LAYERS = len(_MAIN_LAYERS)
+SKILLS = 42
+
+
+class _BananzaSave:
+    def __init__(self, bananas: int = 0, fossils: int = 0, chests: int = 0, skills: int = 0, cleared: bool = False,
+                 emerald_rush: bool = False):
+        self.bananas, self.fossils, self.chests, self.skills = bananas, fossils, chests, skills
+        self.cleared, self.emerald_rush = int(cleared), int(emerald_rush)
+
+
+def read_bananza_save(path: Path) -> _BananzaSave:
+    """Counts what a Donkey Kong Bananza save (save/0/progress.sav) holds. Raises ValueError if it isn't one."""
+    want = json.loads(_BANANZA_MAP.read_text())
+    names = want["names"]
+    save = _GameData(path)
+    skills = 0
+    if names["SkillLevel"] in save.found:
+        skills = sum(level > 0 for level in save.array(names["SkillLevel"], _INT_ARRAY, "i"))
+    emerald_rush = False
+    dlc = Path(path).with_name("emerush.sav")        # Emerald Rush (the DLC) keeps its own save beside it
+    if dlc.is_file():
+        try:
+            emerald_rush = _GameData(dlc).found.get(names["IsClearEmerush"]) == (0, 1)
+        except (ValueError, OSError):
+            pass
+    return _BananzaSave(save.flags_set(want["bananas"]), save.flags_set(want["fossils"]), save.flags_set(want["chests"]),
+                        skills, save.found.get(names["IsClear"]) == (0, 1), emerald_rush)
+
+
+class _BananzaTally:
+    """What Donkey Kong Bananza's reports add up to: stage_in names each stage as you enter it."""
+
+    def __init__(self):
+        self.events: dict = {}
+        self.layers: set = set()
+        self.core = self.island = 0
+
+    def add(self, event: str, report: dict) -> None:
+        self.events[event] = self.events.get(event, 0) + 1
+        if event != "stage_in":
+            return
+        stage = str(report.get("StageName") or "")
+        if not stage.endswith("LevelStage"):
+            return
+        layer = stage[:-len("LevelStage")]
+        if layer in _MAIN_LAYERS:
+            self.layers.add(layer)
+        self.core |= layer == "Core"
+        self.island |= layer == "Island"
+
+
+DONKEY_KONG_BANANZA_GOALS = (
+    Goal("dk_banana_1", "Top Banana", "Find your first banana.", _tallied("bananas"), 1, False, True),
+    Goal("dk_banana_50", "Bunch Builder", "Find 50 bananas.", _tallied("bananas"), 50, True, True),
+    Goal("dk_banana_150", "Banana Hoard", "Find 150 bananas.", _tallied("bananas"), 150, True, True),
+    Goal("dk_banana_300", "Going Bananas", "Find 300 bananas.", _tallied("bananas"), 300, True, True),
+    Goal("dk_banana_500", "Banana Republic", "Find 500 bananas.", _tallied("bananas"), 500, True, True),
+    Goal("dk_banana_all", "Every Last Banana", f"Find all {BANANAS} bananas hidden in the layers "
+         "(the ones you buy with banana chips don't count).", _tallied("bananas"), BANANAS, True, True),
+    Goal("dk_fossil_1", "Dig Site", "Find a fossil.", _tallied("fossils"), 1, False, True),
+    Goal("dk_fossil_50", "Bone Collector", "Find 50 fossils.", _tallied("fossils"), 50, True, True),
+    Goal("dk_fossil_200", "Amateur Palaeontologist", "Find 200 fossils.", _tallied("fossils"), 200, True, True),
+    Goal("dk_fossil_400", "Museum Piece", "Find 400 fossils.", _tallied("fossils"), 400, True, True),
+    Goal("dk_fossil_all", "Natural History", f"Find all {FOSSILS} fossils.", _tallied("fossils"), FOSSILS, True, True),
+    Goal("dk_chest_1", "Finders Keepers", "Open a treasure chest.", _tallied("chests"), 1, False, True),
+    Goal("dk_chest_25", "Treasure Hunter", "Open 25 treasure chests.", _tallied("chests"), 25, True, True),
+    Goal("dk_chest_all", "X Marks Every Spot", f"Open all {CHESTS} treasure chests.", _tallied("chests"), CHESTS, True, True),
+    Goal("dk_skill_1", "New Moves", "Learn a skill.", _tallied("skills"), 1, False, True),
+    Goal("dk_skill_15", "Well Trained", "Learn 15 skills.", _tallied("skills"), 15, True, True),
+    Goal("dk_skill_all", "Master of Bananza", f"Learn all {SKILLS} skills.", _tallied("skills"), SKILLS, True, True),
+    Goal("dk_layer_3", "Going Down", "Reach 3 layers.", _seen("layers"), 3),
+    Goal("dk_layer_9", "Deep Diver", "Reach 9 layers.", _seen("layers"), 9),
+    Goal("dk_layer_all", "Every Layer", f"Reach all {LAYERS} layers.", _seen("layers"), LAYERS),
+    Goal("dk_core", "Center of the Earth", "Reach the planet's core.", _tallied("core"), 1, False),
+    Goal("dk_clear", "Roll the Credits", "Finish the story.", _tallied("cleared"), 1, False, True),
+    Goal("dk_island", "Island Getaway", "Visit DK Island (DK Island & Emerald Rush).", _tallied("island"), 1, False),
+    Goal("dk_emerald_rush", "Emerald Rush", "Clear Emerald Rush (DK Island & Emerald Rush).", _tallied("emerald_rush"), 1,
+         False, True),
+)
+
+
 @dataclass(frozen=True)
 class Title:
     key: str                # remembered in the library as "ports"[<key>], the way a native port is
@@ -425,8 +538,13 @@ class Title:
     def saves_dir(self) -> Path | None:
         return self.save_folder()
 
+    def icon(self, goal: Goal) -> str:
+        """The goal's icon: AchTrack's own drawing (tools/make_switch_icons.py), shown grey while locked."""
+        path = ASSET_DIR / "switch" / self.key / f"{goal.name}.png"
+        return str(path) if path.is_file() else ""
+
     def schema(self) -> list:
-        return [{"name": goal.name, "display_name": goal.title, "description": goal.detail, "icon": "",
+        return [{"name": goal.name, "display_name": goal.title, "description": goal.detail, "icon": self.icon(goal),
                  "icon_gray": "", "hidden": 0, "global_pct": None, "kind": None}
                 for goal in self.goals]
 
@@ -465,6 +583,10 @@ MARIO_KART = Title(
 class NativeTitle(Title):
     """A Switch game that runs as its own Mac app, with no emulator and no Ryubing folders."""
     app_name: str = ""
+    save_name: str = "save/Play/account.sav"     # the save the from_save goals read, in the data folder
+    save_reader: object = None                    # path -> the counts those goals measure (read_world_save if unset)
+    report_tally: object = None                   # () -> a tally with add(event, report) (_WorldTally if unset)
+    report_events: tuple = ("game_repo_",)        # the reports that tally counts, by the start of their event name
 
     def app(self) -> Path | None:
         for folder in app_folders():
@@ -490,7 +612,13 @@ class NativeTitle(Title):
 
     def save_file(self) -> Path:
         """The save the collectables are read from (Mario Kart World keeps one, shared by solo and two-player Free Roam)."""
-        return self.data_folder() / "save" / "Play" / "account.sav"
+        return self.data_folder() / self.save_name
+
+    def read_save(self, path: Path):
+        return (self.save_reader or read_world_save)(path)
+
+    def new_tally(self):
+        return (self.report_tally or _WorldTally)()
 
     def game_file(self) -> str:
         app = self.app()
@@ -507,7 +635,21 @@ MARIO_KART_WORLD = NativeTitle(
     goals=MARIO_KART_WORLD_GOALS,
     app_name="Mario Kart World.app",
 )
-TITLES = (MARIO_KART, MARIO_KART_WORLD)
+DONKEY_KONG_BANANZA = NativeTitle(
+    key="dkb",
+    name="Donkey Kong Bananza",
+    title_id="040074A01BF12000",
+    genre="Platformer",
+    art="https://assets.nintendo.com/image/upload/ar_16:9,c_lpad,w_1240/b_white/f_auto/q_auto/store/software/switch2/"
+        "70010000096809/3c8219fbdcd3bdd0ebd6239cf32c651fe10f2157aa7730fcc6a7d96cd27460e5",
+    goals=DONKEY_KONG_BANANZA_GOALS,
+    app_name="Donkey Kong Bananza.app",
+    save_name="save/0/progress.sav",
+    save_reader=read_bananza_save,
+    report_tally=_BananzaTally,
+    report_events=("stage_in", "bananamond_broken"),
+)
+TITLES = (MARIO_KART, MARIO_KART_WORLD, DONKEY_KONG_BANANZA)
 
 
 def title_of(db, appid: int) -> Title | None:
@@ -589,10 +731,20 @@ def is_native_save(path: str) -> bool:
     return any(isinstance(t, NativeTitle) and str(t.save_file()) == str(path) for t in TITLES)
 
 
-def parse_save(path: Path, title: NativeTitle = MARIO_KART_WORLD) -> dict:
+def native_title_of(path) -> NativeTitle:
+    """The native game a reports file or save belongs to, by the title id folder it lives in (Mario Kart World if none)."""
+    folder = str(path)
+    for title in TITLES:
+        if isinstance(title, NativeTitle) and f"/{title.title_id}/" in folder:
+            return title
+    return MARIO_KART_WORLD
+
+
+def parse_save(path: Path, title: NativeTitle = None) -> dict:
     """{achievement: AchState} for the goals a native game's save measures. The save keeps no usable time for each
     pickup, so a goal is dated by the save's last write, the way Ryubing's log dates its goals."""
-    tally = read_world_save(path)
+    title = title or native_title_of(path)
+    tally = title.read_save(path)
     when = int(os.stat(path).st_mtime)
     out = {}
     for goal in title.goals:
@@ -605,9 +757,10 @@ def parse_save(path: Path, title: NativeTitle = MARIO_KART_WORLD) -> dict:
     return out
 
 
-def parse_reports(path: Path, title: NativeTitle = MARIO_KART_WORLD) -> dict:
+def parse_reports(path: Path, title: NativeTitle = None) -> dict:
     """{achievement: AchState} from a native game's reports, each dated by the report that earned it."""
-    tally = _WorldTally()
+    title = title or native_title_of(path)
+    tally = title.new_tally()
     goals = [goal for goal in title.goals if not goal.from_save]
     earned: dict = {}
     with open(path, "rb") as f:
@@ -616,7 +769,7 @@ def parse_reports(path: Path, title: NativeTitle = MARIO_KART_WORLD) -> dict:
         try:
             entry = json.loads(line)
             event = entry["event"]
-            if not event.startswith("game_repo_"):
+            if not event.startswith(title.report_events):
                 continue
             report = formats.msgpack_value(bytes.fromhex(entry["data"]))
         except (ValueError, KeyError, TypeError, AttributeError, IndexError, struct.error):

@@ -1,3 +1,7 @@
+try:
+    from . import _isolated  # noqa: F401  (before AchTrack: throwaway folders)
+except ImportError:
+    import _isolated  # noqa: F401
 import os
 import tempfile
 import time

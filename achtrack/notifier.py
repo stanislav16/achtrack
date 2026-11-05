@@ -1,6 +1,7 @@
 """Achievement popups."""
 from __future__ import annotations
 
+import logging
 import shutil
 import subprocess
 import sys
@@ -15,6 +16,8 @@ from PySide6.QtWidgets import QWidget
 from . import motion, sound, theme
 from .config import APP_ICON, APP_NAME, Config
 from .motion import Spring
+
+log = logging.getLogger(__name__)
 
 CARD_W, CARD_H = 360, 88
 SHADOW = 18
@@ -104,6 +107,32 @@ def trophy_pixmap(size: int, color: QColor | None = None) -> QPixmap:
     return pm
 
 
+def _float_over_fullscreen(widget: QWidget) -> None:
+    """On a Mac a fullscreen game is a Space of its own, and a window only shows there if it may join every Space as a
+    fullscreen auxiliary; a status-bar level keeps it above the game. Elsewhere WindowStaysOnTopHint does the job."""
+    if sys.platform != "darwin":
+        return
+    try:
+        from ctypes import c_void_p, cdll
+        objc = cdll.LoadLibrary("/usr/lib/libobjc.dylib")
+        objc.sel_registerName.restype = c_void_p
+        objc.objc_msgSend.restype = c_void_p
+        objc.objc_msgSend.argtypes = [c_void_p, c_void_p, c_void_p]
+
+        def send(target, selector, arg=None):
+            return objc.objc_msgSend(c_void_p(target), objc.sel_registerName(selector.encode()), arg)
+
+        window = send(int(widget.winId()), "window")      # winId is the NSView
+        if not window:
+            return
+        can_join_all_spaces, stationary, ignores_cycle, full_screen_auxiliary = 1 << 0, 1 << 4, 1 << 6, 1 << 8
+        send(window, "setCollectionBehavior:", c_void_p(can_join_all_spaces | stationary | ignores_cycle | full_screen_auxiliary))
+        send(window, "setLevel:", c_void_p(25))           # NSStatusWindowLevel
+        send(window, "setHidesOnDeactivate:", c_void_p(0))
+    except Exception as e:      # the popup still shows on ordinary desktops without this
+        log.debug("couldn't float the popup over fullscreen apps: %s", e)
+
+
 class Toast(QWidget):
     finished = Signal(object)
 
@@ -115,6 +144,8 @@ class Toast(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WidgetAttribute.WA_X11DoNotAcceptFocus)
+        # On a Mac a Qt.Tool window hides whenever its app isn't the active one - and AchTrack never is while you play
+        self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)
         self.setFixedSize(CARD_W + 2 * SHADOW, CARD_H + 2 * SHADOW)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.data = data
@@ -174,6 +205,7 @@ class Toast(QWidget):
         self._x.value, self._y.value = start.x(), start.y()
         self.move(start)
         self.show()
+        _float_over_fullscreen(self)
         if sys.platform != "darwin":    # on a Mac this activates all of AchTrack, pulling you out of the game; the popup stays on top anyway
             self.raise_()
         self._head_for(end)

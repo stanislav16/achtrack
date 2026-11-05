@@ -18,6 +18,13 @@ from .db import Database
 PBKDF2_ROUNDS = 250_000
 
 
+def web_icon(value) -> str:
+    """An icon a published page can show: a web address. AchTrack's own icons are files on this computer, and a
+    path would only show the user name in the page."""
+    value = value or ""
+    return value if not value.startswith("/") and not (len(value) > 2 and value[1] == ":") else ""
+
+
 def collect(db: Database, include_locked: bool = True) -> dict:
     """The library in a compact shape: short keys, achievements as arrays."""
     games = []
@@ -29,7 +36,7 @@ def collect(db: Database, include_locked: bool = True) -> dict:
             achievements.append([
                 a.get("display_name") or a["name"],
                 a.get("description") or "",
-                a.get("icon") or "",
+                web_icon(a.get("icon")),
                 a.get("global_pct"),
                 a.get("unlocked_at"),
                 a.get("source") or "",

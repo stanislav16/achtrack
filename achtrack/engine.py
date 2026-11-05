@@ -309,9 +309,9 @@ class Engine:
             self._prefetch_icons(appid, [title.art])
             log.info("%s now goes to library entry %s", title.name, appid)
         schema = title.schema()
-        stored = [(r["name"], r["display_name"], r["description"]) for r in self.db.q(
-            "SELECT name, display_name, description FROM achievements WHERE appid = ? ORDER BY sort_order", (appid,))]
-        if stored != [(a["name"], a["display_name"], a["description"]) for a in schema]:
+        stored = [(r["name"], r["display_name"], r["description"], r["icon"] or "") for r in self.db.q(
+            "SELECT name, display_name, description, icon FROM achievements WHERE appid = ? ORDER BY sort_order", (appid,))]
+        if stored != [(a["name"], a["display_name"], a["description"], a["icon"]) for a in schema]:
             self.db.set_schema(appid, schema, {})
             self.listener.on_changed()
         return appid

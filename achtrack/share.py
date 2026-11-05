@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 from .db import Database
+from .export import web_icon
 
 RARE = 8         # rarest finds to show
 RECENT = 10      # most recent unlocks to show
@@ -42,7 +43,7 @@ def collect(db: Database, name: str = "") -> dict:
     platinums = db.q(f"SELECT COUNT(*) FROM ({earned}) WHERE kind = 'platinum'")[0][0]
 
     def trophies(order: str, limit: int) -> list:
-        return [[r["display_name"] or "", r["icon"] or "", r["global_pct"], r["game"] or "",
+        return [[r["display_name"] or "", web_icon(r["icon"]), r["global_pct"], r["game"] or "",
                  r["unlocked_at"], r["kind"] or ""]
                 for r in db.q(f"{earned} AND {order} LIMIT {limit}")]
 

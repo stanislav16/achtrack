@@ -423,14 +423,16 @@ def g_balloon(d):
 
 
 def _banana_pts(cx, cy, scale, turn):
-    """A banana's outline: the lower arc of one circle and the flatter arc of a bigger one above it, meeting at the
-    tips (15 and 165 degrees on the first), tilted by `turn` degrees and centred on (cx, cy). Returns the outline and
-    the stem."""
-    outer = [(math.cos(math.radians(a)), math.sin(math.radians(a))) for a in [15 + 150 * i / 40 for i in range(41)]]
-    inner = [(1.472 * math.cos(math.radians(a)), -0.852 + 1.472 * math.sin(math.radians(a)))
-             for a in [131 - 82 * i / 30 for i in range(1, 30)]]
-    tip = outer[0]
-    stem = [tip, (tip[0] + 0.07, tip[1] - 0.26)]
+    """A banana's outline: the lower arc of one circle and the flatter arc of a bigger one above it, meeting in a point
+    on the left and cut off blunt on the right, where a short stem carries on the curve. Tilted by `turn` degrees and
+    centred on (cx, cy). Returns the outline and the stem."""
+    R, c = 1.749, -1.199      # the inner circle: through the left tip (165 degrees on the outer one) and (0, 0.55)
+    outer = [(math.cos(math.radians(a)), math.sin(math.radians(a))) for a in [165 - 125 * i / 40 for i in range(41)]]
+    inner = [(R * math.cos(math.radians(a)), c + R * math.sin(math.radians(a)))
+             for a in [67.8 + 55.7 * i / 30 for i in range(30)]]
+    end = ((outer[-1][0] + inner[0][0]) / 2, (outer[-1][1] + inner[0][1]) / 2)
+    along = (math.sin(math.radians(40)), -math.cos(math.radians(40)))      # the outer curve's way at the cut
+    stem = [end, (end[0] + 0.24 * along[0], end[1] + 0.24 * along[1])]
     t = math.radians(turn)
 
     def turned(pts):
@@ -449,11 +451,11 @@ def _banana(d, cx, cy, scale=1.0, turn=-18, fill=INK):
     line(d, stem, w=W * 2, fill=CLEAR)
     w = int(W * min(1.0, 0.25 + scale))
     line(d, body, w=w, fill=fill, closed=True)
-    line(d, stem, w=w, fill=fill)
+    line(d, stem, w=int(w * 0.8), fill=fill)
 
 
 def g_banana(d):
-    _banana(d, 512, 512, 1.15)
+    _banana(d, 512, 512, 1.15, -22)
 
 
 def g_bananas(d):   # a bunch: one banana in front of another

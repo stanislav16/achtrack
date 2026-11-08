@@ -110,7 +110,9 @@ def trophy_pixmap(size: int, color: QColor | None = None) -> QPixmap:
 def _float_over_fullscreen(widget: QWidget) -> None:
     """On a Mac a fullscreen game is a Space of its own, and a window only shows there if it may join every Space as a
     fullscreen auxiliary; a status-bar level keeps it above the game. Elsewhere WindowStaysOnTopHint does the job."""
-    if sys.platform != "darwin":
+    # Only Qt's Cocoa backend gives an NSView for winId. Anywhere else (the offscreen one the tests use) the
+    # messages below go to whatever that number points at, and crash Python outright.
+    if sys.platform != "darwin" or QGuiApplication.platformName() != "cocoa":
         return
     try:
         from ctypes import c_char_p, c_void_p, cdll
@@ -129,7 +131,8 @@ def _float_over_fullscreen(widget: QWidget) -> None:
         objc.object_getClassName.restype = c_char_p
         objc.object_getClassName.argtypes = [c_void_p]
         log.debug("popup window class %s", objc.object_getClassName(c_void_p(window)))
-        if send(window, "isKindOfClass:", c_void_p(objc.objc_getClass(b"NSPanel"))):
+        # A BOOL comes back in the low byte only; the rest of the register is whatever was there before.
+        if (send(window, "isKindOfClass:", c_void_p(objc.objc_getClass(b"NSPanel"))) or 0) & 0xFF:
             # a panel that doesn't activate its app is the one kind of window macOS lets into another app's
             # fullscreen Space
             style = send(window, "styleMask") or 0

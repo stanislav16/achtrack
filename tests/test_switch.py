@@ -258,6 +258,93 @@ class World(unittest.TestCase):
             self.assertEqual(engine.switch_running(), {appid: None})
 
 
+class NativeKart(unittest.TestCase):
+    """Mario Kart 8 Deluxe as its own Mac app: the same user_data reports Ryubing logs, in playreports.jsonl."""
+
+    def setUp(self):
+        self.home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.home, True)
+        for target, kwargs in ((Path, {"attribute": "home", "return_value": self.home}),
+                               (switch, {"attribute": "app_folders", "return_value": (self.home / "Applications",)}),
+                               (switch, {"attribute": "data_dir", "return_value": self.home / "Ryujinx"}),
+                               (switch, {"attribute": "logs_dirs", "return_value": (self.home / "Logs",)})):
+            patcher = mock.patch.object(target, kwargs.pop("attribute"), **kwargs)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.title = switch.MARIO_KART_NATIVE
+        self.title.data_folder().mkdir(parents=True)
+
+    @staticmethod
+    def body(races: int, trophies: str = "0" * 60, body_flags: int = 0b1011) -> str:
+        """A user_data report as the game packs it: its flag fields are 8-byte MessagePack extensions."""
+        def string(text: str) -> bytes:
+            return bytes([0xd9, len(text)]) + text.encode()
+        fields = [(string("TotalRaceNum"), b"\xce" + races.to_bytes(4, "big")),
+                  (string("GrandPrixTrophy"), string(trophies)),
+                  (string("OpenBodyFlags"), b"\xd7\x00" + body_flags.to_bytes(8, "big")),
+                  (string("WatchEndingFlags"), b"\xd7\x00" + bytes(8))]
+        return (bytes([0x80 | len(fields)]) + b"".join(k + v for k, v in fields)).hex()
+
+    def write(self, *reports) -> Path:
+        path = self.title.reports_file()
+        path.write_text("".join(json.dumps({"time": when, "event": event, "data": data}) + "\n" for when, event, data in reports))
+        return path
+
+    def test_the_flag_fields_read_as_ryubing_logs_them(self):
+        value = switch.formats.msgpack_value(bytes.fromhex(self.body(1, body_flags=0x14A)), raw=True)
+        self.assertEqual(value["OpenBodyFlags"], {"TypeCode": 0, "Value": "0x000000000000014A"})
+        self.assertIsNone(switch.formats.msgpack_value(bytes.fromhex(self.body(1)))["OpenBodyFlags"])
+
+    def test_the_newest_totals_win_and_a_goal_is_dated_by_its_report(self):
+        path = self.write((100, "user_data", self.body(0)), (200, "user_data", self.body(1, "1" + "0" * 59)),
+                          (250, "erepo_region", self.body(999)), (300, "user_data", self.body(2, "1" + "0" * 59)))
+        states = emulators.parse_file(path)
+        self.assertEqual((states["race_1"].unlocked, states["race_1"].unlocked_at), (True, 200))
+        self.assertEqual(states["trophy_1"].unlocked_at, 200)
+        self.assertEqual(states["race_50"].cur, 2.0)
+        self.assertEqual(states["parts_30"].cur, 3.0)
+        self.assertFalse(states["ending"].unlocked)
+
+    def install_app(self) -> Path:
+        app = self.home / "Applications" / "Mario Kart 8 Deluxe.app"
+        app.mkdir(parents=True)
+        return app
+
+    def test_it_shares_one_entry_with_ryubing_and_play_prefers_the_app(self):
+        games = self.home / "Switch"
+        games.mkdir()
+        nsp = games / f"Mario Kart 8 Deluxe [{TITLE.title_id}].nsp"
+        nsp.touch()
+        (self.home / "Ryujinx").mkdir()
+        (self.home / "Ryujinx" / "Config.json").write_text(json.dumps({"game_dirs": [str(games)]}))
+        app = self.install_app()
+        self.write((200, "user_data", self.body(1)))
+        engine = E.Engine(Config(), Database(self.home / "t.db"))
+        with mock.patch.object(switch, "save_id", return_value="0000000000000001"):
+            engine.discover_switch()
+            appid = engine.port_game(TITLE)
+            self.assertEqual([g["appid"] for g in engine.db.games(include_hidden=True)], [appid])
+            self.assertEqual(engine.db.unlocked_names(appid), {"race_1"})
+            self.assertNotIn(str(self.title.save_file()), engine.sources)
+            self.assertEqual(launcher.best(engine.db, appid).kind, "native")
+            self.assertEqual(launcher.best(engine.db, appid).value, str(app))
+            self.assertEqual(launcher.ryubing(engine.db, appid).value, str(nsp))
+            self.assertIs(ports.port_of(engine.db, appid), self.title)
+
+    def test_without_ryubing_the_app_alone_brings_it_in(self):
+        self.install_app()
+        engine = E.Engine(Config(), Database(self.home / "t.db"))
+        engine.discover_switch()
+        appid = engine.port_game(self.title)
+        self.assertIsNotNone(appid)
+        self.assertEqual(engine.db.game(appid)["name"], "Mario Kart 8 Deluxe")
+        self.assertIsNone(launcher.ryubing(engine.db, appid))
+        engine.monitor = mock.Mock(seen={})
+        engine.monitor.pids_of.return_value = [7]
+        engine.monitor.files_open_in.return_value = {}
+        self.assertEqual(engine.switch_running(), {appid: None})
+
+
 class Bananza(unittest.TestCase):
     """Donkey Kong Bananza: collectables from its save (one flag per object), layers from its stage_in reports."""
 

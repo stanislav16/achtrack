@@ -24,6 +24,10 @@ Mario Kart World is a Switch 2 game, which Ryubing can't run. It runs natively o
 app built with kartnative, and that app writes each play report the game saves to playreports.jsonl.
 Those reports are about one race or cup each rather than totals, so its numbers come from adding up
 the whole file.
+
+Mario Kart 8 Deluxe can run either way. Its native app (SwitchNative) writes the same user_data reports
+Ryubing logs, running totals each time, so the newest one is the whole story there too, and both feed
+one library entry.
 """
 from __future__ import annotations
 
@@ -240,6 +244,14 @@ MARIO_KART_GOALS = (
     Goal("battle_1", "Picking a Fight", "Play a Battle match.", _battle_modes, 1, False),
     Goal("battle_all", "All-Rounder", "Play all five Battle modes.", _battle_modes, 5),
 )
+
+
+class _Totals(dict):
+    """A game whose every report holds its running totals (Mario Kart 8 Deluxe): the newest report is the tally."""
+
+    def add(self, event: str, report: dict) -> None:
+        self.clear()
+        self.update(report)
 
 
 # --- Mario Kart World: its reports added up ---------------------------------------------------------
@@ -587,6 +599,7 @@ class NativeTitle(Title):
     save_reader: object = None                    # path -> the counts those goals measure (read_world_save if unset)
     report_tally: object = None                   # () -> a tally with add(event, report) (_WorldTally if unset)
     report_events: tuple = ("game_repo_",)        # the reports that tally counts, by the start of their event name
+    raw_reports: bool = False                     # keep binary and extension values as Ryubing logs them (formats.msgpack_value)
 
     def app(self) -> Path | None:
         for folder in app_folders():
@@ -610,6 +623,9 @@ class NativeTitle(Title):
     def reports_file(self) -> Path:
         return self.data_folder() / "playreports.jsonl"
 
+    def reads_save(self) -> bool:
+        return any(goal.from_save for goal in self.goals)
+
     def save_file(self) -> Path:
         """The save the collectables are read from (Mario Kart World keeps one, shared by solo and two-player Free Roam)."""
         return self.data_folder() / self.save_name
@@ -625,6 +641,18 @@ class NativeTitle(Title):
         return str(app) if app else ""
 
 
+MARIO_KART_NATIVE = NativeTitle(       # the same game and library entry as MARIO_KART, as its own Mac app
+    key=MARIO_KART.key,
+    name=MARIO_KART.name,
+    title_id=MARIO_KART.title_id,
+    genre=MARIO_KART.genre,
+    art=MARIO_KART.art,
+    goals=MARIO_KART_GOALS,
+    app_name="Mario Kart 8 Deluxe.app",
+    report_tally=_Totals,
+    report_events=("user_data",),
+    raw_reports=True,
+)
 MARIO_KART_WORLD = NativeTitle(
     key="mkw",
     name="Mario Kart World",
@@ -649,13 +677,19 @@ DONKEY_KONG_BANANZA = NativeTitle(
     report_tally=_BananzaTally,
     report_events=("stage_in", "bananamond_broken"),
 )
-TITLES = (MARIO_KART, MARIO_KART_WORLD, DONKEY_KONG_BANANZA)
+TITLES = (MARIO_KART, MARIO_KART_NATIVE, MARIO_KART_WORLD, DONKEY_KONG_BANANZA)
+
+
+def titles_of(db, appid: int) -> list:
+    """Every way the Switch game behind this library entry runs (Mario Kart 8 Deluxe: Ryubing and its own app)."""
+    linked = db.get_meta("ports") or {}
+    return [title for title in TITLES if linked.get(title.key) == appid]
 
 
 def title_of(db, appid: int) -> Title | None:
-    """The Switch game behind this library entry, if any."""
-    linked = db.get_meta("ports") or {}
-    return next((title for title in TITLES if linked.get(title.key) == appid), None)
+    """The Switch game behind this library entry, if any: its own app when that is installed, else Ryubing's."""
+    found = titles_of(db, appid)
+    return next((t for t in found if isinstance(t, NativeTitle) and t.app()), found[0] if found else None)
 
 
 # --- reading the log --------------------------------------------------------------------------------
@@ -771,7 +805,7 @@ def parse_reports(path: Path, title: NativeTitle = None) -> dict:
             event = entry["event"]
             if not event.startswith(title.report_events):
                 continue
-            report = formats.msgpack_value(bytes.fromhex(entry["data"]))
+            report = formats.msgpack_value(bytes.fromhex(entry["data"]), title.raw_reports)
         except (ValueError, KeyError, TypeError, AttributeError, IndexError, struct.error):
             continue                                        # the game may be writing the last line right now
         if not isinstance(report, dict):

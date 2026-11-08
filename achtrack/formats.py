@@ -297,9 +297,11 @@ def _bson_doc(data: bytes, pos: int, as_list: bool = False):
 
 # --- MessagePack --------------------------------------------------------------------------------------
 
-def msgpack_value(data: bytes):
-    """One MessagePack value, whatever it is. parse_msgpack also judges whether it looks like a save."""
-    return _mp(data, 0, 0)[0]
+def msgpack_value(data: bytes, raw: bool = False):
+    """One MessagePack value, whatever it is. parse_msgpack also judges whether it looks like a save.
+    With raw, binary and extension values are kept the way Ryubing writes them to its log: binary as "0x<hex>",
+    an extension as {"TypeCode": n, "Value": "0x<hex>"} (Mario Kart 8 Deluxe's flag fields are extensions)."""
+    return _mp(data, 0, 0, raw)[0]
 
 
 def parse_msgpack(data: bytes):
@@ -312,7 +314,7 @@ def parse_msgpack(data: bytes):
     return value
 
 
-def _mp(d: bytes, p: int, depth: int):
+def _mp(d: bytes, p: int, depth: int, raw: bool = False):
     if depth > 60:
         raise ValueError("too deep")
     b = d[p]
@@ -322,9 +324,9 @@ def _mp(d: bytes, p: int, depth: int):
     if b >= 0xE0:
         return b - 0x100, p
     if 0x80 <= b <= 0x8F:
-        return _mp_map(d, p, b & 0x0F, depth)
+        return _mp_map(d, p, b & 0x0F, depth, raw)
     if 0x90 <= b <= 0x9F:
-        return _mp_arr(d, p, b & 0x0F, depth)
+        return _mp_arr(d, p, b & 0x0F, depth, raw)
     if 0xA0 <= b <= 0xBF:
         n = b & 0x1F
         return d[p:p + n].decode("utf-8", "replace"), p + n
@@ -344,43 +346,56 @@ def _mp(d: bytes, p: int, depth: int):
         chunk = d[p:p + n]
         if p + n > len(d):
             raise ValueError("truncated")
-        return (chunk.decode("utf-8", "replace") if b >= 0xD9 else None), p + n
+        if b >= 0xD9:
+            return chunk.decode("utf-8", "replace"), p + n
+        return ("0x" + chunk.hex().upper() if raw else None), p + n
     if b in (0xDC, 0xDD):
         fmt = ">H" if b == 0xDC else ">I"
         n = struct.unpack_from(fmt, d, p)[0]
-        return _mp_arr(d, p + struct.calcsize(fmt), n, depth)
+        return _mp_arr(d, p + struct.calcsize(fmt), n, depth, raw)
     if b in (0xDE, 0xDF):
         fmt = ">H" if b == 0xDE else ">I"
         n = struct.unpack_from(fmt, d, p)[0]
-        return _mp_map(d, p + struct.calcsize(fmt), n, depth)
+        return _mp_map(d, p + struct.calcsize(fmt), n, depth, raw)
     ext = {0xD4: 1, 0xD5: 2, 0xD6: 4, 0xD7: 8, 0xD8: 16}
     if b in ext:
-        return None, p + 1 + ext[b]
+        return _mp_ext(d, p, ext[b], raw), p + 1 + ext[b]
     if b in (0xC7, 0xC8, 0xC9):
         fmt = {0xC7: ">B", 0xC8: ">H", 0xC9: ">I"}[b]
         n = struct.unpack_from(fmt, d, p)[0]
-        return None, p + struct.calcsize(fmt) + 1 + n
+        p += struct.calcsize(fmt)
+        return _mp_ext(d, p, n, raw), p + 1 + n
     raise ValueError("bad MessagePack byte")
 
 
-def _mp_arr(d: bytes, p: int, n: int, depth: int):
+def _mp_ext(d: bytes, p: int, n: int, raw: bool):
+    """An extension value: its type byte at p, then n bytes."""
+    if not raw:
+        return None
+    if p + 1 + n > len(d):
+        raise ValueError("truncated")
+    code = struct.unpack_from(">b", d, p)[0]
+    return {"TypeCode": code, "Value": "0x" + d[p + 1:p + 1 + n].hex().upper()}
+
+
+def _mp_arr(d: bytes, p: int, n: int, depth: int, raw: bool = False):
     if n > 10_000_000:
         raise ValueError("array too big")
     out = []
     for _ in range(n):
-        v, p = _mp(d, p, depth + 1)
+        v, p = _mp(d, p, depth + 1, raw)
         if len(out) < MAX_ITEMS:
             out.append(v)
     return out, p
 
 
-def _mp_map(d: bytes, p: int, n: int, depth: int):
+def _mp_map(d: bytes, p: int, n: int, depth: int, raw: bool = False):
     if n > 10_000_000:
         raise ValueError("map too big")
     out = {}
     for _ in range(n):
-        k, p = _mp(d, p, depth + 1)
-        v, p = _mp(d, p, depth + 1)
+        k, p = _mp(d, p, depth + 1, raw)
+        v, p = _mp(d, p, depth + 1, raw)
         out[str(k)] = v
     return out, p
 

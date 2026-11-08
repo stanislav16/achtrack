@@ -68,7 +68,7 @@ QUIET_FOR = 600         # seconds a log must have gone unwritten before it count
 def port_of(db, appid: int) -> Port | None:
     """The port or Switch game whose achievements go to this library entry, if any."""
     linked = db.get_meta("ports") or {}
-    return next((port for port in PORTS + switch.TITLES if linked.get(port.key) == appid), None)
+    return next((port for port in PORTS if linked.get(port.key) == appid), None) or switch.title_of(db, appid)
 
 
 def port_for_log(path: str) -> Port | None:

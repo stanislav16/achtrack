@@ -131,7 +131,7 @@ their trophies are in your library (never while the game is running).
 Play time and "playing now" come from the port's `bb-probe` process. `achtrack scan` shows whether
 the port was found, which logs are read and which trophies are in them.
 
-## Mario Kart 8 Deluxe in Ryubing
+## Mario Kart 8 Deluxe, in Ryubing or natively
 
 Switch games have no achievements of their own, so the list here is AchTrack's: 27 goals worked out
 from the statistics the game reports, which Ryubing writes to its log. Finishing races, Grand Prix
@@ -149,6 +149,16 @@ trophies, Staff Ghosts, coins, parts and more, with progress where a number is w
 - **Back up saves** and **Restore saves…** work as for any other game. Close the game first.
 
 This works on macOS and Linux. On Windows the achievements are read but Playing now isn't detected.
+
+**As its own Mac app.** Mario Kart 8 Deluxe also runs natively, as `Mario Kart 8 Deluxe.app` built with
+[SwitchNative](https://github.com/seedds/nxnative).
+The app writes the same reports to `playreports.jsonl` in
+`~/Library/Application Support/nxnative/0100152000022000/`, and AchTrack reads them into the same library
+entry and the same 27 goals. Here each goal is dated by the race that earned it. With the app installed,
+**Play** opens the app, and Ryubing stays in the ▾ menu while it still has the game. To keep your progress,
+copy `userdata.dat` from Ryubing's save (its `0` folder) into the app's `save` folder before the first start.
+Building the app needs a SwitchNative whose `dm/host/hle_offline.c` finds the report buffer on the game's older
+SDK, which the stock version doesn't.
 
 ## Mario Kart World, running natively
 

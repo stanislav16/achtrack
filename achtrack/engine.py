@@ -323,6 +323,8 @@ class Engine:
                 continue
             if isinstance(title, switch.NativeTitle):
                 for what, path in (("reports", str(title.reports_file())), ("save", str(title.save_file()))):
+                    if what == "save" and not title.reads_save():
+                        continue
                     if path not in self.sources and os.path.exists(path):
                         log.info("watching %s's %s: %s", title.name, what, path)
                         self.sources[path] = {"path": path, "appid": appid, "emulator": switch.NATIVE_EMULATOR,

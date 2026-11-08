@@ -112,15 +112,15 @@ def program(game) -> Launch | None:
 
 def ryubing(db, appid: int) -> Launch | None:
     """A Switch game, if Ryubing's game folders have its file."""
-    title = switch.title_of(db, appid)
-    path = title.game_file() if title and not isinstance(title, switch.NativeTitle) else ""
+    title = next((t for t in switch.titles_of(db, appid) if not isinstance(t, switch.NativeTitle)), None)
+    path = title.game_file() if title else ""
     return Launch("ryubing", path, "Ryubing") if path else None
 
 
 def native(db, appid: int) -> Launch | None:
     """A Switch game's own Mac app, if it is installed."""
-    title = switch.title_of(db, appid)
-    path = title.game_file() if isinstance(title, switch.NativeTitle) else ""
+    title = next((t for t in switch.titles_of(db, appid) if isinstance(t, switch.NativeTitle)), None)
+    path = title.game_file() if title else ""
     return Launch("native", path, "Native app") if path else None
 
 
@@ -132,7 +132,7 @@ def best(db, appid: int) -> Launch | None:
     chosen = from_stored(game["launch"] or "") if "launch" in game.keys() else None
     if chosen:
         return chosen
-    found = ryubing(db, appid) or native(db, appid)
+    found = native(db, appid) or ryubing(db, appid)       # a game's own app over the emulator
     if found:
         return found
     names = [game["name"] or ""]

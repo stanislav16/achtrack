@@ -91,6 +91,13 @@ class Navigation(unittest.TestCase):
         self.assertEqual(card.art.pixmap().toImage(), normal)
         self.assertIsNone(card.graphicsEffect())
 
+    def test_menus_are_short_and_grouped(self):
+        menus = {a.text(): [x.text() for x in a.menu().actions() if x.text()]
+                 for a in self.win.menuBar().actions() if a.menu()}
+        self.assertEqual(list(menus), ["Library", "View", "Sync", "Backup", "Share", "Help"])
+        self.assertTrue(all(len(items) <= 8 for items in menus.values()), menus)
+        self.assertIn("My other machines", menus["Sync"])
+
     def test_opens_on_home(self):
         self.assertIs(self.win.stack.currentWidget(), self.win.home)
         self.assertIsNone(self.win.current_appid())

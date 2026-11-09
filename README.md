@@ -21,7 +21,7 @@ Linux, in CrossOver on macOS, or directly on Windows.
 
 With your Steam Web API key set, AchTrack copies the **Steam games you've played, their Steam playtime
 and every Steam achievement with its real unlock date** into its own database. It does this at startup
-and every 15 minutes, or on demand with **Library → Sync Steam library now** or `achtrack sync-steam`.
+and every 15 minutes, or on demand with **Sync → Steam library** or `achtrack sync-steam`.
 The data lives on your disk, so you keep it even if something changes on Steam's side.
 
 - Your Steam account is detected from the Steam client on this PC. If that fails, paste your profile
@@ -285,7 +285,7 @@ achtrack saves-restore <game> --pick 2   restore one of them (default the newest
 
 ## Sharing your statistics
 
-**Library → Share my statistics…**, or `achtrack share`. It builds one self-contained HTML file -
+**Share → Share my statistics…**, or `achtrack share`. It builds one self-contained HTML file -
 about 30 KB - holding your totals, rarest finds, most played games, recent unlocks and every game
 with its completion. Art comes from the usual public URLs, so the file stays small.
 

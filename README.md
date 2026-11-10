@@ -151,7 +151,7 @@ trophies, Staff Ghosts, coins, parts and more, with progress where a number is w
 This works on macOS and Linux. On Windows the achievements are read but Playing now isn't detected.
 
 **As its own Mac app.** Mario Kart 8 Deluxe also runs natively, as `Mario Kart 8 Deluxe.app` built with
-[SwitchNative](https://github.com/seedds/nxnative).
+SwitchNative (see [Native Switch games](#native-switch-games-installing-removing-and-moving-to-a-new-mac)).
 The app writes the same reports to `playreports.jsonl` in
 `~/Library/Application Support/nxnative/0100152000022000/`, and AchTrack reads them into the same library
 entry and the same 27 goals. Here each goal is dated by the race that earned it. With the app installed,
@@ -185,6 +185,78 @@ app like any other game. It needs an app built with the one change described bel
 - **Back up saves** and **Restore saves…** work as for any other game. Close the game first.
 
 This works on Apple silicon Macs only.
+
+## The Legend of Zelda: Ocarina of Time, running natively
+
+The Switch 2 Ocarina of Time runs as its own Mac app built with SwitchNative (see
+[Native Switch games](#native-switch-games-installing-removing-and-moving-to-a-new-mac)). It needs no
+changes to the app.
+
+- **Achievements are AchTrack's own**: 47 goals for the story (the Spiritual Stones, the Master Sword, all six
+  medallions, Ganon), the songs, and the collectables: Gold Skulltula Tokens, Pieces of Heart, Big Poes,
+  Great Fairy gifts, bottles, the Mask of Truth, Biggoron's Sword and the other gear, treasure chests,
+  places visited, the Hall of Fallen Foes and the kinds of enemy defeated.
+- **They all come from the save.** The game sends no play reports, so AchTrack reads its four save files,
+  `save/slot_00` to `slot_03/progress.sav` in `~/Library/Application Support/nxnative/0400486024DEC000/`.
+  A goal counts the file that has gone furthest towards it, and is dated by when that save was written.
+- **Playing now and play time** need the app in `/Applications` or `~/Applications`. The saves are read
+  wherever the app is.
+
+## Native Switch games: installing, removing and moving to a new Mac
+
+Native Switch games are built with [SwitchNative](https://github.com/seedds/nxnative) (nxnative),
+one app per game, from your own game files and `prod.keys`. These steps are SwitchNative's, not
+AchTrack's. Only games with a profile in `dm/games/` are known to work. For any other game the build
+guesses the settings, and the app may not start.
+
+### Install a game
+
+1. Put the game in a folder of its own: the base game plus its updates and DLC (`.nsp`, `.xci`,
+   `.nsz` or `.xcz`). A Switch 2 game is a single `.nup` file or a dump folder instead, and needs no keys.
+2. Build it in Terminal, from the SwitchNative folder:
+
+   ```bash
+   cd ~/SwitchEmulation/SwitchNative
+   DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer DOTNET_ROOT=/opt/homebrew/opt/dotnet/libexec \
+     ~/SwitchEmulation/MarioKartWorld-Native/python-env/bin/python scripts/build_ipa_from_nsp.py \
+     ~/SwitchEmulation/"<game folder>" -k ~/SwitchEmulation/keys/prod.keys \
+     --platform mac-app --work-dir ~/SwitchEmulation/<Game>-Native/build -o "/Applications/<Game>.app"
+   ```
+
+   Add `--allow-other-metal` if Xcode isn't the version SwitchNative asks for (27.2). The first build
+   takes 30–60 minutes and needs about twice the game's size plus 10 GB free. Rebuilding is faster.
+3. Open the app from `/Applications`. AchTrack lists the games it has achievements for.
+
+If you'd rather not use the command line, SwitchNative's README lists community Mac apps that do the
+same with buttons (NX2Apple, NX Play, NxNative Launcher, LumaNX). They're separate projects and won't
+carry any local changes you made to SwitchNative.
+
+### Remove a game
+
+Each game has four parts. Delete what you no longer want:
+
+| Part | Where | Delete it to… |
+| --- | --- | --- |
+| The app | `/Applications/<Game>.app` | uninstall the game (drag it to the Trash) |
+| Build files | the `--work-dir` folder, e.g. `~/SwitchEmulation/<Game>-Native/build` | free the space (often tens of GB); only a rebuild needs them |
+| Save, settings, pipeline cache, play reports | `~/Library/Application Support/nxnative/<title id>/` | **lose your progress**. Keep it, and a reinstalled game picks up where you left off |
+| Log and launcher choices | `~/Library/Logs/nxnative/<title id>.log`, `defaults delete org.nxnative.<title id in lowercase>` | clean up completely |
+
+Your original game files are never changed by a build. Keep them if you might reinstall.
+
+### Move to a new Mac
+
+The app holds everything it needs, so copying it over is enough. A rebuild isn't needed.
+
+1. Copy each `/Applications/<Game>.app` to the new Mac (Migration Assistant, an external drive or AirDrop).
+2. Copy `~/Library/Application Support/nxnative/` too: that's every game's save. AchTrack's achievements
+   for Mario Kart World also need its `playreports.jsonl`, which is in that folder.
+3. Open each game once. On a Mac with a different GPU, the first start takes longer while the
+   game rebuilds its graphics pipelines for that GPU.
+
+To rebuild on the new Mac instead, copy `~/SwitchEmulation` over (game files, keys and the SwitchNative
+source) and install the tools from SwitchNative's README (Xcode, Homebrew `xcodegen zstd glslang dotnet-sdk`,
+and the Python packages), then build as above.
 
 ## Hidden achievements
 

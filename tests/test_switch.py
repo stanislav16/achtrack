@@ -440,6 +440,93 @@ class Bananza(unittest.TestCase):
         self.assertNotIn("dk_fossil_1", engine.db.unlocked_names(appid))
 
 
+class Ocarina(unittest.TestCase):
+    """Ocarina of Time: every goal from its save files, each goal taking the file that has gone furthest."""
+
+    def setUp(self):
+        self.home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.home, True)
+        patcher = mock.patch.object(Path, "home", return_value=self.home)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        folders = mock.patch.object(switch, "app_folders", return_value=(self.home / "Applications",))
+        folders.start()
+        self.addCleanup(folders.stop)
+        self.title = switch.OCARINA_OF_TIME
+        self.title.data_folder().mkdir(parents=True)
+        self.map = json.loads(switch._OCARINA_MAP.read_text())
+
+    engine = World.engine
+
+    def write_save(self, slot=0, items=(), tokens=0, max_life=12, bottles=0, big_poes=0, quests=(), enemies=None,
+                   chests=0, places=()) -> Path:
+        m = self.map
+        bools = [(m["items"][i], 1) for i in items] + [(h, 1) for h in m["bottles"][:bottles]]
+        bools += [(h, 1) for h in m["big_poes"][:big_poes]] + [(h, 1) for h in m["chests"][:chests]]
+        bools += [(m["places"][p], 1) for p in places]
+        ints = [(m["gold_tokens"], tokens), (m["max_life"], max_life)]
+        ints += [(m["enemies"][e], n) for e, n in (enemies or {}).items()]
+        enums = [(h, m["complete"] if q in quests else 1471695344) for q, h in m["quests"].items()]
+        pairs = [(0, switch._BOOL)] + bools + [(0, switch._INT)] + ints + [(0, switch._ENUM)] + enums
+        end = 0x28 + 8 * len(pairs)
+        data = b"\x04\x03\x02\x01" + struct.pack("<II", 1, end) + bytes(0x28 - 12)
+        data += b"".join(struct.pack("<II", *p) for p in pairs)
+        path = self.title.data_folder() / "save" / f"slot_{slot:02d}" / "progress.sav"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return path
+
+    def test_the_map_holds_what_the_goals_read(self):
+        self.assertEqual((len(self.map["big_poes"]), len(self.map["bottles"]), len(self.map["chests"])), (10, 5, 206))
+        self.assertTrue(set(switch._SONGS + switch._MEDALLIONS + switch._STONES) <= set(self.map["items"]))
+        self.assertIn(switch._HALL, self.map["places"])
+
+    def test_a_save_unlocks_its_goals(self):
+        path = self.write_save(items=("Weapon_Sword_Kokiri", "Item_Stone_Forest", "Item_Melody_ZeldaLullaby"),
+                               tokens=12, max_life=40, bottles=2, big_poes=1, quests=("Step_Get_Epona",),
+                               enemies={"Enemy_Keese": 30, "Enemy_DungeonBoss_Gohma": 1}, chests=3,
+                               places=("KokiriForest", "LostWood", switch._HALL))
+        states = emulators.parse_file(path)
+        for name in ("oot_sword", "oot_emerald", "oot_song_1", "oot_skulltula_10", "oot_hearts_10", "oot_big_poe_1",
+                     "oot_epona", "oot_hall"):
+            self.assertTrue(states[name].unlocked, name)
+        self.assertFalse(states["oot_ruby"].unlocked or states["oot_skulltula_50"].unlocked or states["oot_ganon"].unlocked)
+        self.assertEqual((states["oot_song_all"].cur, states["oot_song_all"].max), (1.0, 12.0))
+        self.assertEqual((states["oot_bottles"].cur, states["oot_chest_25"].cur), (2.0, 3.0))
+        self.assertEqual((states["oot_kinds_25"].cur, states["oot_defeated_500"].cur), (2.0, 31.0))
+        self.assertEqual(states["oot_places_15"].cur, 2.0)          # the Hall isn't a place in Hyrule
+
+    def test_each_goal_takes_the_furthest_file(self):
+        self.write_save(0, tokens=40, items=("Item_Medal_Forest",))
+        path = self.write_save(2, tokens=5, items=("Item_Medal_Fire",), quests=("Step_Defeat_Ganon",))
+        states = emulators.parse_file(path)
+        self.assertEqual(states["oot_skulltula_50"].cur, 40.0)
+        self.assertTrue(states["oot_medal_forest"].unlocked and states["oot_medal_fire"].unlocked)
+        self.assertTrue(states["oot_ganon"].unlocked)
+        self.assertEqual(states["oot_warp_songs"].cur, 0.0)
+
+    def test_a_file_that_is_not_a_save_is_refused(self):
+        path = self.title.data_folder() / "save" / "slot_00" / "progress.sav"
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"not a save")
+        with self.assertRaises(ValueError):
+            emulators.parse_file(path)
+
+    def test_every_file_is_watched_and_unlocks_in_the_library(self):
+        self.write_save(0)
+        self.write_save(3, items=("Item_Ocarina_Time",))
+        engine = self.engine()
+        with mock.patch.object(switch, "TITLES", (self.title,)):
+            engine.discover_switch()
+        appid = engine.db.games(include_hidden=True)[0]["appid"]
+        self.assertEqual(engine.db.game(appid)["name"], "The Legend of Zelda: Ocarina of Time")
+        self.assertIn("oot_ocarina", engine.db.unlocked_names(appid))
+        self.assertEqual(sum(path.endswith("progress.sav") for path in engine.sources), 2)
+
+    def test_every_goal_has_an_icon(self):
+        self.assertTrue(all(self.title.icon(goal) for goal in self.title.goals))
+
+
 class Sandbox(unittest.TestCase):
     def setUp(self):
         self.home = Path(tempfile.mkdtemp())

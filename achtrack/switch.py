@@ -532,6 +532,179 @@ DONKEY_KONG_BANANZA_GOALS = (
 )
 
 
+# --- The Legend of Zelda: Ocarina of Time (Switch 2): its save --------------------------------------------------------
+#
+# The game sends no play reports, so every goal comes from the save, in the same GameData format. It keeps four files
+# (save/slot_00..03/progress.sav) and a goal counts the file that has gone furthest towards it. Names are hashes there
+# too, and the ones read here are in save_map.json, which ZeldaOcarina-Native/tools/make_save_map.py writes from the
+# game's data list: IsGet.<item> is true once an item has ever been got, so it stays true for a song or a mask traded
+# on; PouchData's Gold Skulltula Tokens are never spent; MaxLife is in quarter hearts; each quest keeps its step as
+# the hash of the step's name, "Complete" at the end.
+
+_OCARINA_MAP = ASSET_DIR / "switch" / "oot" / "save_map.json"
+_BOOL, _INT, _ENUM = 0, 2, 6
+OOT_SKULLTULAS, OOT_HEARTS, OOT_BIG_POES = 100, 20, 10
+_STONES = ("Item_Stone_Forest", "Item_Stone_Fire", "Item_Stone_Water")
+_MEDALLIONS = ("Item_Medal_Forest", "Item_Medal_Fire", "Item_Medal_Water", "Item_Medal_Shadow", "Item_Medal_Spirit",
+               "Item_Medal_Light")
+_WARP_SONGS = ("Item_Melody_ForestMinuet", "Item_Melody_FireBolero", "Item_Melody_WaterSerenade",
+               "Item_Melody_SpiritRequiem", "Item_Melody_ShadowNocturne", "Item_Melody_LightPrelude")
+_SONGS = ("Item_Melody_ZeldaLullaby", "Item_Melody_EponaSong", "Item_Melody_SariaSong", "Item_Melody_SunSong",
+          "Item_Melody_TimeSong", "Item_Melody_StormSong") + _WARP_SONGS      # the twelve, not the Scarecrow's
+_FAIRY_GIFTS = ("Item_DinFire", "Item_FaroreWind", "Item_NayruLove", "Item_FairyBless_MP", "Item_FairyBless_MPDouble",
+                "Item_FairyBless_DefenseDouble")
+_ARROWS = ("Item_Arrow_Fire", "Item_Arrow_Ice", "Item_Arrow_Light")
+_OUTFITS = ("Armor_Adult_Goron", "Armor_Adult_Zora", "Armor_Adult_HeavyBoot", "Armor_Adult_HoverBoot")
+_HALL = "DreamWorld"        # the Hall of Fallen Foes, the remake's dream space
+
+
+class _OcarinaSlot:
+    def __init__(self, items=(), tokens=0, hearts=3, bottles=0, big_poes=0, quests=(), kinds=0, defeated=0, chests=0,
+                 places=0, hall=False, ganon=False):
+        self.items, self.quests = frozenset(items), frozenset(quests)
+        self.tokens, self.hearts, self.bottles, self.big_poes = tokens, hearts, bottles, big_poes
+        self.kinds, self.defeated, self.chests, self.places = kinds, defeated, chests, places
+        self.hall, self.ganon = int(hall), int(ganon)
+
+
+class _OcarinaSave:
+    """Every save file's counts: a goal takes the file that has gone furthest towards it."""
+
+    def __init__(self, slots: list):
+        self.slots = slots
+
+    def best(self, measure) -> int:
+        return max((measure(slot) for slot in self.slots), default=0)
+
+
+def read_ocarina_slot(path: Path) -> _OcarinaSlot:
+    """Counts what one Ocarina of Time save file (save/slot_NN/progress.sav) holds. Raises ValueError if it isn't one."""
+    want = json.loads(_OCARINA_MAP.read_text())
+    save = _GameData(path)
+
+    def number(name: int) -> int:
+        kind, value = save.found.get(name, (_INT, 0))
+        return value if kind == _INT and value < 0x80000000 else 0
+
+    quests = {q for q, h in want["quests"].items() if save.found.get(h) == (_ENUM, want["complete"])}
+    defeated = {e: number(h) for e, h in want["enemies"].items()}
+    places = {p for p, h in want["places"].items() if save.found.get(h) == (_BOOL, 1)}
+    return _OcarinaSlot(
+        items={i for i, h in want["items"].items() if save.found.get(h) == (_BOOL, 1)},
+        tokens=number(want["gold_tokens"]),
+        hearts=number(want["max_life"]) // 4,
+        bottles=save.flags_set(want["bottles"]),
+        big_poes=save.flags_set(want["big_poes"]),
+        quests=quests,
+        kinds=sum(n > 0 for n in defeated.values()),
+        defeated=sum(defeated.values()),
+        chests=save.flags_set(want["chests"]),
+        places=len(places - {_HALL}),
+        hall=_HALL in places,
+        ganon="Step_Defeat_Ganon" in quests or defeated.get("Enemy_DungeonBoss_Ganon", 0) > 0,
+    )
+
+
+def ocarina_save_files(folder: Path) -> list:
+    return sorted(Path(folder).glob("slot_[0-9][0-9]/progress.sav"))
+
+
+def read_ocarina_save(path: Path) -> _OcarinaSave:
+    """All of Ocarina of Time's save files, from any one of them. Raises ValueError if the one given isn't a save;
+    another file that can't be read right now (the game writing it) is left out."""
+    path = Path(path)
+    slots = [read_ocarina_slot(path)]
+    for other in ocarina_save_files(path.parent.parent):
+        if other != path:
+            try:
+                slots.append(read_ocarina_slot(other))
+            except (ValueError, OSError):
+                pass
+    return _OcarinaSave(slots)
+
+
+def _oot(measure):
+    return lambda save: save.best(measure)
+
+
+def _got(*items):
+    return _oot(lambda slot: sum(item in slot.items for item in items))
+
+
+def _slot(name: str):
+    return _oot(lambda slot: getattr(slot, name))
+
+
+def _quest(name: str):
+    return _oot(lambda slot: int(name in slot.quests))
+
+
+def _oot_goal(name, title, detail, measure, target=1, counted=None):
+    return Goal(name, title, detail, measure, target, target > 1 if counted is None else counted, True)
+
+
+OCARINA_GOALS = (
+    _oot_goal("oot_sword", "It's Dangerous to Go Alone", "Find the Kokiri Sword.", _got("Weapon_Sword_Kokiri")),
+    _oot_goal("oot_emerald", "Kokiri's Emerald", "Receive the Spiritual Stone of the Forest from the Great Deku Tree.",
+              _got("Item_Stone_Forest")),
+    _oot_goal("oot_ruby", "Goron's Ruby", "Receive the Spiritual Stone of Fire from Darunia.", _got("Item_Stone_Fire")),
+    _oot_goal("oot_sapphire", "Zora's Sapphire", "Receive the Spiritual Stone of Water from Princess Ruto.",
+              _got("Item_Stone_Water")),
+    _oot_goal("oot_ocarina", "The Ocarina of Time", "Catch the Ocarina of Time from Zelda.", _got("Item_Ocarina_Time")),
+    _oot_goal("oot_master_sword", "Blade of Evil's Bane", "Draw the Master Sword in the Temple of Time.",
+              _got("Weapon_Sword_Master")),
+    _oot_goal("oot_medal_light", "Sage of Light", "Receive the Light Medallion from Rauru.", _got("Item_Medal_Light")),
+    _oot_goal("oot_medal_forest", "Sage of Forest", "Clear the Forest Temple.", _got("Item_Medal_Forest")),
+    _oot_goal("oot_medal_fire", "Sage of Fire", "Clear the Fire Temple.", _got("Item_Medal_Fire")),
+    _oot_goal("oot_medal_water", "Sage of Water", "Clear the Water Temple.", _got("Item_Medal_Water")),
+    _oot_goal("oot_medal_shadow", "Sage of Shadow", "Clear the Shadow Temple.", _got("Item_Medal_Shadow")),
+    _oot_goal("oot_medal_spirit", "Sage of Spirit", "Clear the Spirit Temple.", _got("Item_Medal_Spirit")),
+    _oot_goal("oot_ganon", "Hero of Time", "Defeat Ganon.", _slot("ganon")),
+    _oot_goal("oot_song_1", "First Notes", "Learn a song for the ocarina.", _got(*_SONGS), 1, False),
+    _oot_goal("oot_warp_songs", "Warp Whistle", "Learn all six warp songs from Sheik.", _got(*_WARP_SONGS), 6),
+    _oot_goal("oot_song_all", "Virtuoso", f"Learn all {len(_SONGS)} songs.", _got(*_SONGS), len(_SONGS)),
+    _oot_goal("oot_scarecrow", "Scarecrow's Song", "Teach Pierre a song of your own and play it back as an adult.",
+              _got("Item_Melody_ScarecrowSong")),
+    _oot_goal("oot_skulltula_1", "Bug Hunter", "Collect a Gold Skulltula Token.", _slot("tokens"), 1, False),
+    _oot_goal("oot_skulltula_10", "Skulltula Hunter", "Collect 10 Gold Skulltula Tokens.", _slot("tokens"), 10),
+    _oot_goal("oot_skulltula_50", "Curse Breaker", "Collect 50 Gold Skulltula Tokens.", _slot("tokens"), 50),
+    _oot_goal("oot_skulltula_100", "House of Skulltula", f"Collect all {OOT_SKULLTULAS} Gold Skulltula Tokens.",
+              _slot("tokens"), OOT_SKULLTULAS),
+    _oot_goal("oot_heart_piece", "Piece of Heart", "Find a Piece of Heart.", _got("Obj_Heart_Piece")),
+    _oot_goal("oot_hearts_10", "Big-Hearted", "Have 10 hearts.", _slot("hearts"), 10),
+    _oot_goal("oot_hearts_20", "Heart of a Hero", f"Have all {OOT_HEARTS} hearts: every Heart Container and all 36 "
+              "Pieces of Heart.", _slot("hearts"), OOT_HEARTS),
+    _oot_goal("oot_big_poe_1", "Lantern in the Field", "Defeat a Big Poe in Hyrule Field.", _slot("big_poes"), 1, False),
+    _oot_goal("oot_big_poe_all", "Poe Collector", f"Defeat all {OOT_BIG_POES} Big Poes in Hyrule Field.",
+              _slot("big_poes"), OOT_BIG_POES),
+    _oot_goal("oot_fairies", "Fairy Blessings", "Receive the gifts of all six Great Fairies.", _got(*_FAIRY_GIFTS), 6),
+    _oot_goal("oot_bottles", "Bottled Up", "Own four bottles.", _slot("bottles"), 4),
+    _oot_goal("oot_mask_truth", "Mask of Truth", "Sell masks for the Happy Mask Shop until you're lent the Mask of Truth.",
+              _got("Armor_Child_Mask_Truth")),
+    _oot_goal("oot_epona", "Epona", "Win Epona from Ingo at Lon Lon Ranch.", _quest("Step_Get_Epona")),
+    _oot_goal("oot_gerudo_card", "Honorary Gerudo", "Free the four carpenters and earn the Gerudo's Membership Card.",
+              _got("Item_Token_Gerudo")),
+    _oot_goal("oot_biggoron", "Biggoron's Sword", "Finish the trading sequence and receive Biggoron's Sword.",
+              _got("Weapon_Sword_Biggoron")),
+    _oot_goal("oot_mirror_shield", "Mirror Shield", "Find the Mirror Shield.", _got("Weapon_Shield_Mirror")),
+    _oot_goal("oot_longshot", "Longshot", "Upgrade the Hookshot to the Longshot.", _got("Item_Longshot")),
+    _oot_goal("oot_arrows", "Elemental Arrows", "Find the Fire, Ice and Light Arrows.", _got(*_ARROWS), 3),
+    _oot_goal("oot_gauntlets", "Golden Gauntlets", "Find the Golden Gauntlets.", _got("Armor_Adult_Gauntlet_Gold")),
+    _oot_goal("oot_scale", "Golden Scale", "Win the Golden Scale at the Fishing Pond.", _got("Item_Scale_Gold")),
+    _oot_goal("oot_outfits", "Dressed for It", "Own the Goron and Zora Tunics, the Iron Boots and the Hover Boots.",
+              _got(*_OUTFITS), 4),
+    _oot_goal("oot_wallet", "Giant's Wallet", "Get the Giant's Wallet.", _got("Item_Wallet_Large")),
+    _oot_goal("oot_chest_25", "Treasure Seeker", "Open 25 treasure chests.", _slot("chests"), 25),
+    _oot_goal("oot_chest_100", "Treasure Hoarder", "Open 100 treasure chests.", _slot("chests"), 100),
+    _oot_goal("oot_places_15", "Wanderer", "Visit 15 places in Hyrule.", _slot("places"), 15),
+    _oot_goal("oot_places_30", "Hyrule Explorer", "Visit 30 places in Hyrule.", _slot("places"), 30),
+    _oot_goal("oot_hall", "Hall of Fallen Foes", "Enter the Hall of Fallen Foes.", _slot("hall")),
+    _oot_goal("oot_kinds_25", "Field Notes", "Defeat 25 kinds of enemy.", _slot("kinds"), 25),
+    _oot_goal("oot_kinds_50", "Monster Compendium", "Defeat 50 kinds of enemy.", _slot("kinds"), 50),
+    _oot_goal("oot_defeated_500", "Monster Slayer", "Defeat 500 enemies.", _slot("defeated"), 500),
+)
+
+
 @dataclass(frozen=True)
 class Title:
     key: str                # remembered in the library as "ports"[<key>], the way a native port is
@@ -600,6 +773,7 @@ class NativeTitle(Title):
     report_tally: object = None                   # () -> a tally with add(event, report) (_WorldTally if unset)
     report_events: tuple = ("game_repo_",)        # the reports that tally counts, by the start of their event name
     raw_reports: bool = False                     # keep binary and extension values as Ryubing logs them (formats.msgpack_value)
+    save_files_in: object = None                  # save folder -> every save the goals read, when there's more than one
 
     def app(self) -> Path | None:
         for folder in app_folders():
@@ -629,6 +803,12 @@ class NativeTitle(Title):
     def save_file(self) -> Path:
         """The save the collectables are read from (Mario Kart World keeps one, shared by solo and two-player Free Roam)."""
         return self.data_folder() / self.save_name
+
+    def save_files(self) -> list:
+        """Every save the from_save goals read (Ocarina of Time keeps one per file on its select screen)."""
+        if self.save_files_in is None:
+            return [self.save_file()]
+        return self.save_files_in(self.data_folder() / "save")
 
     def read_save(self, path: Path):
         return (self.save_reader or read_world_save)(path)
@@ -677,7 +857,21 @@ DONKEY_KONG_BANANZA = NativeTitle(
     report_tally=_BananzaTally,
     report_events=("stage_in", "bananamond_broken"),
 )
-TITLES = (MARIO_KART, MARIO_KART_NATIVE, MARIO_KART_WORLD, DONKEY_KONG_BANANZA)
+OCARINA_OF_TIME = NativeTitle(
+    key="oot",
+    name="The Legend of Zelda: Ocarina of Time",
+    title_id="0400486024DEC000",
+    genre="Adventure",
+    art="https://assets.nintendo.com/image/upload/ar_16:9,c_lpad,w_1240/b_white/f_auto/q_auto/store/software/switch2/"
+        "70010000130792/21d17919819cffebda2817f9b0110116c28568e0b6fa30a9778f1679271be809",
+    goals=OCARINA_GOALS,
+    app_name="The Legend of Zelda - Ocarina of Time.app",
+    save_name="save/slot_00/progress.sav",
+    save_reader=read_ocarina_save,
+    save_files_in=ocarina_save_files,
+    report_events=(),                       # it sends none
+)
+TITLES = (MARIO_KART, MARIO_KART_NATIVE, MARIO_KART_WORLD, DONKEY_KONG_BANANZA, OCARINA_OF_TIME)
 
 
 def titles_of(db, appid: int) -> list:
@@ -762,7 +956,7 @@ def parse_log(path: Path, title: Title = MARIO_KART) -> dict:
 
 
 def is_native_save(path: str) -> bool:
-    return any(isinstance(t, NativeTitle) and str(t.save_file()) == str(path) for t in TITLES)
+    return any(isinstance(t, NativeTitle) and str(path) in map(str, t.save_files()) for t in TITLES)
 
 
 def native_title_of(path) -> NativeTitle:

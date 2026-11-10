@@ -1,4 +1,5 @@
-"""Draws the achievement icons for AchTrack's own Switch goals (Mario Kart 8 Deluxe, Mario Kart World and Donkey Kong Bananza).
+"""Draws the achievement icons for AchTrack's own Switch goals (Mario Kart 8 Deluxe, Mario Kart World, Donkey Kong
+Bananza and Ocarina of Time).
 
 Each icon is a line glyph for what the goal is about, in AchTrack's own look: one even line weight, near-white on a
 graphite tile, like the app's trophy. How hard the goal is (bronze, silver, gold, platinum) shows only as a faint
@@ -68,6 +69,25 @@ GOALS = {
     "dk_skill_1": ("fist", "b"), "dk_skill_15": ("fist", "s"), "dk_skill_all": ("fist", "g"),
     "dk_layer_3": ("layers", "b"), "dk_layer_9": ("layers", "s"), "dk_layer_all": ("layers", "g"), "dk_core": ("core", "g"),
     "dk_clear": ("film", "g"), "dk_island": ("palm", "s"), "dk_emerald_rush": ("emerald", "p"),
+    # The Legend of Zelda: Ocarina of Time
+    "oot_sword": ("sword", "b"), "oot_emerald": ("emerald", "s"), "oot_ruby": ("emerald", "s"),
+    "oot_sapphire": ("emerald", "s"), "oot_ocarina": ("ocarina", "s"), "oot_master_sword": ("sword", "g"),
+    "oot_medal_light": ("medallion", "s"), "oot_medal_forest": ("medallion", "s"), "oot_medal_fire": ("medallion", "s"),
+    "oot_medal_water": ("medallion", "g"), "oot_medal_shadow": ("medallion", "g"), "oot_medal_spirit": ("medallion", "g"),
+    "oot_ganon": ("triforce", "p"),
+    "oot_song_1": ("note", "b"), "oot_warp_songs": ("notes", "s"), "oot_song_all": ("notes", "g"),
+    "oot_scarecrow": ("note", "s"),
+    "oot_skulltula_1": ("skull", "b"), "oot_skulltula_10": ("skull", "s"), "oot_skulltula_50": ("skull", "g"),
+    "oot_skulltula_100": ("skull", "p"),
+    "oot_heart_piece": ("heart_piece", "b"), "oot_hearts_10": ("heart", "s"), "oot_hearts_20": ("heart", "p"),
+    "oot_big_poe_1": ("lantern", "b"), "oot_big_poe_all": ("lantern", "g"), "oot_fairies": ("fairy", "g"),
+    "oot_bottles": ("bottle", "g"), "oot_mask_truth": ("mask", "g"), "oot_epona": ("horseshoe", "s"),
+    "oot_gerudo_card": ("card", "s"), "oot_biggoron": ("sword", "p"), "oot_mirror_shield": ("shield", "g"),
+    "oot_longshot": ("hookshot", "s"), "oot_arrows": ("arrow", "g"), "oot_gauntlets": ("glove", "g"),
+    "oot_scale": ("scale", "s"), "oot_outfits": ("shirt", "g"), "oot_wallet": ("purse", "s"),
+    "oot_chest_25": ("chest", "s"), "oot_chest_100": ("chest", "g"), "oot_places_15": ("pin", "s"),
+    "oot_places_30": ("globe", "g"), "oot_hall": ("pillars", "s"), "oot_kinds_25": ("book", "s"),
+    "oot_kinds_50": ("book", "g"), "oot_defeated_500": ("swords", "g"),
 }
 
 
@@ -517,6 +537,226 @@ def g_emerald(d):
     line(d, [(242, 430), (782, 430)], w=fw)
     line(d, [(372, 280), (432, 430), (512, 280), (592, 430), (652, 280)], w=fw)
     line(d, [(432, 430), (512, 782), (592, 430)], w=fw)
+
+
+# Ocarina of Time
+
+def _blade(d, x0, y0, x1, y1, guard=110, w=W):   # a sword from the pommel (x0, y0) to the tip (x1, y1)
+    dx, dy = x1 - x0, y1 - y0
+    n = math.hypot(dx, dy); ux, uy = dx / n, dy / n
+    gx, gy = x0 + ux * n * 0.24, y0 + uy * n * 0.24
+    line(d, [(gx, gy), (x1, y1)], w=w)
+    line(d, [(gx - uy * guard, gy + ux * guard), (gx + uy * guard, gy - ux * guard)], w=w)
+    line(d, [(x0, y0), (gx, gy)], w=w)
+    dot(d, x0, y0, w * 0.9)
+
+
+def g_sword(d):
+    _blade(d, 300, 724, 740, 284)
+
+
+def g_swords(d):   # two crossed swords
+    _blade(d, 300, 740, 724, 290, guard=90)
+    _blade(d, 724, 740, 300, 290, guard=90)
+
+
+def g_ocarina(d):
+    m, md = mask()
+    md.ellipse((232, 352, 712, 692), fill=255)
+    md.rounded_rectangle((660, 462, 820, 562), radius=46, fill=255)
+    outline_of(d, m)
+    for x, y in ((360, 480), (460, 440), (560, 480), (460, 580), (360, 590)):
+        dot(d, x, y, 28)
+
+
+def g_medallion(d):
+    ring(d, 512, 512, 250)
+    ring(d, 512, 512, 150, w=int(W * 0.7))
+    for a in range(0, 360, 60):
+        t = math.radians(a - 90)
+        line(d, [(512 + 150 * math.cos(t), 512 + 150 * math.sin(t)), (512 + 250 * math.cos(t), 512 + 250 * math.sin(t))],
+             w=int(W * 0.6))
+
+
+def g_triforce(d):
+    h = 440 * math.sqrt(3) / 2
+    top, left, right = (512, 512 - h * 0.62), (292, 512 + h * 0.38), (732, 512 + h * 0.38)
+    mid = lambda a, b: ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+    line(d, [top, right, left], closed=True)
+    line(d, [mid(top, left), mid(top, right), mid(left, right)], closed=True)
+
+
+def _note(d, x, y, stem=300):
+    d.ellipse((x - 74, y - 54, x + 74, y + 54), fill=INK)
+    line(d, [(x + 58, y - 10), (x + 58, y - stem)])
+    return x + 58, y - stem
+
+
+def g_note(d):
+    tx, ty = _note(d, 460, 690)
+    line(d, [(tx, ty), (tx + 120, ty + 110)])
+
+
+def g_notes(d):
+    a = _note(d, 360, 700)
+    b = _note(d, 640, 640)
+    line(d, [a, b])
+    line(d, [(a[0], a[1] + 80), (b[0], b[1] + 80)])
+
+
+def g_skull(d):   # a Gold Skulltula Token
+    m, md = mask()
+    md.ellipse((302, 262, 722, 642), fill=255)
+    md.rounded_rectangle((392, 560, 632, 760), radius=40, fill=255)
+    outline_of(d, m)
+    for x in (430, 594):
+        d.ellipse((x - 52, 440, x + 52, 540), fill=INK)
+    for x in (462, 562):
+        line(d, [(x, 660), (x, 730)], w=int(W * 0.6))
+
+
+def _heart(md, cx=512, cy=520, r=150):
+    md.ellipse((cx - 2 * r, cy - r * 1.4, cx, cy + r * 0.6), fill=255)
+    md.ellipse((cx, cy - r * 1.4, cx + 2 * r, cy + r * 0.6), fill=255)
+    md.polygon([(cx - 2 * r + 12, cy - r * 0.2), (cx, cy + r * 1.75), (cx + 2 * r - 12, cy - r * 0.2)], fill=255)
+
+
+def g_heart(d):
+    m, md = mask(); _heart(md); outline_of(d, m)
+
+
+def g_heart_piece(d):
+    m, md = mask(); _heart(md); outline_of(d, m, fill=DIM)
+    q, qd = mask(); _heart(qd)
+    qd.rectangle((0, 0, 512, 1024), fill=0); qd.rectangle((0, 470, 1024, 1024), fill=0)
+    d.bitmap((0, 0), q, fill=INK)
+
+
+def g_lantern(d):   # a Poe's lantern
+    line(d, [(512, 250), (512, 320)])
+    arc(d, 512, 320, 60, 180, 360)
+    box(d, 392, 380, 632, 700, 60)
+    line(d, [(372, 380), (652, 380)]); line(d, [(372, 700), (652, 700)])
+    m, md = mask()
+    md.polygon([(512, 450), (566, 560), (512, 640), (458, 560)], fill=255)
+    d.bitmap((0, 0), m, fill=INK)
+
+
+def g_fairy(d):   # a fairy: a body and two pairs of wings
+    line(d, [(512, 400), (512, 700)])
+    dot(d, 512, 350, 58)
+    for sx in (-1, 1):
+        for cy, rx, ry, turn in ((440, 150, 90, -30), (610, 110, 70, 30)):
+            m, md = mask()
+            md.ellipse((512 - rx, cy - ry, 512 + rx, cy + ry), fill=255)
+            m = m.rotate(sx * turn, resample=Image.BICUBIC, center=(512, cy))
+            m = m.transform(m.size, Image.AFFINE, (1, 0, -sx * (rx + 75), 0, 1, 0), resample=Image.BICUBIC)
+            outline_of(d, m, w=int(W * 0.8))
+
+
+def g_bottle(d):
+    m, md = mask()
+    md.rounded_rectangle((440, 250, 584, 330), radius=20, fill=255)
+    md.rectangle((462, 320, 562, 440), fill=255)
+    md.rounded_rectangle((332, 420, 692, 780), radius=150, fill=255)
+    outline_of(d, m)
+    line(d, [(380, 600), (644, 600)], w=int(W * 0.6), fill=DIM)
+
+
+def g_mask(d):
+    m, md = mask()
+    md.ellipse((282, 262, 742, 782), fill=255)
+    outline_of(d, m)
+    for x in (420, 604):
+        d.ellipse((x - 60, 430, x + 60, 510), fill=INK)
+    arc(d, 512, 600, 110, 20, 160)
+
+
+def g_horseshoe(d):
+    arc(d, 512, 470, 210, 160, 380)
+    for a in (160, 20):
+        t = math.radians(a)
+        x, y = 512 + 210 * math.cos(t), 470 + 210 * math.sin(t)
+        line(d, [(x, y), (x + (-30 if a > 90 else 30), y + 230)])
+    for a in (200, 250, 290, 340):
+        t = math.radians(a)
+        dot(d, 512 + 210 * math.cos(t), 470 + 210 * math.sin(t), 18, fill=CLEAR)
+
+
+def g_card(d):
+    box(d, 252, 330, 772, 694, 50)
+    ring(d, 400, 500, 62, w=int(W * 0.7))
+    line(d, [(520, 470), (700, 470)], w=int(W * 0.6))
+    line(d, [(520, 560), (660, 560)], w=int(W * 0.6))
+    line(d, [(320, 630), (700, 630)], w=int(W * 0.6), fill=DIM)
+
+
+def g_shield(d):
+    pts = [(512, 260), (742, 330)] + bezier((742, 330), (742, 560), (640, 700), (512, 780))[1:] + \
+        bezier((512, 780), (384, 700), (282, 560), (282, 330))[1:]
+    line(d, pts, closed=True)
+    line(d, [(512, 360), (512, 680)], w=int(W * 0.6), fill=DIM)
+    line(d, [(372, 470), (652, 470)], w=int(W * 0.6), fill=DIM)
+
+
+def g_hookshot(d):
+    line(d, [(300, 724), (520, 504)])
+    for i in range(3):
+        x, y = 560 + i * 60, 464 - i * 60
+        ring(d, x, y, 22, w=int(W * 0.55))
+    line(d, [(700, 324), (760, 264)])
+    line(d, [(690, 254), (760, 264), (770, 334)])
+
+
+def g_arrow(d):
+    line(d, [(290, 734), (712, 312)])
+    line(d, [(612, 300), (734, 290), (724, 412)])
+    for k in (0, 60):
+        line(d, [(330 + k, 694 - k), (290 + k, 600 - k)], w=int(W * 0.7))
+        line(d, [(330 + k, 694 - k), (424 + k, 734 - k)], w=int(W * 0.7))
+
+
+def g_glove(d):
+    m, md = mask()
+    md.rounded_rectangle((352, 420, 652, 700), radius=80, fill=255)
+    for i, x in enumerate((360, 432, 504, 576)):
+        md.rounded_rectangle((x, 270 + (40 if i in (0, 3) else 0), x + 64, 500), radius=32, fill=255)
+    md.rounded_rectangle((600, 460, 720, 540), radius=40, fill=255)
+    md.rectangle((382, 690, 622, 780), fill=255)
+    outline_of(d, m)
+    line(d, [(382, 690), (622, 690)], w=int(W * 0.6))
+
+
+def g_scale(d):   # the Golden Scale: a fish scale
+    pts = [(512, 260)] + bezier((512, 260), (760, 420), (720, 700), (512, 780))[1:] + \
+        bezier((512, 780), (304, 700), (264, 420), (512, 260))[1:]
+    line(d, pts, closed=True)
+    for y in (480, 600):
+        arc(d, 512, y - 120, 140, 40, 140, w=int(W * 0.6), fill=DIM)
+
+
+def g_purse(d):   # a wallet
+    m, md = mask()
+    md.ellipse((282, 400, 742, 780), fill=255)
+    md.polygon([(412, 420), (380, 300), (512, 360), (644, 300), (612, 420)], fill=255)
+    outline_of(d, m)
+    line(d, [(400, 430), (624, 430)], w=int(W * 0.7))
+    m2, md2 = mask(); md2.polygon([(512, 520), (570, 620), (454, 620)], fill=255)
+    d.bitmap((0, 0), m2, fill=INK)
+
+
+def g_pillars(d):   # the Hall of Fallen Foes
+    line(d, [(252, 360), (512, 250), (772, 360)], closed=True)
+    for x in (330, 450, 574, 694):
+        line(d, [(x, 420), (x, 680)])
+    line(d, [(252, 760), (772, 760)])
+
+
+def g_book(d):   # a field guide to monsters
+    line(d, [(512, 330), (512, 740)])
+    for sx in (-1, 1):
+        line(d, [(512, 330)] + bezier((512, 330), (512 + sx * 90, 280), (512 + sx * 200, 280), (512 + sx * 260, 300))[1:] +
+             [(512 + sx * 260, 700)] + bezier((512 + sx * 260, 700), (512 + sx * 200, 680), (512 + sx * 90, 690), (512, 740))[1:])
 
 
 def tile(tier: str) -> Image.Image:

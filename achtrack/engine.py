@@ -322,7 +322,7 @@ class Engine:
             if appid is None:
                 continue
             if isinstance(title, switch.NativeTitle):
-                for what, path in (("reports", str(title.reports_file())), ("save", str(title.save_file()))):
+                for what, path in [("reports", str(title.reports_file()))] + [("save", str(f)) for f in title.save_files()]:
                     if what == "save" and not title.reads_save():
                         continue
                     if path not in self.sources and os.path.exists(path):
